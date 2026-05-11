@@ -1,28 +1,29 @@
 """FastAPI gateway — dev-plan §4.2.
 
 Phase 1 routes:
-  GET  /healthz                              (T+0.5d)  PUBLIC
-  GET  /                                     (Phase 1) basic
-  POST /run                                  (T+0.5d)  basic
-  GET  /runs/{task_id}                       (T+0.5d)  basic
-  GET  /sessions                             (T+0.5d)  basic
-  GET  /loops                                (T+1d)    basic
-  POST /loops/{name}/pause                   (T+1d)    basic
-  POST /loops/{name}/resume                  (T+1d)    basic
+  GET  /healthz                              PUBLIC
+  GET  /                                     basic
+  POST /run                                  basic
+  GET  /runs/{task_id}                       basic
+  GET  /sessions                             basic
+  GET  /loops                                basic
+  POST /loops/{name}/pause                   basic
+  POST /loops/{name}/resume                  basic
+  POST /im/feishu/webhook                    Feishu signature (NOT basic)
 
 basic auth (the §4.2 "basic" half) implemented via backend/auth.py.
 CSRF (the other half of §4.2), /csrf, /loops/{name}/trigger,
-/im/feishu/webhook, /push/subscribe — Phase 2 / Phase 3.
+/push/subscribe — Phase 2 / Phase 3.
 """
 from __future__ import annotations
 
 from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from . import auth, config, cron_state, db, runner
+from . import auth, config, cron_state, db, im_feishu, runner
 
 PROTECT = [Depends(auth.require_basic_auth)]
 
@@ -104,6 +105,32 @@ def resume_loop(name: str) -> dict:
             status_code=404, detail={"error": "loop not found", "code": 404}
         )
     return {"status": "resumed", "name": name, "enabled": True}
+
+
+# ---------- Feishu webhook (T+1.5d — P0-4) ----------
+# Auth is Feishu's own X-Lark-Signature scheme (verified inside im_feishu).
+# Intentionally NOT behind basic auth — Feishu's servers don't know our password.
+
+
+@app.post("/im/feishu/webhook")
+async def feishu_webhook(request: Request) -> dict:
+    body = await request.body()
+    parsed = im_feishu.handle_webhook(
+        body,
+        request.headers.get("x-lark-signature"),
+        request.headers.get("x-lark-request-timestamp"),
+        request.headers.get("x-lark-request-nonce"),
+    )
+    # Bad signature → return 401 (with body too so Feishu logs are useful).
+    if parsed.get("code") == 401:
+        raise HTTPException(status_code=401, detail=parsed)
+    # Text message → submit a run; reply goes back via runner's on_finish.
+    if "run_intent" in parsed:
+        intent = parsed.pop("run_intent")
+        run_id = db.new_run_id()
+        runner.submit(run_id=run_id, on_finish=im_feishu.reply_from_run, **intent)
+        parsed["task_id"] = run_id
+    return parsed
 
 
 # ---------- Phase 1 ugly trigger page (PRD §6.0) ----------

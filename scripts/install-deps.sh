@@ -132,9 +132,17 @@ else
 username = "admin"
 password = "$GENERATED_PASSWORD"
 
+[feishu]
+# Feishu adapter — P0-4 / T+1.5d. Fill these from Feishu开放平台 → 凭证与基础信息.
+# Webhook URL to set in Feishu: http://<your-server>/im/feishu/webhook
+# In "事件订阅 → 加密策略" leave encryption OFF (Phase 1 doesn't decrypt).
+app_id             = "<app_id>"
+app_secret         = "<app_secret>"
+verification_token = "<verification_token>"
+default_workspace  = "test-repo"    # used when message has no [repo-name] prefix
+
 # Future:
-# [feishu]   app_id / app_secret / verification_token / encrypt_key  (P0-4)
-# [vapid]    private_key / public_key                                  (P0-6)
+# [vapid]    private_key / public_key   (P0-6)
 TOML
 fi
 chmod 0600 "$SECRETS_FILE"

@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 from . import config, db
+
+# Callback type: receives the finished run row (db.get_run result dict).
+OnFinish = Callable[[dict], None]
 
 
 def submit(
@@ -22,6 +25,7 @@ def submit(
     engine: str,
     session_key: Optional[str],
     source: str,
+    on_finish: Optional[OnFinish] = None,
 ) -> None:
     db.insert_queued_run(
         run_id=run_id,
@@ -33,7 +37,7 @@ def submit(
     )
     threading.Thread(
         target=_execute,
-        args=(run_id, workspace, prompt, engine, session_key, source),
+        args=(run_id, workspace, prompt, engine, session_key, source, on_finish),
         name=f"agent-run-{run_id}",
         daemon=True,
     ).start()
@@ -46,6 +50,7 @@ def _execute(
     engine: str,
     session_key: Optional[str],
     source: str,
+    on_finish: Optional[OnFinish],
 ) -> None:
     db.set_running(run_id)
     argv = [str(config.AGENT_RUN), f"--engine={engine}", workspace, prompt]
@@ -70,3 +75,14 @@ def _execute(
         db.finish_run(
             run_id=run_id, exit_code=-1, output=f"runner crashed: {e!r}"
         )
+
+    # Fire-and-forget hook so e.g. Feishu adapter can reply once the run
+    # completes. We swallow exceptions — a broken callback must not crash
+    # the runner thread.
+    if on_finish is not None:
+        try:
+            row = db.get_run(run_id)
+            if row:
+                on_finish(row)
+        except Exception:  # noqa: BLE001 — intentional broad catch
+            pass
