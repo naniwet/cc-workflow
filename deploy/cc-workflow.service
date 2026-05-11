@@ -1,0 +1,18 @@
+[Unit]
+Description=cc-workflow backend (FastAPI on 127.0.0.1:8765)
+After=network.target
+
+[Service]
+Type=simple
+# Replace <user> with the actual login user on the server (e.g. ubuntu, root).
+# If running as root, set HOME-based paths to /root/projects/cc-workflow.
+User=<user>
+WorkingDirectory=/home/<user>/projects/cc-workflow
+# Uses the project-local venv (PEP 668 — Ubuntu 24.04+ blocks system pip).
+# Setup once:  python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn pydantic tomli
+ExecStart=/home/<user>/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

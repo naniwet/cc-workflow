@@ -654,7 +654,9 @@ After=network.target
 Type=simple
 User=<your_user>
 WorkingDirectory=/home/<your_user>/projects/cc-workflow
-ExecStart=/usr/bin/python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+# Project-local venv (PEP 668 — Ubuntu 24.04+ blocks system pip).
+# Setup once: python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn pydantic tomli
+ExecStart=/home/<your_user>/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
 Restart=on-failure
 RestartSec=5
 
@@ -693,8 +695,13 @@ bash scripts/install-deps.sh
 #   claude / anthropic → claude login(OAuth,一次性)
 #   deepseek / kimi    → 不需要 claude login,env vars 由 agent-run 注入
 
-# 3. Python deps
-pip3 install fastapi uvicorn pydantic pywebpush python-multipart
+# 3. Python deps (venv — Ubuntu 24.04+ blocks system pip per PEP 668)
+sudo apt install -y python3-venv
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install fastapi uvicorn pydantic pywebpush python-multipart tomli
+# tomli is only needed on Python < 3.11 (3.11+ has stdlib tomllib).
+# Listing it unconditionally keeps the command idempotent across server Python versions.
 
 # 4. 状态目录
 mkdir -p ~/.cc-state/{backup,locks,logs,jobs}
