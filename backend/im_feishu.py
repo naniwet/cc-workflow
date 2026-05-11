@@ -9,6 +9,14 @@ Feishu payloads we handle:
                                 to submit to runner. Reply is sent later via
                                 runner's on_finish callback (reply_from_run).
 
+Feishu v2 security (per official docs 加密策略):
+  - Signature (X-Lark-Signature) = sha256(ts + nonce + ENCRYPT_KEY + body)
+    NOTE: signing key is the Encrypt Key — NOT the Verification Token.
+    Verification Token only applies to legacy v1 (where it sits inside the body).
+  - When Encrypt Key is enabled, body comes as {"encrypt": "<base64>"} and must
+    be AES-256-CBC-decrypted before parsing. Key = sha256(encrypt_key),
+    IV = first 16 bytes of the AES cipher blob.
+
 Workspace parsing — MINIMAL_CHOICE text-prefix convention:
   "[repo-name] prompt..."  → workspace = "repo-name", prompt = "prompt..."
   "prompt..."               → workspace = secrets.toml [feishu].default_workspace
@@ -17,19 +25,19 @@ Workspace parsing — MINIMAL_CHOICE text-prefix convention:
 session_key encoding: "feishu-<chat_id>" — reply_from_run reads chat_id back.
 
 Out of scope (Phase 1):
-  - Encrypted payloads — disable "加密策略" in Feishu app event subscription
   - Non-text message types (file/image/card)
   - User @ mentions — text content is used as-is
 
 secrets.toml schema:
   [feishu]
-  app_id             = "cli_xxx"
-  app_secret         = "xxx"
-  verification_token = "xxx"
-  default_workspace  = "test-repo"   # optional
+  app_id            = "cli_xxx"
+  app_secret        = "xxx"
+  encrypt_key       = "xxx"           # from 飞书 → 事件订阅 → 加密策略 (enabled)
+  default_workspace = "test-repo"     # optional
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -37,6 +45,14 @@ import re
 from typing import Optional
 from urllib import error as urlerror
 from urllib import request as urlreq
+
+# cryptography is required iff Encrypt Key is configured. Imported lazily so
+# this module loads even on a server that hasn't yet `pip install cryptography`.
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    _HAVE_CRYPTO = True
+except ImportError:  # pragma: no cover
+    _HAVE_CRYPTO = False
 
 from . import config
 
@@ -48,17 +64,40 @@ def _secrets() -> dict:
     return (config.load_secrets() or {}).get("feishu") or {}
 
 
-# ---------- signature ----------
+# ---------- signature + decryption (Feishu v2 — Encrypt Key) ----------
 
 
 def verify_signature(body: bytes, signature: str, ts: str, nonce: str) -> bool:
-    """sha256(timestamp + nonce + token + body) hex == X-Lark-Signature."""
-    token = _secrets().get("verification_token", "")
-    if not token or not signature or not ts:
+    """Feishu v2: sha256(ts + nonce + ENCRYPT_KEY + body_raw) hex (lower).
+
+    `body_raw` is the request body as received — i.e. the encrypted blob
+    when Encrypt Key is enabled, not the decrypted plaintext.
+    """
+    key = _secrets().get("encrypt_key", "")
+    if not key or not signature or not ts:
         return False
-    raw = (ts + nonce + token).encode("utf-8") + body
+    raw = (ts + nonce + key).encode("utf-8") + body
     expected = hashlib.sha256(raw).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+
+def _aes_decrypt(encrypted_b64: str, encrypt_key: str) -> bytes:
+    """AES-256-CBC decrypt: key=sha256(encrypt_key), IV=first 16 bytes."""
+    if not _HAVE_CRYPTO:
+        raise RuntimeError(
+            "cryptography not installed — run: .venv/bin/pip install cryptography"
+        )
+    key = hashlib.sha256(encrypt_key.encode("utf-8")).digest()
+    raw = base64.b64decode(encrypted_b64)
+    iv, ciphertext = raw[:16], raw[16:]
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+    dec = cipher.decryptor()
+    padded = dec.update(ciphertext) + dec.finalize()
+    # PKCS7 unpad
+    pad_len = padded[-1]
+    if pad_len < 1 or pad_len > 16:
+        raise ValueError(f"bad PKCS7 padding length: {pad_len}")
+    return padded[:-pad_len]
 
 
 # ---------- webhook entry ----------
@@ -76,18 +115,38 @@ def handle_webhook(
       {"ok": True, "ignored": "<reason>"}                  no-op event
       {"error": "...", "code": <int>}                      failure
     """
+    encrypt_key = _secrets().get("encrypt_key", "")
+
+    # Signature check first — body bytes used as-is (encrypted or plain).
+    # Only enforced if Encrypt Key is configured AND a signature header is present;
+    # this lets the initial app setup (no Encrypt Key yet) still accept events.
+    if encrypt_key and sig:
+        if not verify_signature(body, sig, ts or "", nonce or ""):
+            return {"error": "bad signature", "code": 401}
+
+    # Parse body. With Encrypt Key on, body is {"encrypt": "<base64>"} → decrypt.
     try:
-        payload = json.loads(body.decode("utf-8"))
+        raw_payload = json.loads(body.decode("utf-8"))
     except Exception as e:
         return {"error": f"invalid json: {e}", "code": 400}
 
-    # url_verification does NOT carry X-Lark-Signature — bypass check.
+    if isinstance(raw_payload, dict) and "encrypt" in raw_payload:
+        if not encrypt_key:
+            return {
+                "error": "encrypted body but [feishu].encrypt_key not set",
+                "code": 500,
+            }
+        try:
+            plain = _aes_decrypt(raw_payload["encrypt"], encrypt_key)
+            payload = json.loads(plain.decode("utf-8"))
+        except Exception as e:
+            return {"error": f"decrypt failed: {e}", "code": 500}
+    else:
+        payload = raw_payload
+
+    # url_verification — respond with challenge (works for both plain + encrypted modes)
     if payload.get("type") == "url_verification":
         return {"challenge": payload.get("challenge", "")}
-
-    if _secrets().get("verification_token"):
-        if not verify_signature(body, sig or "", ts or "", nonce or ""):
-            return {"error": "bad signature", "code": 401}
 
     header = payload.get("header") or {}
     event_type = header.get("event_type") or (payload.get("event") or {}).get("type", "")
