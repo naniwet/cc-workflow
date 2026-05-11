@@ -112,7 +112,7 @@ cc-workflow/
 | `backend/csrf.py` | python | 40 | P0-7d |
 | `backend/reliability.py` | python | 80 | P0-8 |
 | `deploy/cc-workflow.service` | systemd | 20 | P0-8d |
-| `deploy/nginx.conf` | nginx | 60 | P0-7c |
+| `deploy/nginx.conf` | nginx | 60 | P0-3 Phase 1(反代提前)+ P0-7c HTTPS Phase 3 |
 | **Phase 3 小计** | | **~200** | |
 
 **全部小计**: ~1710 行(超 1500 预算 ~14%,主要原因:P0-1 加入 provider 切换 + 装机脚本)。
@@ -666,10 +666,10 @@ WorkingDirectory=/home/<your_user>/projects/cc-workflow
 # Project-local venv (PEP 668 — Ubuntu 24.04+ blocks system pip).
 # Setup once: python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn pydantic tomli
 #
-# Phase 1: --host 0.0.0.0 — direct Mac-browser access, no nginx.
-#   Cloud security group MUST allowlist your egress IP (no auth yet).
-# Phase 3: revert to 127.0.0.1; nginx terminates HTTPS + basic auth + CSRF.
-ExecStart=/home/<your_user>/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765
+# Backend binds 127.0.0.1; public traffic comes through nginx on :80
+# (deploy/nginx.conf reverse-proxies to here). HTTP basic auth enforced
+# at FastAPI layer (backend/auth.py). Phase 3 adds HTTPS via certbot.
+ExecStart=/home/<your_user>/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
 Restart=on-failure
 RestartSec=5
 
@@ -735,11 +735,16 @@ sudo cp deploy/cc-workflow.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now cc-workflow
 
-# 9. nginx
+# 9. nginx reverse proxy
+#    Phase 1: bare HTTP on :80, no cert.
+#    Phase 3: add HTTPS (certbot).
+sudo apt install -y nginx                                        # if absent
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/cc-workflow
-sudo ln -s /etc/nginx/sites-available/cc-workflow /etc/nginx/sites-enabled/
-sudo certbot --nginx -d <your_domain>     # HTTPS
-sudo systemctl reload nginx
+sudo ln -sf /etc/nginx/sites-available/cc-workflow /etc/nginx/sites-enabled/cc-workflow
+sudo rm -f /etc/nginx/sites-enabled/default                      # stock welcome page would shadow ours
+sudo nginx -t && sudo systemctl reload nginx
+# Phase 3 only:
+# sudo certbot --nginx -d <your_domain>                           # HTTPS
 
 # 10. cron
 sudo cp cron/cc-loops.crontab /etc/cron.d/cc-loops
