@@ -1,13 +1,16 @@
 """FastAPI gateway — dev-plan §4.2.
 
-Phase 1 (this file, T+0.5d) routes:
-  GET  /healthz
-  POST /run
-  GET  /runs/{task_id}
-  GET  /sessions
+Phase 1 routes:
+  GET  /healthz                             (T+0.5d)
+  POST /run                                  (T+0.5d)
+  GET  /runs/{task_id}                       (T+0.5d)
+  GET  /sessions                             (T+0.5d)
+  GET  /loops                                (T+1d)
+  POST /loops/{name}/pause                   (T+1d)
+  POST /loops/{name}/resume                  (T+1d)
 
-Auth (basic + CSRF) and the /csrf, /loops/*, /im/feishu/webhook,
-/push/subscribe routes land in later phases (T+1d / T+1.5d / Phase 3).
+Auth (basic + CSRF), /csrf, /loops/{name}/trigger, /im/feishu/webhook,
+/push/subscribe — land in later phases (T+1.5d / Phase 2 / Phase 3).
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ from typing import Literal, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from . import db, runner
+from . import cron_state, db, runner
 
 app = FastAPI(title="cc-workflow", version="0.1.0")
 
@@ -66,3 +69,33 @@ def get_run_endpoint(task_id: str) -> dict:
 @app.get("/sessions")
 def get_sessions() -> dict:
     return db.list_sessions_view()
+
+
+# ---------- /loops (T+1d — P0-2 + P0-3 后半) ----------
+# pause/resume only writes the `enabled` field in jobs/<name>.json. Actual
+# enforcement (agent-run early-exits when enabled=false) is Phase 3 / P0-7g.
+
+
+@app.get("/loops")
+def get_loops() -> list[dict]:
+    return cron_state.list_jobs()
+
+
+@app.post("/loops/{name}/pause")
+def pause_loop(name: str) -> dict:
+    job = cron_state.set_enabled(name, False)
+    if job is None:
+        raise HTTPException(
+            status_code=404, detail={"error": "loop not found", "code": 404}
+        )
+    return {"status": "paused", "name": name, "enabled": False}
+
+
+@app.post("/loops/{name}/resume")
+def resume_loop(name: str) -> dict:
+    job = cron_state.set_enabled(name, True)
+    if job is None:
+        raise HTTPException(
+            status_code=404, detail={"error": "loop not found", "code": 404}
+        )
+    return {"status": "resumed", "name": name, "enabled": True}

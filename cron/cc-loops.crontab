@@ -1,0 +1,28 @@
+# cc-workflow loops — install to /etc/cron.d/cc-loops
+#
+# Format (cron.d):  m h dom mon dow USER COMMAND
+# /etc/cron.d/ files DO include the USER field (unlike per-user crontabs).
+# System cron parses these without sudo, but the file itself must be owned by root.
+#
+# agent-run binary:  /usr/local/bin/agent-run
+#   install once:    sudo install -m 0755 ~/projects/cc-workflow/agent-run.sh /usr/local/bin/agent-run
+#
+# State files written by agent-run.sh:
+#   ~/.cc-state/jobs/<job-name>.json   (per-job state, dev-plan §4.6)
+#   ~/.cc-state/logs/<date>.jsonl       (stream-json, P0-7e perm 0700)
+#
+# Failures go to the jsonl log + the runs.db row (when triggered via backend);
+# cron's default mail-to-user is NOT relied on (no MTA on this server).
+#
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# --- Examples (uncomment to enable; replace <workspace> with one of your repos) ---
+#
+# Daily 09:03 — summarize yesterday's commits across a repo:
+# 3 9 * * * root /usr/local/bin/agent-run --engine=claude <workspace> "summarize yesterday's commits in this repo" daily-digest --source cron --job-name daily-digest
+#
+# Hourly housekeeping smoke (proves the pipe still works):
+# 17 * * * * root /usr/local/bin/agent-run --engine=claude <workspace> "reply with only OK" hourly-smoke --source cron --job-name hourly-smoke
+#
+# (Note: cron.d files MUST end with a newline — keep the blank line below.)
+
