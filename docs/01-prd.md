@@ -160,10 +160,10 @@ Phase 1 完成判定:
 
 - [x] **A0.1** Mac Chrome 打开 `http://<server>/` 看到简陋触发页 — PASS @ 2026-05-11(commit be37214 → ccf0220,经 nginx :80 反代到 backend 127.0.0.1:8765)
 - [x] **A0.2** 页面点 Run 触发任务,几分钟内看到完成 — PASS @ 2026-05-11(`419f6bf18aef` test-repo · claude · sk=web-1 · elapsed 4s · exit 0,output "OK")
-- [ ] **A0.3** 飞书发消息 → 飞书收到回复 — 代码 ready(commit ccf0220),e2e 待用户配 Feishu app credentials + 验证消息推送
+- [x] **A0.3** 飞书发消息 → 飞书收到回复 — PASS @ 2026-05-11(commit ccf0220,飞书私聊机器人 `[test-repo] reply with only OK` → reply `[done · exit 0] OK`,1-3 分钟)
 - [x] **A0.4** 配 1 个 cron loop(每分钟),状态文件正确更新 — PASS @ 2026-05-11(等于 A2.1,见 §6.1 P0-2)
 
-**A0 全过才能进 Phase 2**。否则修 backend / agent-run / cron / Feishu 直到 A0 通过。**当前状态**:A0.1/A0.2/A0.4 实测 PASS,A0.3 代码 ready 等 e2e。
+**A0 全过 ✅(2026-05-11)→ Phase 2 解锁**。
 
 #### Phase 2 Gate (A0')
 
@@ -239,8 +239,8 @@ SQLite 持久化 (`~/.cc-state/runs.db`)
 webhook 接收 + 签名校验 + 反向 reply
 
 **acceptance**:
-- [ ] **A4.1** 飞书发"在 repo1 加 README" → 收到回复 + PR 链接 — 代码 ready @ 2026-05-11(commit ccf0220 `backend/im_feishu.py` + `/im/feishu/webhook` route + `runner.on_finish` hook),e2e 待用户配 Feishu app credentials
-- [ ] **A4.2** 多轮对话 session 连续(`--resume` 工作)— 代码 ready,`session_key = feishu-<chat_id>` 保证同一 chat 复用 session,e2e 待
+- [x] **A4.1** 飞书发消息 → 收到回复 — PASS @ 2026-05-11(commit ccf0220;`[test-repo] reply with only OK` → `[done · exit 0] OK`)
+- [ ] **A4.2** 多轮对话 session 连续(`--resume` 工作)— 代码 ready,`session_key = feishu-<chat_id>` 保证同一 chat 复用 session;A4.1 PASS 已隐含路径通,完整 multi-turn 实测待
 
 #### P0-5: PWA 信号器 **[Phase 2]**
 

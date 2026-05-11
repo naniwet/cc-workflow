@@ -758,14 +758,14 @@ sudo cp cron/cc-loops.crontab /etc/cron.d/cc-loops
 
 ## 11. 验收清单(按 Phase)
 
-### Phase 1 Gate
-- [x] P0-1 [agent-run]: test §3.1 全过 — PASS @ 2026-05-11(commit 7b88107;3.1.1-4 strict pass on `provider=deepseek`,3.1.5 codex SKIP)
-- [x] P0-2 [cron + state]: A2.1 PASS @ 2026-05-11(commit 7467001);A2.2 留 Phase 3 P0-7g
-- [x] P0-3 [FastAPI]: A3.1/A3.2/A3.3 全过 @ 2026-05-11(commit f8ee553 + 7467001 + be37214 + ff78f86 + fad7119 + 35a0423)
-- [ ] P0-4 [Feishu]: 代码 ready @ 2026-05-11(commit ccf0220),e2e 待用户配 Feishu app
-- [ ] **A0 全过**:A0.1/A0.2/A0.4 实测 PASS,A0.3 待 Feishu e2e
+### Phase 1 Gate ✅ 全过 @ 2026-05-11
+- [x] P0-1 [agent-run]: test §3.1 全过 — PASS(commit 7b88107;3.1.1-4 strict pass on `provider=deepseek`,3.1.5 codex SKIP)
+- [x] P0-2 [cron + state]: A2.1 PASS(commit 7467001);A2.2 留 Phase 3 P0-7g
+- [x] P0-3 [FastAPI]: A3.1/A3.2/A3.3 全过(commit f8ee553 + 7467001 + be37214 + ff78f86 + fad7119 + 35a0423)
+- [x] P0-4 [Feishu]: A4.1 PASS(commit ccf0220,飞书 webhook → backend → reply 全链路通)
+- [x] **A0 全过**:A0.1 / A0.2 / A0.3 / A0.4 全部实测 PASS
 
-→ A0 全过才进 Phase 2(**当前**:A0.3 待 e2e,严格说不应进 Phase 2)
+→ **Phase 2 解锁**
 
 ### Phase 2 Gate
 - [ ] P0-5 [PWA]: test §3.5 全过

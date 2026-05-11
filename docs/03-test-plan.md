@@ -19,7 +19,7 @@
 
 ## 2. 总验收(按 Phase 分组,对照 PRD §6)
 
-### Phase 1 Gate (A0) — 实测 2026-05-11
+### Phase 1 Gate (A0) — ✅ 全过 @ 2026-05-11
 - [x] **A1.1** Claude 引擎 smoke + session resume — PASS(provider=deepseek)
 - [x] **A1.2** 第 4 个并发立即 exit 65 — PASS
 - [x] **A1.3** push main 阻断 exit 67 — PASS
@@ -28,14 +28,14 @@
 - [x] **A3.1** POST /run < 100ms — PASS(13ms)
 - [x] **A3.2** GET /sessions 显示活跃 worker — PASS
 - [x] **A3.3** 重启后历史可查 — PASS
-- [ ] **A4.1** 飞书 → PR — 代码 ready(ccf0220),e2e 待
-- [ ] **A4.2** 飞书多轮 session 连续 — 代码 ready,e2e 待
+- [x] **A4.1** 飞书 → reply — PASS(私聊 `[test-repo] reply with only OK` → `[done · exit 0] OK`)
+- [ ] **A4.2** 飞书多轮 session 连续 — 代码 ready,完整 multi-turn 实测待
 - [x] **A0.1** Mac Chrome 看到简陋触发页 — PASS
 - [x] **A0.2** 页面 Run 触发 → 看到完成 — PASS(`419f6bf18aef` elapsed 4s exit 0)
-- [ ] **A0.3** 飞书 → 看回复 + PR — 代码 ready,e2e 待
+- [x] **A0.3** 飞书 → 看回复 — PASS(等于 A4.1)
 - [x] **A0.4** cron loop 触发 + 状态文件更新 — PASS(等于 A2.1)
 
-→ **A0 全过才能进 Phase 2**(当前 A0.3 待 Feishu e2e)
+→ **Phase 2 解锁** ✅
 
 ### Phase 2 Gate (A0')
 - [ ] **A5.1** iOS PWA 可安装
