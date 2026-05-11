@@ -1,27 +1,30 @@
 """FastAPI gateway — dev-plan §4.2.
 
 Phase 1 routes:
-  GET  /healthz                             (T+0.5d)
-  POST /run                                  (T+0.5d)
-  GET  /runs/{task_id}                       (T+0.5d)
-  GET  /sessions                             (T+0.5d)
-  GET  /loops                                (T+1d)
-  POST /loops/{name}/pause                   (T+1d)
-  POST /loops/{name}/resume                  (T+1d)
+  GET  /healthz                              (T+0.5d)  PUBLIC
+  GET  /                                     (Phase 1) basic
+  POST /run                                  (T+0.5d)  basic
+  GET  /runs/{task_id}                       (T+0.5d)  basic
+  GET  /sessions                             (T+0.5d)  basic
+  GET  /loops                                (T+1d)    basic
+  POST /loops/{name}/pause                   (T+1d)    basic
+  POST /loops/{name}/resume                  (T+1d)    basic
 
-Auth (basic + CSRF), /csrf, /loops/{name}/trigger, /im/feishu/webhook,
-/push/subscribe — land in later phases (T+1.5d / Phase 2 / Phase 3).
+basic auth (the §4.2 "basic" half) implemented via backend/auth.py.
+CSRF (the other half of §4.2), /csrf, /loops/{name}/trigger,
+/im/feishu/webhook, /push/subscribe — Phase 2 / Phase 3.
 """
 from __future__ import annotations
 
 from typing import Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, cron_state, db, runner
+from . import auth, config, cron_state, db, runner
+
+PROTECT = [Depends(auth.require_basic_auth)]
 
 app = FastAPI(title="cc-workflow", version="0.1.0")
 
@@ -39,12 +42,12 @@ class RunRequest(BaseModel):
     source: Literal["pwa", "feishu", "cron", "manual"] = "manual"
 
 
-@app.get("/healthz")
+@app.get("/healthz")  # intentionally NOT protected (monitoring / liveness)
 def healthz() -> dict:
     return {"ok": True}
 
 
-@app.post("/run")
+@app.post("/run", dependencies=PROTECT)
 def post_run(req: RunRequest) -> dict:
     run_id = db.new_run_id()
     runner.submit(
@@ -58,7 +61,7 @@ def post_run(req: RunRequest) -> dict:
     return {"task_id": run_id, "status": "queued"}
 
 
-@app.get("/runs/{task_id}")
+@app.get("/runs/{task_id}", dependencies=PROTECT)
 def get_run_endpoint(task_id: str) -> dict:
     row = db.get_run(task_id)
     if not row:
@@ -68,7 +71,7 @@ def get_run_endpoint(task_id: str) -> dict:
     return row
 
 
-@app.get("/sessions")
+@app.get("/sessions", dependencies=PROTECT)
 def get_sessions() -> dict:
     return db.list_sessions_view()
 
@@ -78,12 +81,12 @@ def get_sessions() -> dict:
 # enforcement (agent-run early-exits when enabled=false) is Phase 3 / P0-7g.
 
 
-@app.get("/loops")
+@app.get("/loops", dependencies=PROTECT)
 def get_loops() -> list[dict]:
     return cron_state.list_jobs()
 
 
-@app.post("/loops/{name}/pause")
+@app.post("/loops/{name}/pause", dependencies=PROTECT)
 def pause_loop(name: str) -> dict:
     job = cron_state.set_enabled(name, False)
     if job is None:
@@ -93,7 +96,7 @@ def pause_loop(name: str) -> dict:
     return {"status": "paused", "name": name, "enabled": False}
 
 
-@app.post("/loops/{name}/resume")
+@app.post("/loops/{name}/resume", dependencies=PROTECT)
 def resume_loop(name: str) -> dict:
     job = cron_state.set_enabled(name, True)
     if job is None:
@@ -104,11 +107,12 @@ def resume_loop(name: str) -> dict:
 
 
 # ---------- Phase 1 ugly trigger page (PRD §6.0) ----------
-# Mount last so explicit API routes always win.
-_STATIC_DIR = config.REPO_ROOT / "backend" / "static"
-if _STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+# GET / is the only public entry — browser prompts basic auth, then the
+# HTML's fetch() calls reuse the same credentials for all protected APIs.
+# No /static mount: index.html is the sole asset (no external CSS/JS/images).
+_INDEX_HTML = config.REPO_ROOT / "backend" / "static" / "index.html"
 
-    @app.get("/", include_in_schema=False)
-    def _root() -> FileResponse:
-        return FileResponse(_STATIC_DIR / "index.html")
+
+@app.get("/", include_in_schema=False, dependencies=PROTECT)
+def _root() -> FileResponse:
+    return FileResponse(_INDEX_HTML)

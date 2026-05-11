@@ -30,7 +30,8 @@ cc-workflow/
 │   ├── push.py                 # Web Push + VAPID
 │   ├── im_feishu.py            # Feishu adapter
 │   ├── cron_state.py           # cron 状态读取
-│   ├── csrf.py                 # CSRF token 中间件 (P0-7d)
+│   ├── auth.py                 # HTTP Basic auth (§4.2 basic; Phase 1)
+│   ├── csrf.py                 # CSRF token 中间件 (P0-7d, Phase 3)
 │   └── reliability.py          # 备份 / 轮转 / 清理 (P0-8)
 │
 ├── pwa/
@@ -80,13 +81,14 @@ cc-workflow/
 | 文件 | 语言 | 行数 | 模块 |
 |---|---|---|---|
 | `agent-run.sh` | bash | 240 | P0-1(含 provider 切换 ~40 行,§4.1.2) |
-| `scripts/install-deps.sh` | bash | 100 | P0-1 依赖装机(CLI / jq / config.toml + providers.json 模板) |
+| `scripts/install-deps.sh` | bash | 150 | P0-1 依赖装机(CLI / jq / config.toml + providers.json + secrets.toml 模板) |
 | `backend/main.py` | python | 120 | P0-3 |
 | `backend/config.py` | python | 40 | P0-3 |
 | `backend/db.py` | python | 130 | P0-3 |
 | `backend/runner.py` | python | 100 | P0-3 |
 | `backend/im_feishu.py` | python | 140 | P0-4 |
 | `backend/cron_state.py` | python | 60 | P0-2 |
+| `backend/auth.py` | python | 50 | P0-3 Phase 1(§4.2 basic 提前) |
 | `cron/cc-loops.crontab` | cron | 30 | P0-2 |
 | `backend/static/index.html` | html | 60 | **Phase 1 简陋触发页** |
 | **Phase 1 小计** | | **~1000** | |
@@ -270,6 +272,10 @@ provider = "deepseek"
 | GET | `/healthz` | (open) | - | `{ok: true}` |
 
 **响应统一**: `application/json`,错误 `{error, code}` + HTTP 4xx/5xx
+
+> **basic 已在 Phase 1 提前实现**(backend/auth.py,credentials 从 `~/.cc-workflow/secrets.toml` `[ui]` 段读)。
+> **CSRF 仍 Phase 3**(P0-7d),`/csrf` endpoint 同步 Phase 3 才出现。
+> `/healthz` 故意 **public**(监控用,不泄露任何敏感信息)。
 
 ### 4.3 CORS 策略 (P0-7c)
 
@@ -522,7 +528,10 @@ CREATE INDEX idx_runs_workspace ON runs(workspace, started_at);
 ### 配置
 - `~/.cc-workflow/config.toml`(非敏感):provider 选择等
 - `~/.cc-workflow/providers.json` 权限 `0600`(敏感):LLM provider profiles + API key
-- `~/.cc-workflow/secrets.toml` 权限 `0600`(敏感):Feishu / VAPID 等其他敏感配置
+- `~/.cc-workflow/secrets.toml` 权限 `0600`(敏感):
+  - `[ui]` HTTP Basic 用户名 + 密码(Phase 1 已生效,install-deps.sh 自动生成随机密码)
+  - `[feishu]`(P0-4 / T+1.5d)
+  - `[vapid]`(P0-6 / Phase 2)
 - 不放进**长期** shell 环境变量(`~/.bashrc` 等会被 `ps -E` 看到)
 - **例外**:agent-run.sh 调 claude 前**短期** export `ANTHROPIC_AUTH_TOKEN` 等给子进程(§4.1)— 这是 claude code 官方接入路径,无法绕开;进程生命周期短,只有 root / 同 uid 能读 `/proc/<pid>/environ`,接受这个 trade-off
 

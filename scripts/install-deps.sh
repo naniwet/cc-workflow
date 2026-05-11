@@ -54,10 +54,11 @@ else
     warn "gh CLI not installed (recommended). Install: https://cli.github.com/"
 fi
 
-# ---------- ~/.cc-workflow/config.toml + providers.json ----------
+# ---------- ~/.cc-workflow/config.toml + providers.json + secrets.toml ----------
 CCW_DIR="${HOME}/.cc-workflow"
 CCW_CONFIG="${CCW_DIR}/config.toml"
 PROVIDERS_FILE="${CCW_DIR}/providers.json"
+SECRETS_FILE="${CCW_DIR}/secrets.toml"
 mkdir -p "$CCW_DIR"
 
 if [[ -f "$CCW_CONFIG" ]]; then
@@ -110,6 +111,35 @@ fi
 chmod 0600 "$PROVIDERS_FILE"
 log "providers.json: 0600"
 
+# ---------- secrets.toml ([ui] for HTTP Basic, future: Feishu/VAPID) ----------
+GENERATED_PASSWORD=""
+if [[ -f "$SECRETS_FILE" ]]; then
+    log "secrets.toml exists at $SECRETS_FILE — not overwriting"
+    if ! grep -q '^\[ui\]' "$SECRETS_FILE"; then
+        warn "secrets.toml has no [ui] section — backend UI returns 503 until you add one"
+        warn "  example: printf '\\n[ui]\\nusername = \"admin\"\\npassword = \"<pick-one>\"\\n' >> $SECRETS_FILE"
+    fi
+else
+    GENERATED_PASSWORD=$(python3 -c 'import secrets,string; a=string.ascii_letters+string.digits; print("".join(secrets.choice(a) for _ in range(20)))')
+    log "writing secrets.toml template to $SECRETS_FILE"
+    cat > "$SECRETS_FILE" <<TOML
+# cc-workflow secrets — DO NOT COMMIT to git
+# Permissions enforced to 0600 by install-deps.sh
+
+[ui]
+# HTTP Basic Auth for the backend UI / API (dev-plan §4.2 "basic").
+# Change anytime; then: sudo systemctl restart cc-workflow
+username = "admin"
+password = "$GENERATED_PASSWORD"
+
+# Future:
+# [feishu]   app_id / app_secret / verification_token / encrypt_key  (P0-4)
+# [vapid]    private_key / public_key                                  (P0-6)
+TOML
+fi
+chmod 0600 "$SECRETS_FILE"
+log "secrets.toml: 0600"
+
 # ---------- state dirs (also created on-demand by agent-run, but safer here) ----------
 mkdir -p "${HOME}/.cc-state/"{locks,logs,jobs,backup}
 chmod 0700 "${HOME}/.cc-state/logs"
@@ -125,3 +155,13 @@ log "       claude (= anthropic local OAuth) → run 'claude login' once"
 log "  4. create test workspace:"
 log "       mkdir -p ~/workspaces/test-repo && cd \$_ && git init && touch README.md && git add . && git commit -m init"
 log "  5. run acceptance tests: bash tests/test_agent_run.sh"
+
+if [[ -n "$GENERATED_PASSWORD" ]]; then
+    log ""
+    warn "============================================================"
+    warn "  HTTP Basic Auth credentials (saved to $SECRETS_FILE):"
+    warn "    user: admin"
+    warn "    pass: $GENERATED_PASSWORD"
+    warn "  SAVE THIS NOW — needed for http://<server>:8765/"
+    warn "============================================================"
+fi
