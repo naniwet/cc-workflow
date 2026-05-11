@@ -1,5 +1,5 @@
 [Unit]
-Description=cc-workflow backend (FastAPI on 127.0.0.1:8765)
+Description=cc-workflow backend (FastAPI on 0.0.0.0:8765 — Phase 1 direct expose)
 After=network.target
 
 [Service]
@@ -10,7 +10,12 @@ User=<user>
 WorkingDirectory=/home/<user>/projects/cc-workflow
 # Uses the project-local venv (PEP 668 — Ubuntu 24.04+ blocks system pip).
 # Setup once:  python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn pydantic tomli
-ExecStart=/home/<user>/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+#
+# Bind 0.0.0.0 in Phase 1 to let Mac browser hit http://<server-public-ip>:8765/
+# directly. NO AUTH yet — protect via cloud-provider security group (allowlist
+# your home/office egress IP). Phase 3 switches back to 127.0.0.1 + nginx
+# reverse proxy + HTTPS + basic auth + CSRF (dev-plan §5 step 26-27).
+ExecStart=/home/<user>/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765
 Restart=on-failure
 RestartSec=5
 

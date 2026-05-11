@@ -37,8 +37,11 @@ def _resolve_agent_run() -> Path:
 AGENT_RUN = _resolve_agent_run()
 
 # ---------- server bind (dev-plan §9.4) ----------
-
-HOST = "127.0.0.1"
+# Phase 1 binds 0.0.0.0 for direct Mac-browser access (no nginx yet).
+# Phase 3 switches back to 127.0.0.1 + nginx reverse proxy + HTTPS + auth.
+# (HOST/PORT here are documentation only — uvicorn is launched by systemd
+# with explicit --host/--port flags from deploy/cc-workflow.service.)
+HOST = "0.0.0.0"
 PORT = 8765
 
 # ---------- toml loaders ----------

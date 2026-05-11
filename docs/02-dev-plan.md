@@ -656,7 +656,11 @@ User=<your_user>
 WorkingDirectory=/home/<your_user>/projects/cc-workflow
 # Project-local venv (PEP 668 — Ubuntu 24.04+ blocks system pip).
 # Setup once: python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn pydantic tomli
-ExecStart=/home/<your_user>/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+#
+# Phase 1: --host 0.0.0.0 — direct Mac-browser access, no nginx.
+#   Cloud security group MUST allowlist your egress IP (no auth yet).
+# Phase 3: revert to 127.0.0.1; nginx terminates HTTPS + basic auth + CSRF.
+ExecStart=/home/<your_user>/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765
 Restart=on-failure
 RestartSec=5
 
