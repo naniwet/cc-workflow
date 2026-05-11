@@ -38,19 +38,24 @@
 → **Phase 2 解锁** ✅
 
 ### Phase 2 Gate (A0')
-- [ ] **A5.1** iOS PWA 可安装
-- [ ] **A5.2** PWA 触发 30s 内开始
-- [ ] **A6.1** Push 订阅成功
-- [ ] **A6.2** 任务完成 15s 内 push 到达
-- [ ] **A0'.1** iPhone PWA 启动是 PWA(非浏览器 chrome)
-- [ ] **A0'.2** PWA 触发 → 锁屏弹 push,含 PR 链接
-- [ ] **A0'.3** 点 push 跳进 PWA 看完整输出
+- [ ] **A5.1** `backend/ui_cards.py` 抽象 Card 模型存在,不含 Feishu 字符串
+- [ ] **A5.2** 飞书 `/sessions` 卡片可用,刷新按钮工作
+- [ ] **A5.3** 飞书 `/loops` 卡片可用,暂停按钮工作
+- [ ] **A5.4** 飞书 `[workspace] prompt` 文本触发继续工作
+- [ ] **A5.5** Card 抽象渲染出的 Feishu JSON 通过卡片调试器
+- [ ] **A6.1** PWA-lite 在 iPhone 装到桌面,启动是独立 app
+- [ ] **A6.2** Workspaces 视图 4 列同屏并排,各列独立触发
+- [ ] **A6.3** Tasks 视图能添加 / 编辑 / 暂停 / 删除 cron
+- [ ] **A6.4** Tasks 视图能看每条 cron 最近 5 次运行历史
+- [ ] **A6.5** 长输出 > 4000 字符 → 飞书发截断 + PWA `/runs/<id>/view` 链接
+- [ ] **A6.6** **不存在** `backend/push.py` / VAPID / Web Push handler 代码
+- [ ] **A0'.1-A0'.8** Phase 2 总 Gate(PRD §6.0)
 
-→ **A0' 全过(或显式降级)才能进 Phase 3**
+→ **A0' 全过才能进 Phase 3**(IM Card 抽象 + PWA shell 都是结构性,无降级路径)
 
 ### Phase 3 Gate
 - [ ] **A2.2** 连败 3 → 状态 enabled=false
-- [ ] **A7.1-A7.7** 7 项安全(见 §3.7)
+- [ ] **A7.1-A7.5** 5 项安全(见 §3.7)
 - [ ] **A8.1-A8.4** 4 项可靠性(见 §3.8)
 - [ ] **E2E 场景 A / B / C** 三个全过(见 §4)
 
@@ -90,33 +95,55 @@ cat ~/.cc-state/jobs/<test-job>.json | jq '.last_exit, .total_runs'
 
 #### 3.0.2 A0' (Phase 2 Gate)
 
-**前置**: P0-5 / P0-6 单独测试都已过 (§3.5-3.6),HTTPS 已起来
+**前置**: P0-5 / P0-6 单独测试都已过 (§3.5-3.6)
 
 ```bash
-# A0'.1 — iPhone PWA 装桌面
-#   iPhone Safari 开 https://<server>/pwa/
-#   → 分享 → 添加到主屏幕
-#   桌面点图标启动,看到 PWA(无 Safari chrome / 无地址栏)
+# A0'.1 — Card 抽象层
+ls backend/ui_cards.py    # 存在
+grep -i "feishu\|lark\|larksuite" backend/ui_cards.py   # 应无任何 Feishu-specific 字符串
 
-# A0'.2 — PWA 触发 + Push 到达
-#   PWA 上选 test-repo / claude / "在 README 加一行 Hello A0prime"
-#   关闭 PWA,锁屏
-#   1-3 分钟内 phone 锁屏弹通知,含 PR URL
+# A0'.2 — 飞书 /sessions 卡片 + 刷新
+#   飞书发: /sessions
+#   收到卡片,列出活跃 / 队列 / 最近,有"刷新"按钮
+#   点刷新,卡片更新
 
-# A0'.3 — 点 Push 跳 PWA
-#   点 push 通知 → PWA 自动打开 → 看到完整输出 + PR 链接
+# A0'.3 — 飞书 /loops 卡片 + 操作
+#   飞书发: /loops
+#   收到卡片,列出 cron jobs,每条有"暂停 / 恢复 / 触发"按钮
+#   点"暂停"某条,看 ~/.cc-state/jobs/<name>.json 的 enabled 变 false
+
+# A0'.3 — 飞书 [workspace] prompt 文本触发(Phase 1 约定继续工作)
+#   飞书发: [test-repo] reply with only OK
+#   等 1-3 分钟,飞书 reply 含 OK
+
+# A0'.4 — PWA-lite 装桌面
+#   iPhone Safari 开 https://<server>/pwa/ → 添加到主屏幕
+#   启动是独立 app(无 Safari chrome)
+#   Mac Chrome 也可 ⊕ 装独立窗口
+
+# A0'.5 — Workspaces 视图
+#   PWA 进 Workspaces tab,看 4 个 repo 同屏并排
+#   任一列点 Run 触发任务,该列实时显示
+
+# A0'.6 — Tasks 视图
+#   PWA 进 Tasks tab,点 "新建" 填 workspace + cron + prompt 提交
+#   状态文件 ~/.cc-state/jobs/<name>.json 生成
+#   编辑 / 暂停 / 删除按钮各工作
+
+# A0'.7 — Card 抽象层
+ls backend/ui_cards.py    # 存在
+grep -i "feishu\|lark" backend/ui_cards.py   # 应无任何 Feishu-specific 字符串
+
+# A0'.8 — 长输出降级
+agent-run --engine=claude test-repo "print 5000 random words" longout
+#   飞书消息含前 ~1500 + 链接 https://<server>/pwa/runs/<id>/view
 ```
 
-**A0' 通过判定**: 3 项全过
+**A0' 通过判定**: 8 项全过
 
-#### 3.0.3 A0' 降级处理
+#### 3.0.3 A0' 没有降级路径
 
-A0' 不过(常见原因:iOS Push 配置问题、HTTPS cert、Safari 版本),可选择:
-
-- **修到通过**(推荐)
-- **显式降级**:Phase 2 只保留浏览器版(Mac 用),phone push 走飞书通道。继续 Phase 3,在 PRD §6.0 加 "Phase 2 降级" 备注
-
-无论选哪个,都**不要静默跳过**继续 Phase 3。
+Card 抽象在不在,是**结构性问题**——不能"先不抽象后面再说",后面 90% 概率不会再去抽。要么 Phase 2 一开工就把 `ui_cards.py` 做对,要么这事永远做不对。**没有 graceful degradation**。
 
 ---
 
@@ -308,49 +335,91 @@ curl -s -X POST http://localhost:8765/im/feishu/webhook \
 
 ---
 
-### 3.5 P0-5: PWA
+### 3.5 P0-5: IM Card 抽象 + Feishu 卡片扩展
 
-#### 3.5.1 装到桌面
+#### 3.5.1 Card 抽象层存在性
+
+```bash
+test -f backend/ui_cards.py && echo "OK"
+# 不允许包含 Feishu-specific 字符串
+grep -i "feishu\|lark\|larksuite\|im_card_v2" backend/ui_cards.py
+```
+
+**期望**: `ui_cards.py` 存在,无 Feishu 关键词
+
+#### 3.5.2 /sessions 卡片 + 刷新
+
+飞书私聊机器人发 `/sessions`,**期望**: 卡片含活跃 / 队列 / 最近,有"刷新"按钮。点刷新,卡片内容立即更新。
+
+#### 3.5.3 /loops 卡片 + 暂停/触发
+
+飞书发 `/loops`,**期望**: 卡片每条 loop 含"暂停 / 恢复 / 触发"按钮。点"暂停"某条 → `~/.cc-state/jobs/<name>.json` 的 `enabled` 变 false。
+
+#### 3.5.4 新建任务表单
+
+飞书发 `/run`,**期望**: 收到表单卡片含 workspace dropdown + prompt textarea + Run 按钮。选 test-repo + 输入 prompt + 提交 → 1-3 分钟后飞书 reply 含 PR URL。
+
+#### 3.5.5 Card → Feishu JSON 渲染合法
+
+把 `render_card()` 输出的 JSON 喂飞书 Open Platform 后台的"卡片调试器"(card builder),**期望**: 解析无错,预览效果对。
+
+---
+
+### 3.6 P0-6: PWA-lite App(Workspaces + Tasks)
+
+#### 3.6.1 PWA shell + 装桌面
 
 iPhone Safari 开 `https://<server>/pwa/` → 分享 → 添加到主屏幕
 
-**期望**: 桌面图标,点击启动看 PWA(不是浏览器 chrome)
+**期望**: 启动是独立 app(无 Safari chrome / 无地址栏)。Mac 上 Chrome 也能 ⊕ 装独立窗口。
 
-#### 3.5.2 触发 + 状态可见
+```bash
+# 服务器侧文件
+ls -la pwa/manifest.json pwa/sw.js
+# Push handler 必须无
+grep -i "push\|notification\|vapid" pwa/sw.js
+```
 
-PWA 选 test-repo / claude / "say PWA-test" / Run
+**期望**: manifest 和 sw 存在;sw.js 里 grep **无 push 相关代码**(cache-only 限制)
 
-**期望**:
-- 立即看到 task queued + task_id
-- 30s 内任务开始(activity 显示 running)
-- 完成后看到结果 "PWA-test"
+#### 3.6.2 Workspaces 视图
+
+PWA 进 Workspaces tab,**期望**:
+- 4 个 repo 同屏并排显示(响应式:1 / 2 / 4 列)
+- 每列含活跃 session 数 + 最近完成 + 触发表单
+- 在任一列点 "Run" 触发任务,该列实时反映
+- 任务不影响其他列
+
+#### 3.6.3 Tasks 视图
+
+PWA 进 Tasks tab,**期望**:
+- cron 列表显示,每条带 workspace / cron 表达式 / 上次运行 / consecutive_errors
+- "新建" 按钮 → 表单:workspace dropdown + cron 表达式输入 + prompt textarea
+- 提交后 → 状态文件 `~/.cc-state/jobs/<name>.json` 生成 + cron 注册到 `/etc/cron.d/`
+- 编辑 / 暂停 / 触发 / 删除按钮各工作
+- 点某条 cron 展开 → 看最近 5 次运行结果
+
+#### 3.6.4 长输出降级
+
+```bash
+agent-run --engine=claude test-repo "echo $(python3 -c 'print(\"X\"*5000)')" longout-test
+```
+
+**期望**: 飞书消息含前 ~1500 字符 + 链接 `https://<server>/pwa/runs/<id>/view`;点链接看到完整 stream-json 渲染。
+
+#### 3.6.5 Web Push 路径已砍干净
+
+```bash
+test -f backend/push.py && echo FAIL                # 不存在
+grep -ri "vapid\|pywebpush\|push_subscriptions" backend/    # 应无引用
+grep -i "self\\.registration\\.pushManager\|onpush" pwa/sw.js   # 不允许
+```
+
+**期望**: 全部"无引用"
 
 ---
 
-### 3.6 P0-6: Web Push
-
-#### 3.6.1 VAPID + 订阅
-
-```bash
-ls -la ~/.cc-workflow/vapid_public.pem    # 存在
-grep vapid_private ~/.cc-workflow/secrets.toml   # 存在,文件权限 0600
-```
-
-PWA 点 "启用通知" → 浏览器弹权限 → 允许
-
-```bash
-sqlite3 ~/.cc-state/runs.db "SELECT count(*) FROM push_subscriptions"
-```
-
-**期望**: count ≥ 1
-
-#### 3.6.2 完成时 push
-
-PWA 触发一个任务,**完成时 phone 锁屏弹通知,15s 内到达**,内容含任务摘要
-
----
-
-### 3.7 P0-7: 安全(7 子项)
+### 3.7 P0-7: 安全(5 子项)
 
 #### 3.7.1 [7a] push main 阻断
 
@@ -359,12 +428,11 @@ PWA 触发一个任务,**完成时 phone 锁屏弹通知,15s 内到达**,内容�
 #### 3.7.2 [7b] Daily cost 告警
 
 ```bash
-# 插入模拟数据
 sqlite3 ~/.cc-state/runs.db "UPDATE runs SET tokens_used=20000 WHERE date(started_at,'unixepoch')=date('now')"
-# 触发 cost 检查(如有手动接口)或等 daily cost 检查 cron
+# 触发 cost 检查
 ```
 
-**期望**: 飞书或 push 收到 "今日 token 用量接近上限"
+**期望**: 飞书收到告警卡片 "今日 token 用量接近上限"
 
 #### 3.7.3 [7c] CORS 拒绝跨 origin
 
@@ -376,18 +444,7 @@ curl -s -X POST http://localhost:8765/run \
 
 **期望**: 403(或 CORS 预检 fail)
 
-#### 3.7.4 [7d] CSRF 缺 token
-
-```bash
-curl -s -X POST http://localhost:8765/run -u user:pass \
-    -H "Content-Type: application/json" -d '{}' \
-    -o /dev/null -w "%{http_code}\n"
-# 没带 X-CSRF-Token 也没 cookie
-```
-
-**期望**: 403
-
-#### 3.7.5 [7e] 权限位
+#### 3.7.4 [7d] 权限位
 
 ```bash
 ls -la ~/.cc-workflow/secrets.toml ~/.cc-workflow/providers.json
@@ -396,22 +453,17 @@ ls -ld ~/.cc-state/logs
 
 **期望**: 两文件均 `-rw-------` (0600),logs 目录 `drwx------` (0700)
 
-#### 3.7.6 [7f] Push subscribe 鉴权
+#### 3.7.5 [7e] 连败 disable + 告警
 
-```bash
-# 不带 session token
-curl -s -X POST http://localhost:8765/push/subscribe \
-    -H "Content-Type: application/json" -d '{...}' \
-    -o /dev/null -w "%{http_code}\n"
-```
+(P0-2 A2.2 联动 — 在 §3.2.2 已模拟连败)
 
-**期望**: 401
+**期望**: 连败 3 次后,
+- `~/.cc-state/jobs/<name>.json` 的 `enabled` = false
+- 飞书收到告警卡片: "Loop X 连败 3 次,已自动禁用"
 
-#### 3.7.7 [7g] 连败 disable
-
-(已在 §3.2.2 验证 + 此处验证 push 告警到达)
-
-**期望**: 连败触发后,**phone 收到 push: "Loop X 已自动禁用"**
+> 不在本方案的测试(整体退到 P1):
+> - [7d] CSRF — 走 CORS + same-origin / 飞书签名校验
+> - [7f] Push subscribe 鉴权 — Web Push 整体不做
 
 ---
 
@@ -494,16 +546,22 @@ curl https://<server>/healthz
 
 ### Phase 2 场景(A0' 验证用)
 
-#### 场景 A2: PWA → PR + Push
+#### 场景 A2: 飞书卡片 → PR
 
-1. iPhone Safari 开 `https://<server>/pwa/` → 装到主屏幕
-2. PWA 上选 repo1 / claude / "在 README 加 Hello-PWA"
-3. 点 Run,**锁屏关 phone**
-4. 1-3 分钟内锁屏弹 push 通知,含 PR URL
-5. 点 push,PWA 自动打开,看到完整输出 + PR 链接
-6. GitHub 看到 PR
+1. 手机飞书发 `/run` → 收到表单卡片
+2. 表单选 repo1 / claude / "在 README 加 Hello-Card"
+3. 点 Run 按钮
+4. 1-3 分钟内飞书收到 reply,含 PR URL
+5. 飞书发 `/sessions` 看活跃 → 确认任务在列表
+6. GitHub 看到 PR,branch=claude/repo1-..., diff 含 "Hello-Card"
 
-(Phase 1 场景 B 和 C 不变)
+#### 场景 D: 长输出 → dashboard 兜底
+
+1. 飞书或 Mac 触发一个会产出 5000+ 字符的任务
+2. 完成后飞书消息显示前 1500 字符 + 链接 `https://<server>/runs/<id>/view`
+3. 点链接 Mac 浏览器打开,看到完整 stream-json 渲染
+
+(Phase 1 场景 A1 / B / C 不变)
 
 ### Phase 3 全场景回归
 
@@ -538,12 +596,23 @@ sudo journalctl -u cc-workflow -n 100
 - start_url 必须是 https
 - service worker 必须注册成功
 
-### "Web Push 不到达"
+### "Workspaces 视图渲染空"
 
-- VAPID 公私钥 server / PWA 一致
-- 订阅后 db 有记录
-- pywebpush 日志: 410/404 = 订阅失效,401 = VAPID 错
-- **iOS Safari 16.4+ 才支持**
+- 浏览器 F12 → Network 看 `/sessions` 请求是否 200,响应 JSON 是否含数据
+- backend `journalctl -u cc-workflow` 看是否报错
+- CORS:开 F12 → Console 看 CORS error,可能是 origin 不在白名单
+
+### "Tasks 视图添加 cron 失败"
+
+- 检查 cron 表达式格式(crontab man 5 标准 5 字段)
+- `ls /etc/cron.d/cc-loops` 看新条目是否写入
+- backend 有没有 sudo 权限写 `/etc/cron.d/`(systemd unit 需要)
+
+### 通知(飞书 push)没到
+
+- **本方案不用 Web Push**,通知全走飞书原生
+- 检查 backend 是否真调了 Feishu reply API(看日志)
+- 飞书 App Secret / Verification Token 对吗
 
 ### "飞书 webhook 签名 invalid"
 

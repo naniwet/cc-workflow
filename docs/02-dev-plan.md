@@ -27,19 +27,21 @@ cc-workflow/
 │   ├── config.py               # 配置加载
 │   ├── db.py                   # SQLite schema + CRUD
 │   ├── runner.py               # subprocess worker
-│   ├── push.py                 # Web Push + VAPID
-│   ├── im_feishu.py            # Feishu adapter
+│   ├── ui_cards.py             # IM 抽象 Card 模型 (P0-5a, Phase 2)
+│   ├── im_feishu.py            # Feishu adapter,Phase 2 加卡片渲染
 │   ├── cron_state.py           # cron 状态读取
 │   ├── auth.py                 # HTTP Basic auth (§4.2 basic; Phase 1)
-│   ├── csrf.py                 # CSRF token 中间件 (P0-7d, Phase 3)
+│   ├── static/                 # Phase 1 简陋触发页(沙袋,不是 PWA)
+│   │   └── index.html
 │   └── reliability.py          # 备份 / 轮转 / 清理 (P0-8)
 │
-├── pwa/
-│   ├── index.html
-│   ├── app.js
+├── pwa/                        # Phase 2 PWA-lite app(manifest + cache-only sw)
+│   ├── index.html              # 路由入口(workspaces / tasks 两视图)
+│   ├── app.js                  # SPA 路由 + fetch + 视图渲染
 │   ├── style.css
-│   ├── manifest.json
-│   └── sw.js
+│   ├── manifest.json           # name / icons 192+512 / start_url / display=standalone
+│   ├── sw.js                   # cache-only,不上 push
+│   └── run_view.html           # 长输出详情页
 │
 ├── cron/
 │   └── cc-loops.crontab        # /etc/cron.d/ 模板
@@ -59,8 +61,8 @@ cc-workflow/
 ~/.cc-workflow/
 ├── config.toml                 # 非敏感,provider = "deepseek" 等(见 §4.1.1)
 ├── providers.json              # 权限 0600;LLM provider profiles(ccswitch 风格,见 §4.1.1)
-├── secrets.toml                # 权限 0600;Feishu / VAPID 等其他敏感配置
-└── vapid_public.pem
+└── secrets.toml                # 权限 0600;Feishu app secret 等
+# 注:本方案不做 Web Push,故无 VAPID 密钥文件
 
 ~/.cc-state/
 ├── runs.db                     # SQLite
@@ -93,34 +95,38 @@ cc-workflow/
 | `backend/static/index.html` | html | 60 | **Phase 1 简陋触发页** |
 | **Phase 1 小计** | | **~1000** | |
 
-### Phase 2 — 移动端化
+### Phase 2 — 富交互(飞书卡片 + PWA-lite 2 视图)
 
 | 文件 | 语言 | 行数 | 模块 |
 |---|---|---|---|
-| `backend/push.py` | python | 110 | P0-6 |
-| `pwa/index.html` | html | 70 | P0-5 |
-| `pwa/app.js` | js | 170 | P0-5 |
-| `pwa/style.css` | css | 80 | P0-5 |
-| `pwa/manifest.json` | json | 20 | P0-5 |
-| `pwa/sw.js` | js | 60 | P0-5/6 |
-| **Phase 2 小计** | | **~510** | |
+| `backend/ui_cards.py` | python | 100 | P0-5a(抽象 Card 模型) |
+| `backend/im_feishu.py` 扩展 | python | +150 | P0-5b/5c/5d(Feishu adapter 卡片渲染 + 回调) |
+| `pwa/index.html` | html | 60 | P0-6a(SPA shell + nav) |
+| `pwa/app.js` | js | 280 | P0-6b/6c(Workspaces + Tasks 视图 + fetch + 轮询) |
+| `pwa/style.css` | css | 100 | P0-6(响应式 + 4 列 grid) |
+| `pwa/manifest.json` | json | 20 | P0-6a |
+| `pwa/sw.js` | js | 40 | P0-6a(cache-only,**无 push handler**) |
+| `pwa/run_view.html` | html | 60 | P0-6d(长输出详情页) |
+| **Phase 2 小计** | | **~810** | |
 
 ### Phase 3 — 稳定化
 
 | 文件 | 语言 | 行数 | 模块 |
 |---|---|---|---|
-| `backend/csrf.py` | python | 40 | P0-7d |
 | `backend/reliability.py` | python | 80 | P0-8 |
 | `deploy/cc-workflow.service` | systemd | 20 | P0-8d |
 | `deploy/nginx.conf` | nginx | 60 | P0-3 Phase 1(反代提前)+ P0-7c HTTPS Phase 3 |
-| **Phase 3 小计** | | **~200** | |
+| **Phase 3 小计** | | **~160** | |
 
-**全部小计**: ~1710 行(超 1500 预算 ~14%,主要原因:P0-1 加入 provider 切换 + 装机脚本)。
+**全部小计**: ~1970 行,**超 1500 预算约 30%**。**接受**——PWA-lite 2 视图是产品要的真功能,不是镀金。但任何单文件超估算 1.3x 仍要停下复议。
 
-**严格执行,任何文件超估算 1.3x 立即停下复议**。
+**砍掉 / 保留判断**:
+- 保留: `pwa/*`(PWA-lite shell,但**仅 cache-only sw,无 push handler**)
+- 砍: `backend/push.py`、VAPID、Web Push handler、`backend/csrf.py`
+- 留 P1: 圆桌会议视图(P1-3)+ Web Push(P1-0)+ Codex 深度集成(P1-1)
 
-> Phase 1 的 `backend/static/index.html` 是个简陋触发页,**不是 PWA** — 只有触发表单 + 状态列表,移动端不友好。Phase 2 才升级成 pwa/ 完整版。
-> 不写 `deploy/setup.sh`(部署仍手册化,见 §10);`scripts/install-deps.sh` 是**依赖装机**脚本,不是部署脚本——透明 bash 可读,不破 §10 设计意图。
+> Phase 1 的 `backend/static/index.html` 仍是简陋触发页(60 行,做 fallback)。Phase 2 的 `pwa/` 是主 UX,定位不同。
+> 不写 `deploy/setup.sh`(部署仍手册化,见 §10);`scripts/install-deps.sh` 是依赖装机脚本,不是部署脚本。
 
 ---
 
@@ -135,7 +141,7 @@ backend/runner.py      (subprocess agent-run, 写 db)
        ↓
 backend/main.py + csrf.py   (HTTP routes,带 CSRF 中间件)
    ↓                          ↓
-backend/im_feishu.py   backend/push.py
+backend/im_feishu.py   backend/ui_cards.py
    ↓
 backend/cron_state.py + cron/cc-loops.crontab
    ↓
@@ -317,15 +323,6 @@ CREATE TABLE runs (
     source TEXT                             -- pwa|feishu|cron|manual
 );
 
-CREATE TABLE push_subscriptions (
-    id TEXT PRIMARY KEY,
-    endpoint TEXT NOT NULL UNIQUE,
-    p256dh TEXT NOT NULL,
-    auth TEXT NOT NULL,
-    user_agent TEXT,
-    created_at INTEGER NOT NULL
-);
-
 CREATE TABLE sessions (
     session_key TEXT PRIMARY KEY,
     workspace TEXT NOT NULL,
@@ -434,41 +431,91 @@ CREATE INDEX idx_runs_workspace ON runs(workspace, started_at);
 
 ---
 
-### Phase 2 — 移动端化
+### Phase 2 — 富交互(飞书卡片 + PWA-lite 2 视图)
 
-目标:把 Phase 1 简陋 HTML 升级成 PWA + Web Push 端到端打通(PRD A0' Gate)。
+目标:Phase 1 文本-only 飞书升级为富卡片;加 PWA-lite 2 视图 app(Workspaces + Tasks)(PRD A0' Gate)。
 
-#### T+2.5d: PWA 前端 (P0-5)
+> **明确范围**:
+> - ✅ 做 PWA shell(manifest + cache-only sw),装桌面可用
+> - ❌ 不做 Web Push handler / VAPID(留 P1)
+> - ❌ 不做圆桌会议视图(整体留 P1-3,P0 不留空壳)
 
-任务:
-20. pwa/index.html + style.css(移动友好布局:输入 / 活跃 / 最近 / 模板库)
-21. pwa/app.js(fetch /run、轮询 /runs/{id}、订阅 push)
-22. pwa/manifest.json(name / icons 192+512 / start_url / theme_color)
-23. pwa/sw.js(service worker:可装桌面 + 接收 push)
-24. HTTPS 起来(let's encrypt 或 cloudflare tunnel)— **PWA 必需**
-25. backend/main.py 加 PWA 静态服务路由
-
-**通过判定**: A5.1, A5.2 过(iPhone 装桌面 + 触发任务)
-
-#### T+3d: Web Push (P0-6)
+#### T+2.5d: IM Card 抽象层 (P0-5a)
 
 任务:
-26. 生成 VAPID 密钥对,落到 `~/.cc-workflow/`
-27. backend/push.py(VAPID + pywebpush + 失效订阅清理)
-28. backend/main.py 加 `/push/subscribe`
-29. backend/runner.py 完成钩子触发 push 给所有订阅
-30. PWA app.js 加订阅 flow + sw.js 加 push 接收
+20. `backend/ui_cards.py` 定义:
+    - `@dataclass Card(title, sections, buttons, refresh_token, footer)`
+    - `@dataclass Section(kind, content)` — kind ∈ {text, kv, table, divider}
+    - `@dataclass Button(label, action, params)` — action 走 backend 回调
+    - `@dataclass FormField(name, label, kind, options)` — kind ∈ {text, dropdown, textarea}
+21. backend 路径产出 Card:`/sessions` 路由生成"活跃 sessions Card"、`/loops` 生成"loops Card" 等
 
-**通过判定**: A6.1, A6.2 过
+**通过判定**: `backend/ui_cards.py` 存在 + `Card` 抽象**不含任何 Feishu 字符串**
+
+#### T+3d: Feishu Adapter 卡片扩展 (P0-5b/c/d/e)
+
+任务:
+22. `backend/im_feishu.py` 加 `render_card(card: Card) -> dict` — Card → Feishu Open Platform 互动卡片 JSON
+23. `backend/im_feishu.py` 加 `parse_card_action(payload: dict) -> CardAction` — Feishu 卡片按钮回调 → 抽象 Action
+24. 加 slash 命令路由:`/sessions` `/loops` `/run` `/templates`
+25. 加新建任务表单卡片(workspace dropdown + prompt textarea + Run 按钮)
+26. 飞书 Open Platform 后台配置:加"消息卡片回调 URL" → `/im/feishu/card_callback`
+
+**通过判定**: A5.1, A5.2, A5.3, A5.4, A5.5 全过
+
+#### T+3.5d: PWA-lite shell (P0-6a)
+
+任务:
+27. `pwa/manifest.json`: name / icons 192+512 / start_url=`/pwa/` / display=standalone
+28. `pwa/sw.js`: cache-only(precache index/app.js/style.css/manifest;运行时 cache-first)— **不监听 push 事件**
+29. `pwa/index.html`: SPA shell + nav(顶部 2 个 tab:Workspaces / Tasks)
+30. backend/main.py 加静态路由 `/pwa/*`
+
+**通过判定**: A6.1 过(iPhone 装桌面 + 启动是独立 app)
+
+#### T+4d: Workspaces 视图 (P0-6b)
+
+任务:
+31. `pwa/app.js` 加 `WorkspacesView`:从 `/sessions` API 拉数据,按 workspace 分组
+32. 响应式 grid(4 列 ≥ desktop / 2 列 tablet / 1 列 mobile)
+33. 每列内嵌触发表单(workspace 固定 + prompt textarea + Run 按钮)
+34. 3 秒轮询刷新
+
+**通过判定**: A6.2 过(4 repo 同屏 + 各列独立触发)
+
+#### T+4.5d: Tasks 视图 (P0-6c)
+
+任务:
+35. `pwa/app.js` 加 `TasksView`:从 `/loops` API 拉 cron 列表
+36. 添加表单:workspace dropdown + cron 表达式输入(带常用预设 + 表达式校验)+ prompt textarea
+37. 编辑 / 暂停 / 触发 / 删除按钮(走 backend `/loops/{name}/*` 路由)
+38. 每条 cron 展开看最近 5 次运行历史
+
+**通过判定**: A6.3, A6.4 过
+
+#### T+5d: 长输出兜底 + run_view (P0-6d/e)
+
+任务:
+39. `pwa/run_view.html`:`/runs/{id}/view` 路由,完整 stream-json → 渲染 markdown / pre
+40. backend/im_feishu.py 加"长输出降级":output > 4000 字符 → 飞书消息发前 1500 + PWA 详情链接
+
+**通过判定**: A6.5 过
 
 #### ═══ Phase 2 Gate (A0') ═══
 
-完成 **PRD §6.0 A0'.1-A0'.3** 全部:
-- A0'.1 iPhone PWA 装到桌面,启动是 PWA
-- A0'.2 PWA 触发任务,phone 锁屏弹 push,含 PR 链接
-- A0'.3 点 push 跳进 PWA 看完整输出
+完成 **PRD §6.0 A0'.1-A0'.8** 全部:
+- A0'.1 飞书 `/sessions` 卡片 + 刷新
+- A0'.2 飞书 `/loops` 卡片 + 暂停按钮
+- A0'.3 飞书 `[workspace] prompt` 文本触发(已存在的约定)
+- A0'.4 PWA-lite 装桌面 + Mac 独立窗口启动
+- A0'.5 Workspaces 视图 4 列并排
+- A0'.6 Tasks 视图 CRUD 工作
+- A0'.7 Card 抽象在 `ui_cards.py`,Feishu adapter 不直接拼 JSON
+- A0'.8 长输出 > 4000 字符飞书发摘要 + PWA 详情链接
 
-**A0' 不过,要么修到通过,要么降级 Phase 2(仅浏览器版,phone 不装)**,然后进 Phase 3。
+**A0' 不过,修到通过**(IM Card 抽象 / PWA shell 都是结构性,无降级)。
+
+**圆桌会议视图(P1-3)Phase 2 不做,UI + backend 一起留 P1**。
 
 ---
 
@@ -476,18 +523,20 @@ CREATE INDEX idx_runs_workspace ON runs(workspace, started_at);
 
 目标:加安全和可靠性护栏,准备长期稳定运行。
 
-#### T+3.5d: 安全护栏 (P0-7 七子项)
+#### T+4d: 安全护栏 (P0-7 五子项)
 
 任务:
 31. agent-run.sh push main 检测(已在 T+0 做,这里加 e2e 验证)
-32. backend/csrf.py + main.py 集成中间件
-33. backend/main.py 加 CORS 配置
-34. backend/runner.py 加日成本估算 + 告警逻辑
-35. backend/cron_state.py 加连败 ≥ 3 自动 disable
-36. backend/push.py 加 subscribe 鉴权
-37. 部署后 `chmod 0600 ~/.cc-workflow/{secrets.toml,providers.json}` + `chmod 0700 ~/.cc-state/logs/`
+32. backend/main.py 加 CORS 配置(只允许 PWA-lite 同源 + 飞书 webhook)
+33. backend/runner.py 加日成本估算 + 飞书告警卡片
+34. backend/cron_state.py 加连败 ≥ 3 自动 disable + 飞书告警
+35. 部署后 `chmod 0600 ~/.cc-workflow/{secrets.toml,providers.json}` + `chmod 0700 ~/.cc-state/logs/`
 
-**通过判定**: A7.1-A7.7 全过
+**通过判定**: A7.1-A7.5 全过
+
+> 不做的任务(整体退到 P1):
+> - CSRF 中间件 — PWA-lite + 飞书 webhook 走 CORS + same-origin / 签名校验
+> - Push subscribe 鉴权 — Web Push 整体不做
 
 #### T+4d: 可靠性 (P0-8 四子项)
 
@@ -531,7 +580,6 @@ CREATE INDEX idx_runs_workspace ON runs(workspace, started_at);
 - `~/.cc-workflow/secrets.toml` 权限 `0600`(敏感):
   - `[ui]` HTTP Basic 用户名 + 密码(Phase 1 已生效,install-deps.sh 自动生成随机密码)
   - `[feishu]`(P0-4 / T+1.5d)
-  - `[vapid]`(P0-6 / Phase 2)
 - 不放进**长期** shell 环境变量(`~/.bashrc` 等会被 `ps -E` 看到)
 - **例外**:agent-run.sh 调 claude 前**短期** export `ANTHROPIC_AUTH_TOKEN` 等给子进程(§4.1)— 这是 claude code 官方接入路径,无法绕开;进程生命周期短,只有 root / 同 uid 能读 `/proc/<pid>/environ`,接受这个 trade-off
 
@@ -712,7 +760,7 @@ bash scripts/install-deps.sh
 sudo apt install -y python3-venv
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
-.venv/bin/pip install fastapi uvicorn pydantic pywebpush python-multipart tomli
+.venv/bin/pip install fastapi uvicorn pydantic python-multipart tomli
 # tomli is only needed on Python < 3.11 (3.11+ has stdlib tomllib).
 # Listing it unconditionally keeps the command idempotent across server Python versions.
 
@@ -726,11 +774,7 @@ sudo install -m 0755 agent-run.sh /usr/local/bin/agent-run
 # 6. 数据库初始化
 python3 -m backend.db init
 
-# 7. VAPID 密钥
-python3 -m backend.push gen_vapid > ~/.cc-workflow/vapid_public.pem
-# 私钥写到 secrets.toml
-
-# 8. systemd
+# 7. systemd
 sudo cp deploy/cc-workflow.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now cc-workflow
@@ -769,7 +813,7 @@ sudo cp cron/cc-loops.crontab /etc/cron.d/cc-loops
 
 ### Phase 2 Gate
 - [ ] P0-5 [PWA]: test §3.5 全过
-- [ ] P0-6 [Web Push]: test §3.6 全过
+- [ ] P0-6 [PWA-lite app]: test §3.6 全过
 - [ ] **A0' 全过**:iPhone PWA + Push 端到端
 
 → A0' 全过(或显式降级)才进 Phase 3

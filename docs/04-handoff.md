@@ -64,11 +64,22 @@
 
 | Phase | 范围 | Gate |
 |---|---|---|
-| **Phase 1** | P0-1 / P0-2 / P0-3 / P0-4 + 简陋 HTML | A0:Mac 浏览器 + 飞书都能端到端 |
-| **Phase 2** | P0-5(PWA) / P0-6(Push) | A0':iPhone PWA + Push 端到端 |
-| **Phase 3** | P0-7 / P0-8 | 安全 + 可靠性全过 |
+| **Phase 1** | P0-1 / P0-2 / P0-3 / P0-4(基础) + 简陋 HTML | A0:Mac 浏览器 + 飞书文本都能端到端 |
+| **Phase 2** | P0-5(IM Card 抽象 + Feishu 卡片) / P0-6(PWA-lite app:Workspaces + Tasks 两视图) | A0':Feishu 卡片可用 + PWA-lite 装桌面 + 两视图工作 |
+| **Phase 3** | P0-7(5 子项)/ P0-8(4 子项) | 安全 + 可靠性全过 |
 
 **强制规则**: A0 不过不许碰 Phase 2 任何文件。A0' 不过不许进 Phase 3。
+
+**禁止清单**(P0 全程不做):
+- ❌ `backend/push.py` / VAPID / pywebpush / 任何 Web Push handler — 整体留 P1-0
+- ❌ `backend/csrf.py` — PWA-lite 走 CORS + same-origin,飞书走签名校验
+- ❌ 圆桌会议视图 / `/discuss` endpoint — 留 P1-3 与 multi-agent 一起做
+- ❌ ORM / Redis / Celery / React / build step / Docker
+
+**做的清单**(Phase 2 必做):
+- ✅ `pwa/manifest.json` + `pwa/sw.js`(**cache-only,无 push handler**)
+- ✅ `pwa/index.html` / `app.js` / `style.css` + Workspaces 视图 + Tasks 视图 + `run_view.html`
+- ✅ `backend/ui_cards.py` 抽象 Card 模型 + `backend/im_feishu.py` 卡片渲染扩展
 
 ### T+0 任务:Phase 1 第一步
 
@@ -76,7 +87,8 @@
 
 - **Claude 引擎严格 P0**(必须全过 [03-test-plan §3.1.1-3.1.4](03-test-plan.md#31-p0-1-agent-run))
 - **Codex 引擎 best-effort**(尽力 §3.1.5,**不通过不阻塞 P0**;真不行写到 commit message 里降级到 P1)
-- **不要碰 Phase 2 / Phase 3 的任何文件**(pwa/、backend/push.py、backend/csrf.py、backend/reliability.py)
+- **不要碰 Phase 2 / Phase 3 的任何文件**(`pwa/`、`backend/ui_cards.py`、`backend/reliability.py`)
+- **永远不写**: `backend/push.py`、`backend/csrf.py`、VAPID、pywebpush(整个 Web Push 路径已退到 P1)
 
 ### 步骤
 

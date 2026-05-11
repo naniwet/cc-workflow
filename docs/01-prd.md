@@ -63,7 +63,7 @@
 |---|---|
 | **N1**. 手机上写复杂代码(IDE 替代) | 手机不是 coding device;phone = 信号器是核心心智模型 |
 | **N2**. 团队多租户 / 多用户 | 个人使用,不引入用户系统 |
-| **N3**. PC 桌面原生 app | PWA 在桌面浏览器同样工作 |
+| **N3**. PC 桌面原生 app | 飞书桌面客户端 + Mac 浏览器 dashboard 已经覆盖 |
 | **N4**. 自建 LLM 路由 / 自动选 agent | 显式选择更好,自动路由是后期可选 |
 | **N5**. 替代 Claude iOS App | 官方 app 已成熟;这个项目解决官方不覆盖的:飞书集成、多引擎、自建 Loop |
 | **N6**. 重新发明 cron / IM 协议 | Linux cron + Feishu/钉钉 webhook 已稳定 |
@@ -78,7 +78,7 @@
 - 作为开发者,在地铁上 5 秒内触发"修复 repo1 bug",继续看视频,5 分钟后 push 通知
 
 ### 监控场景(推测每日)
-- 作为开发者,每天 9:03 飞书/PWA 收到 4 个 repo 昨日活动综合简报
+- 作为开发者,每天 9:03 飞书收到 4 个 repo 昨日活动综合简报
 - 任意 Loop 连败 ≥ 3 次立即收到告警
 
 ### 决策场景(推测低频高价值,P1 才实现)
@@ -132,18 +132,39 @@ P0 8 项分 **3 个 phase** 实施。**前一 phase 通过 Gate 才进下一 pha
 
 | Phase | 范围 | Gate(必须全过才进下一阶段) |
 |---|---|---|
-| **Phase 1: 核心闭环验证** | P0-1 / P0-2 / P0-3 / P0-4 + 简陋 HTML 触发页 | Mac 浏览器 + 飞书都能端到端触发任务、看到 PR(**A0** 验证) |
-| **Phase 2: 移动端化** | P0-5(PWA) / P0-6(Web Push) | PWA 装到 iPhone 桌面 + 触发任务 + 收到 Push(**A0'** 验证) |
-| **Phase 3: 稳定化** | P0-7(安全 7 项) / P0-8(可靠性 4 项) | 全部 sub-item acceptance 过 |
+| **Phase 1: 核心闭环验证** | P0-1 / P0-2 / P0-3 / P0-4(基础) + 简陋 HTML 触发页 | Mac 浏览器 + 飞书文本消息都能端到端触发任务、看到 PR(**A0** 验证) |
+| **Phase 2: 富交互(飞书卡片 + PWA-lite 2 视图)** | P0-5(IM Card 抽象 + Feishu 卡片) / P0-6(PWA-lite app:Workspaces + Tasks 两个视图) | 飞书卡片能用 + PWA-lite 装桌面可用 + 两视图工作(**A0'** 验证) |
+| **Phase 3: 稳定化** | P0-7(安全 5 项) / P0-8(可靠性 4 项) | 全部 sub-item acceptance 过 |
 
-#### 为什么分 3 阶段
+#### 为什么 PWA-lite 而不是完整 PWA
 
-PWA + Web Push 是 P0 里最 fragile 的层(iOS Safari 16.4+、VAPID、service worker、HTTPS、manifest 各种坑)。**叠在没经过端到端验证的 backend 上同时调试,bug 定位时间至少 2x**。
+**Web Push 仍然不做**(留 P1)——飞书原生 push 在 iOS 上比 Web Push 可靠 10 倍,VAPID / service worker / Safari 16.4+ 这些坑能避免就避免。
 
-正确顺序:
-1. 先用 Mac 浏览器 + 简陋 HTML 页面验证 backend / agent-run / cron / Feishu 全通 → 这是产品假设验证(核心闭环 work 不 work)
-2. 闭环通过后再上 PWA / Push → 这时候是把验证过的能力做移动端化,不是同时验证两件事
-3. 最后做安全 / 可靠性 → 在功能 stable 之后做硬化最合适
+**但 PWA shell(manifest + cache-only sw)做**——因为有 3 个真需求 飞书 卡片不擅长:
+- **4 个 workspace 并行同屏**: 卡片一次显示一个,多视图同屏需要原生 grid 布局
+- **添加 / 编辑 cron**: 选 cron 表达式、看每条 cron 的历史曲线 — 卡片不够
+- **(P1)圆桌会议**: 多 agent 发言流 + 综合面板 — 必须有自己的 UI
+
+所以 Phase 2 = **飞书卡片(短交互)+ PWA-lite(2 视图深度交互),互补**。
+
+**P0-6 = 2 视图**(Workspaces + Tasks)。圆桌会议视图整体留 P1(UI + backend 一起做,**不在 P0 留空壳**)。
+
+#### 为什么不直接写死 Feishu schema(IM Card 抽象层)
+
+未来可能换钉钉/Slack/Telegram。所以 **P0-5 引入抽象 Card 模型**:
+- backend 产出抽象 `Card` 对象(title / fields / buttons / refresh hook)
+- `FeishuAdapter` 把 Card 渲染成 Feishu Open Platform 卡片 JSON
+- 将来加 `DingTalkAdapter`,backend 不动,只加 ~120 行渲染代码
+
+这是约 50 行多写的"抽象税",换未来 5x 易维护性。
+
+#### 分 3 阶段的根本逻辑(不变)
+
+1. Phase 1: **验证产品假设**(核心闭环 work 不 work)
+2. Phase 2: **加富 UX**(卡片 + Mac 全局视图)
+3. Phase 3: **加护栏**(安全 + 可靠性)
+
+每个 phase 验证一件事,**不要并行调试两件未知**。
 
 #### Phase 1 简陋 HTML 的设计约束
 
@@ -169,11 +190,17 @@ Phase 1 完成判定:
 
 Phase 2 完成判定:
 
-- [ ] **A0'.1** iPhone Safari 装到桌面,启动看 PWA(不是浏览器 chrome)
-- [ ] **A0'.2** PWA 触发任务,1-3 分钟内 phone 锁屏弹 Web Push,含 PR 链接
-- [ ] **A0'.3** 点 Push 跳进 PWA 看完整输出
+- [ ] **A0'.1** 飞书 `/sessions` 命令 → 收到卡片,列出当前活跃 + 最近完成,卡片有"刷新"按钮工作
+- [ ] **A0'.2** 飞书 `/loops` 命令 → 收到卡片,列出 cron jobs + 状态,卡片"暂停 / 恢复 / 触发"按钮工作
+- [ ] **A0'.3** 飞书 `[workspace] <prompt>` 文本格式触发(Phase 1 已存在的约定继续工作),session 连续
+- [ ] **A0'.4** PWA-lite 在 iPhone 装到桌面 + 在 Mac 浏览器独立窗口启动 都看到 app(无浏览器 chrome)
+- [ ] **A0'.5** **Workspaces 视图**: 4 个 repo 同屏并排,每列含活跃 session + 最近 + 触发表单
+- [ ] **A0'.6** **Tasks 视图**: cron 列表 + 添加表单(workspace + cron 表达式 + prompt)+ 编辑 / 暂停 / 删除按钮工作
+- [ ] **A0'.7** Card 抽象在 backend(`backend/ui_cards.py`),Feishu adapter 渲染该模型,**不直接拼 Feishu JSON**
+- [ ] **A0'.8** 长输出 > 4000 字符 → 飞书发摘要 + 链接到 PWA 详情页 `/runs/<id>/view`
 
 **A0' 全过才能进 Phase 3**。
+**圆桌视图(多 agent)Phase 2 不做,留 P1-3 实施(UI + backend 一起做,不在 P0 留空壳)**。
 
 ---
 
@@ -238,48 +265,74 @@ SQLite 持久化 (`~/.cc-state/runs.db`)
 
 webhook 接收 + 签名校验 + 反向 reply
 
+**消息格式约定**(已在 Phase 1 实现并实测通过):
+- 文本触发: `[workspace] <prompt>` —— 例:`[test-repo] reply with only OK`
+- 不匹配该格式 → bot 提示"请用 `[workspace] prompt` 格式" / 或当作默认 workspace
+- 多轮对话: `session_key = feishu-<chat_id>`,**[workspace] 前缀可省略时复用上次的 workspace**(待 P1 改进)
+
 **acceptance**:
 - [x] **A4.1** 飞书发消息 → 收到回复 — PASS @ 2026-05-11(commit ccf0220;`[test-repo] reply with only OK` → `[done · exit 0] OK`)
 - [ ] **A4.2** 多轮对话 session 连续(`--resume` 工作)— 代码 ready,`session_key = feishu-<chat_id>` 保证同一 chat 复用 session;A4.1 PASS 已隐含路径通,完整 multi-turn 实测待
 
-#### P0-5: PWA 信号器 **[Phase 2]**
+#### P0-5: IM Card 抽象 + Feishu 卡片扩展 **[Phase 2]**
 
-> Phase 2 是把 Phase 1 的简陋 HTML 升级成完整 PWA — 加 manifest、service worker、移动端布局、模板库。
+> **架构原则**: backend 产出抽象 `Card`,各 IM adapter 各自渲染。未来加钉钉/Slack/Telegram 只写一个新 adapter,backend 不动。
 
-manifest + service worker;移动端友好布局;触发任务 + 查看状态 + 模板库。
-
-**acceptance**:
-- [ ] **A5.1** iOS Safari "添加到主屏幕" 后,启动是 PWA 不是浏览器
-- [ ] **A5.2** PWA 触发任务,30 秒内任务开始执行
-
-#### P0-6: Web Push 通知 **[Phase 2]**
-
-VAPID + 订阅 + 完成时推送
+| # | 子项 | 内容 |
+|---|---|---|
+| 5a | **抽象 Card 模型** | `backend/ui_cards.py`: `Card(title, sections, buttons, refresh_token)` dataclass + `Section` / `Button` / `FormField` 基础类型 |
+| 5b | **Feishu adapter 渲染** | `backend/im_feishu.py` 扩展:Card → Feishu Open Platform 互动卡片 JSON;回调 webhook 解析 → 抽象 `CardAction` 事件 |
+| 5c | **Slash 命令** | `/sessions` `/loops` `/run` `/templates` 四个命令,backend 接收文本指令 → 生成 Card → adapter 渲染发送 |
+| 5d | **会话/Loop 卡片** | 活跃 session 卡片(带刷新按钮)、cron loops 卡片(每行带"暂停 / 触发"按钮)、最近完成卡片 |
+| 5e | **新建任务表单卡片** | 卡片含:workspace dropdown + prompt 文本框 + Run 按钮;按钮回调走 backend → 走 `/run` → 触发 |
 
 **acceptance**:
-- [ ] **A6.1** PWA 订阅成功,db 有记录
-- [ ] **A6.2** 任务完成 15 秒内 push 到达 phone
+- [ ] **A5.1** `backend/ui_cards.py` 含 `Card` / `Section` / `Button` / `FormField` 抽象,无任何 Feishu 字符串
+- [ ] **A5.2** 飞书发 `/sessions` → 收到卡片;点"刷新"按钮 → 卡片内容更新
+- [ ] **A5.3** 飞书发 `/loops` → 收到卡片;点某条 loop 的"暂停"按钮 → cron job 状态文件 `enabled` 变 false
+- [ ] **A5.4** 飞书发"新建任务"卡片表单 → 选 workspace + prompt + 提交 → 任务被触发,后续完成 reply 回原 chat
+- [ ] **A5.5** Card 抽象渲染的 Feishu JSON 通过 Feishu Open Platform 的"卡片调试器"验证合法
 
-#### P0-7: 安全护栏(7 子项)**[Phase 3]**
+#### P0-6: PWA-lite App(Workspaces + Tasks 两视图) **[Phase 2]**
+
+> **PWA-lite = manifest + cache-only service worker,但不上 Web Push**。装到桌面 / 全屏启动可用,通知仍走飞书。
+>
+> 两个视图 — 圆桌(多 agent)视图整体留 P1-3 实施。
+
+| # | 子项 | 内容 |
+|---|---|---|
+| 6a | **PWA shell** | `pwa/manifest.json`(name / icons 192+512 / start_url / display=standalone)+ `pwa/sw.js`(纯缓存,不 push)|
+| 6b | **Workspaces 视图** | 4 列(N 列可配置)横向布局,每列对应一个 repo:活跃 session / 最近完成 / 内嵌触发表单 |
+| 6c | **Tasks 视图** | cron 列表 + 添加表单(workspace dropdown + cron 表达式输入 + prompt textarea)+ 编辑 / 暂停 / 删除按钮 + 每条 cron 的运行历史(最近 5 条) |
+| 6d | **长输出详情页** | `/runs/{id}/view` 路由(可独立访问,飞书消息长输出兜底用) |
+| 6e | **3 秒轮询刷新** | fetch + 轮询;无 WebSocket / SSE / push |
+
+**acceptance**:
+- [ ] **A6.1** PWA 在 iPhone Safari "添加到主屏幕" 后启动是独立 app(无浏览器 chrome)
+- [ ] **A6.2** Workspaces 视图同屏并排显示 4 个 repo,各自独立可触发任务
+- [ ] **A6.3** Tasks 视图能添加新 cron(选 workspace + 输入 cron 表达式 + prompt),状态文件正确生成
+- [ ] **A6.4** Tasks 视图编辑 / 暂停 / 删除单条 cron,文件系统状态正确反映
+- [ ] **A6.5** 长输出 > 4000 字符,飞书消息含截断 + 链接到 `/runs/<id>/view`,点链接看完整 stream-json
+- [ ] **A6.6** **不存在** `backend/push.py` / VAPID 密钥 / 任何 Web Push 引用(确认这条路径砍干净)
+
+#### P0-7: 安全护栏(5 子项)**[Phase 3]**
+
+> 原本设计的 CSRF token / Push 订阅鉴权 已随 Web Push 整体退到 P1,本方案安全护栏 5 项。
 
 | # | 子项 | 内容 |
 |---|---|---|
 | 7a | **禁止 push main** | agent-run 检查 + GitHub branch protection 双保险 |
-| 7b | **API 用量软告警** | 日 token 估算超阈值(默认 $30/天)→ push 告警 |
-| 7c | **CORS** | 后端只允许 PWA 同源 + 飞书 webhook 来源 |
-| 7d | **CSRF token** | PWA POST 请求必须带 CSRF token,与 cookie 双重校验(double-submit) |
-| 7e | **Log / Secret 权限** | `~/.cc-state/logs/` 权限 `0700`,`~/.cc-workflow/secrets.toml` + `~/.cc-workflow/providers.json` 权限 `0600` |
-| 7f | **Push 订阅 auth** | `/push/subscribe` 必须带 PWA 会话 token,防止外部劫持订阅 |
-| 7g | **连败自动 disable** | cron job 连败 ≥ 3 自动 enabled=false + push 告警 |
+| 7b | **API 用量软告警** | 日 token 估算超阈值(默认 $30/天)→ 飞书告警 |
+| 7c | **CORS** | 后端只允许 PWA-lite 同源 + 飞书 webhook 来源 |
+| 7d | **Log / Secret 权限** | `~/.cc-state/logs/` 权限 `0700`,`~/.cc-workflow/secrets.toml` + `providers.json` 权限 `0600` |
+| 7e | **连败自动 disable** | cron job 连败 ≥ 3 自动 enabled=false + 飞书告警(与 P0-2 A2.2 联动) |
 
 **acceptance**:
 - [ ] **A7.1** push main 阻断(exit 67)
-- [ ] **A7.2** 模拟超阈值 → 告警 push
+- [ ] **A7.2** 模拟超阈值 → 飞书告警卡片
 - [ ] **A7.3** 跨 origin 调用 `/run` → 403
-- [ ] **A7.4** 不带 CSRF token → 403
-- [ ] **A7.5** `ls -la ~/.cc-workflow/{secrets.toml,providers.json}` 都显示 `-rw-------`
-- [ ] **A7.6** 未授权 `/push/subscribe` → 401
-- [ ] **A7.7** 连败 3 次自动 disable + 告警
+- [ ] **A7.4** `ls -la ~/.cc-workflow/{secrets.toml,providers.json}` 都显示 `-rw-------`
+- [ ] **A7.5** 连败 3 次自动 disable + 告警
 
 #### P0-8: 可靠性 **[Phase 3]**
 
@@ -302,11 +355,12 @@ VAPID + 订阅 + 完成时推送
 
 | # | 内容 |
 |---|---|
+| P1-0 | **Web Push 完整支持**(VAPID + iOS Safari 16.4+);只在飞书 push 失败率 > 5% 时才做 |
 | P1-1 | **Codex 引擎深度集成**(--resume 等价、错误处理、stream 输出对齐) |
 | P1-2 | agent-run 接入 GPT 等纯 chat-mode 模型(OpenAI-compatible SDK)。**DeepSeek / Kimi 在 P0-1 已经作为 claude code 的 LLM 后端覆盖**,P1 这里只剩没有 anthropic-compatible 桥的模型(GPT、Qwen 等) |
-| P1-3 | **Multi-agent 协同讨论** — 详细设计见 [`future/multi-agent-design.md`](future/multi-agent-design.md),**P0 不实现** |
+| P1-3 | **Multi-agent 协同讨论 + 圆桌视图**(PWA-lite 第 3 视图 + backend `/discuss` endpoint,**UI 与 backend 一起做**)— 详细设计见 [`future/multi-agent-design.md`](future/multi-agent-design.md) |
 | P1-4 | DingTalk IM Adapter(沿用 Feishu 形态,~120 行) |
-| P1-5 | Dashboard 模板库整合到 PWA |
+| P1-5 | Dashboard 模板库整合到 PWA-lite Tasks 视图 |
 | P1-6 | API 用量 / Cost Tracker |
 | P1-7 | GitHub Actions Loop 集成(PR babysit / Issue triage / Flaky test) |
 
@@ -325,7 +379,7 @@ LLM 自动路由、Session 跨重启恢复、语音输入、Slack/Telegram、长
 | 手机触发延迟 P95 | ≤ 10 秒 |
 | 任务完成率(Claude 引擎) | ≥ 90% |
 | Push 通知到达率 | ≥ 95% |
-| PWA 周启动次数 | ≥ 10 |
+| 飞书机器人周交互次数 | ≥ 20 |
 | daily-digest 准时率 | 7/7 |
 
 ### Lagging (1-3 月)
@@ -343,7 +397,7 @@ LLM 自动路由、Session 跨重启恢复、语音输入、Slack/Telegram、长
 - **Q1** [engineering] Feishu webhook 当前集成具体形态?接入 OpenClaw 还是已有独立服务?
 - **Q2** [engineering] Codex CLI 在服务器装了没?哪个版本?(决定 P0-1 的 best-effort 走多远)
 - **Q3** [data] 4 个 repo 真实名字
-- **Q4** [security] 服务器能上 HTTPS(let's encrypt / cloudflare)吗?PWA / Web Push 都要
+- **Q4** [security] 服务器能上 HTTPS(let's encrypt / cloudflare)吗?**PWA-lite 必需 HTTPS**(manifest + service worker 强制),飞书 webhook 可走 HTTP 但推荐 HTTPS
 
 ---
 
@@ -365,16 +419,24 @@ T+2d          简陋 HTML 触发页(backend/static/index.html)
 
 **A0 不过,不许进 Phase 2**。
 
-### Phase 2: 移动端化
+### Phase 2: 富交互(飞书卡片 + PWA-lite 2 视图)
 
 ```
-T+2.5d        PWA manifest + service worker + 移动布局
-T+3d          Web Push (VAPID + 订阅 + 推送)
-T+3.5d        iPhone 装桌面 + Push 端到端验证
-─── A0' Gate: phone 上完整体验 work ───
+T+2.5d        IM Card 抽象层 (backend/ui_cards.py)
+T+3d          Feishu adapter 扩展:卡片渲染 + 回调解析 + slash 命令
+T+3.5d        PWA-lite shell (manifest + cache-only sw + 路由)
+T+4d          Workspaces 视图(4 repo 同屏布局)
+T+4.5d        Tasks 视图(cron CRUD + 历史)
+T+5d          长输出降级路径 + run_view 详情页
+─── A0' Gate: 飞书卡片可用 + PWA-lite 装桌面可用 + 2 视图工作 ───
 ```
 
-**A0' 不过,不许进 Phase 3**(或者降级 Phase 2 部分功能再继续)。
+**A0' 不过,修到通过**(IM Card 抽象在不在是结构性,无降级路径)。
+
+**Phase 2 明确不做**:
+- ❌ Web Push / VAPID / 完整 PWA push handler — 通知走飞书
+- ❌ 圆桌会议视图(multi-agent UI)— 整体留 P1-3
+- ❌ 任何让 Phase 2 越过 ~2000 行总代码量的功能
 
 ### Phase 3: 稳定化
 
@@ -401,12 +463,12 @@ T+5d          E2E 测试 (场景 A/B/C) + buffer
 | 风险 | 严重 | 概率 | 对策 |
 |---|---|---|---|
 | Codex CLI 接口与假设不符 | 中 | 中 | **P0 降为 best-effort;Day 0 实测;差异大放 P1** |
-| Web Push 在 iOS 不稳 | 高 | 中 | **iOS Safari 16.4+ 才支持**;不行 fallback 飞书 push |
+| Web Push 在 iOS 不稳 | — | — | **本方案不做 Web Push,改用飞书原生 push;留 P1-0,风险与 P0 无关** |
 | 失控 Loop 烧 token | 高 | 中 | 软告警 + 连败 3 disable + 日 cost 上限 |
 | 自动改 main 灾难 | 极高 | 低 | 双重防护:GH branch protection + agent-run exit 67 |
 | SQLite 文件损坏 | 中 | 低 | **P0-8 每日 backup 已覆盖** |
 | OpenClaw / 自建 cron 字段冲突 | 低 | 低 | 本方案不依赖 OpenClaw,与之平行运行不冲突 |
-| PWA 在公司网络下连不上 server | 中 | 中 | 可选 cloudflare tunnel / VPN |
+| PWA-lite 在公司网络下连不上 server | 中 | 中 | 可选 cloudflare tunnel / VPN;飞书入口不受影响 |
 | CSRF / CORS 漏洞导致外部触发 | 高 | 中 | **P0-7 已覆盖** |
 
 ---
@@ -425,9 +487,9 @@ T+5d          E2E 测试 (场景 A/B/C) + buffer
 - 收益:并发安全、查询能力
 - 代价:多一个抽象;**反悔成本中**,跑通后嫌重还能改 JSON
 
-### D4: PWA 主入口 + IM 辅助
-- 收益:UX 自控 + 复用 IM
-- 代价:维护两套入口(边际成本低)
+### D4: 飞书主入口 + PWA-lite 2 视图辅助
+- 收益:利用飞书已有 push / 卡片 / 多端,Web Push 完全不做(留 P1);PWA-lite 提供 4 repo 并行同屏 + cron CRUD 两个飞书卡片不擅长的场景
+- 代价:与 Feishu 短期耦合(P0-5 用 IM Card 抽象层缓解,未来加钉钉/Slack 适配器即可);PWA-lite 必需 HTTPS
 
 ### D5: Codex P0-best-effort
 - 收益:不让 codex 的不确定性阻塞 P0 整体
@@ -452,7 +514,7 @@ T+5d          E2E 测试 (场景 A/B/C) + buffer
 - P0 的 agent 工具:严格 `claude code` + best-effort `codex`;**LLM 后端 P0 支持 anthropic / deepseek / kimi 切换**(详见 D7、§6.1 P0-1)
 - 其他纯 chat 模型(GPT 等)P1
 - Multi-agent 推到 P1
-- PWA 主入口
+- 飞书主入口 + PWA-lite 2 视图(Workspaces + Tasks)辅助;Web Push 整体留 P1
 
 ---
 
