@@ -17,9 +17,11 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import cron_state, db, runner
+from . import config, cron_state, db, runner
 
 app = FastAPI(title="cc-workflow", version="0.1.0")
 
@@ -99,3 +101,14 @@ def resume_loop(name: str) -> dict:
             status_code=404, detail={"error": "loop not found", "code": 404}
         )
     return {"status": "resumed", "name": name, "enabled": True}
+
+
+# ---------- Phase 1 ugly trigger page (PRD §6.0) ----------
+# Mount last so explicit API routes always win.
+_STATIC_DIR = config.REPO_ROOT / "backend" / "static"
+if _STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def _root() -> FileResponse:
+        return FileResponse(_STATIC_DIR / "index.html")
