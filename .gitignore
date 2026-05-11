@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Python (for future backend/)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# State / secrets — these live in ~/.cc-workflow/ and ~/.cc-state/ on the
+# server, NEVER in the repo. Listed here as a safety net in case anyone
+# accidentally creates them inside the project root.
+secrets.toml
+providers.json
+.cc-workflow/
+.cc-state/

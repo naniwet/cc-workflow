@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+#
+# scripts/install-deps.sh — install P0-1 dependencies on Linux server.
+# Contract: dev-plan §8 + §10 (deps-only, NOT a deploy setup.sh).
+# Idempotent: re-running is safe.
+#
+set -euo pipefail
+
+err()  { printf '\e[31m[install-deps]\e[0m %s\n' "$*" >&2; }
+log()  { printf '\e[32m[install-deps]\e[0m %s\n' "$*"; }
+warn() { printf '\e[33m[install-deps]\e[0m %s\n' "$*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+[[ "$(uname -s)" == "Linux" ]] || { err "this script targets Linux server (got $(uname -s)); see dev-plan §8"; exit 1; }
+
+# ---------- claude code CLI ----------
+if have claude; then
+    log "claude: $(claude --version 2>/dev/null || echo '?')"
+else
+    have npm || { err "npm missing — install Node.js first: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs"; exit 1; }
+    log "installing @anthropic-ai/claude-code..."
+    sudo npm install -g @anthropic-ai/claude-code
+fi
+
+# ---------- codex CLI (best-effort) ----------
+if have codex; then
+    log "codex: $(codex --version 2>/dev/null || codex --help 2>&1 | head -1)"
+else
+    warn "codex CLI not installed (P0-1 best-effort allows this)."
+    warn "manual install: https://github.com/openai/codex"
+fi
+
+# ---------- jq ----------
+if have jq; then
+    log "jq: $(jq --version)"
+else
+    log "installing jq..."
+    sudo apt-get update -qq && sudo apt-get install -y jq
+fi
+
+# ---------- flock (util-linux, usually pre-installed) ----------
+have flock || { err "flock missing — sudo apt install -y util-linux"; exit 1; }
+log "flock: OK"
+
+# ---------- gh CLI (optional but recommended for PR creation) ----------
+if have gh; then
+    log "gh: $(gh --version | head -1)"
+    if gh auth status >/dev/null 2>&1; then
+        log "gh auth: OK"
+    else
+        warn "gh not authenticated — run: gh auth login"
+    fi
+else
+    warn "gh CLI not installed (recommended). Install: https://cli.github.com/"
+fi
+
+# ---------- ~/.cc-workflow/config.toml + providers.json ----------
+CCW_DIR="${HOME}/.cc-workflow"
+CCW_CONFIG="${CCW_DIR}/config.toml"
+PROVIDERS_FILE="${CCW_DIR}/providers.json"
+mkdir -p "$CCW_DIR"
+
+if [[ -f "$CCW_CONFIG" ]]; then
+    log "config.toml exists at $CCW_CONFIG — not overwriting"
+else
+    log "writing config.toml template to $CCW_CONFIG"
+    cat > "$CCW_CONFIG" <<'TOML'
+# cc-workflow non-secret config. Safe to commit.
+# Which LLM-backend profile to use (matches a key under "profiles" in providers.json).
+# "claude" (or "anthropic") = empty profile → use Anthropic local OAuth.
+provider = "deepseek"
+TOML
+fi
+
+if [[ -f "$PROVIDERS_FILE" ]]; then
+    log "providers.json exists at $PROVIDERS_FILE — not overwriting"
+else
+    log "writing providers.json template to $PROVIDERS_FILE"
+    # Schema borrowed from ccswitch: profiles.<name>.env is a flat dict of
+    # env vars to export. Placeholder values <...> trigger an error in agent-run
+    # if the profile is selected before keys are filled.
+    cat > "$PROVIDERS_FILE" <<'JSON'
+{
+  "profiles": {
+    "claude": {
+      "env": {}
+    },
+    "deepseek": {
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "<api-key>",
+        "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
+        "CLAUDE_CODE_EFFORT_LEVEL": "max"
+      }
+    },
+    "kimi": {
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.kimi.com/coding/",
+        "ANTHROPIC_API_KEY": "<api-key>"
+      }
+    }
+  }
+}
+JSON
+fi
+chmod 0600 "$PROVIDERS_FILE"
+log "providers.json: 0600"
+
+# ---------- state dirs (also created on-demand by agent-run, but safer here) ----------
+mkdir -p "${HOME}/.cc-state/"{locks,logs,jobs,backup}
+chmod 0700 "${HOME}/.cc-state/logs"
+log "state dirs ready under ~/.cc-state/"
+
+log ""
+log "DONE. Next:"
+log "  1. edit $CCW_CONFIG — pick provider (deepseek | kimi | claude)"
+log "  2. edit $PROVIDERS_FILE — fill <api-key> for the provider you picked"
+log "  3. auth (depends on provider):"
+log "       deepseek / kimi → no login needed; env vars handle auth"
+log "       claude (= anthropic local OAuth) → run 'claude login' once"
+log "  4. create test workspace:"
+log "       mkdir -p ~/workspaces/test-repo && cd \$_ && git init && touch README.md && git add . && git commit -m init"
+log "  5. run acceptance tests: bash tests/test_agent_run.sh"
