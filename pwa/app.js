@@ -131,13 +131,50 @@ function renderWorkspacesView() {
 
   $('view').innerHTML = `
     <h1>Workspaces</h1>
+    <details class="add-form">
+      <summary>New workspace</summary>
+      <form data-form-id="new-ws">
+        <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
+          placeholder="repo-name (alphanum / . _ -)" required></label>
+        <button type="submit">Create</button>
+        <p class="muted" style="font-size:11px;margin:0">
+          Creates <code>~/workspaces/&lt;name&gt;/</code> with <code>git init</code>
+          + empty README + first commit.
+        </p>
+      </form>
+    </details>
     ${cols
       ? `<div class="ws-grid">${cols}</div>`
-      : `<p class="muted">No workspaces detected. Create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
+      : `<p class="muted">No workspaces yet. Use the form above or create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
   `;
 
+  $('view').querySelector('form[data-form-id="new-ws"]')
+    ?.addEventListener('submit', onAddWorkspace);
   for (const f of $('view').querySelectorAll('.trigger-form')) {
     f.addEventListener('submit', onTriggerSubmit);
+  }
+}
+
+async function onAddWorkspace(e) {
+  e.preventDefault();
+  const form = e.target;
+  const name = form.elements.name.value.trim();
+  if (!name) return;
+  const btn = form.querySelector('button[type="submit"]');
+  btn.disabled = true; btn.textContent = 'Creating…';
+  try {
+    await api('/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    form.reset();
+    clearDraft('new-ws');
+    refreshAll();
+  } catch (err) {
+    showError(`create workspace failed: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Create';
   }
 }
 
@@ -231,21 +268,59 @@ async function onTriggerSubmit(e) {
 // ---------- Tasks view ----------
 function renderTasksView() {
   const loops = lastData.loops || [];
+  const workspaces = lastData.workspaces || [];
   const rows = loops.length
     ? loops.map(loopRowHtml).join('')
-    : '<p class="muted">No cron loops. Add entries to <code>/etc/cron.d/cc-loops</code> on the server.</p>';
+    : '<p class="muted">No cron loops yet. Use the form above.</p>';
   $('view').innerHTML = `
     <h1>Tasks (cron)</h1>
+    <details class="add-form">
+      <summary>New cron loop</summary>
+      <form data-form-id="new-loop">
+        <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
+          placeholder="daily-digest" required></label>
+        <div class="form-row">
+          <label>workspace
+            <select name="workspace" required>
+              ${workspaces.map(w => `<option value="${esc(w)}">${esc(w)}</option>`).join('')}
+            </select>
+          </label>
+          <label>engine
+            <select name="engine">
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+            </select>
+          </label>
+        </div>
+        <label>自然语言时间(可选,点 Parse 调 LLM 转 cron)
+          <div class="parse-row">
+            <input name="nl" placeholder="每天早上 9 点" autocomplete="off">
+            <button type="button" class="secondary parse-btn">Parse</button>
+          </div>
+        </label>
+        <label>cron 表达式 (5 字段)
+          <input name="schedule" pattern="[^\\s]+\\s+[^\\s]+\\s+[^\\s]+\\s+[^\\s]+\\s+[^\\s]+.*"
+            placeholder="0 9 * * *" required></label>
+        <label>prompt
+          <textarea name="prompt" placeholder="summarize yesterday's commits" required></textarea>
+        </label>
+        <button type="submit">Add</button>
+      </form>
+    </details>
     <p class="muted">
       Each loop writes state to <code>~/.cc-state/jobs/&lt;name&gt;.json</code>.
-      Pause / resume below toggles <code>enabled</code>.
-      <strong>Add / edit / delete via UI is deferred to Phase 3</strong> —
-      for now edit <code>/etc/cron.d/cc-loops</code> on the server.
+      Pause / resume toggles <code>enabled</code>;
+      delete removes the entry from <code>/etc/cron.d/cc-loops</code>.
     </p>
     <div class="task-list">${rows}</div>
   `;
-  for (const b of $('view').querySelectorAll('.pause-btn, .resume-btn')) {
-    b.addEventListener('click', onPauseResume);
+
+  $('view').querySelector('form[data-form-id="new-loop"]')
+    ?.addEventListener('submit', onAddLoop);
+  $('view').querySelector('.parse-btn')
+    ?.addEventListener('click', onParseNl);
+  for (const b of $('view').querySelectorAll('.pause-btn, .resume-btn, .delete-btn')) {
+    b.addEventListener('click', onLoopAction);
   }
 }
 
@@ -268,21 +343,81 @@ function loopRowHtml(loop) {
         ${enabled
           ? `<button class="secondary pause-btn" data-name="${esc(loop.name)}">Pause</button>`
           : `<button class="secondary resume-btn" data-name="${esc(loop.name)}">Resume</button>`}
+        <button class="danger delete-btn" data-name="${esc(loop.name)}">Delete</button>
       </span>
     </div>
   `;
 }
 
-async function onPauseResume(e) {
-  const btn = e.target;
-  const name = btn.dataset.name;
-  const action = btn.classList.contains('pause-btn') ? 'pause' : 'resume';
-  btn.disabled = true;
+async function onAddLoop(e) {
+  e.preventDefault();
+  const form = e.target;
+  const fd = Object.fromEntries(new FormData(form).entries());
+  const btn = form.querySelector('button[type="submit"]');
+  btn.disabled = true; btn.textContent = 'Adding…';
   try {
-    await api(`/loops/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+    await api('/loops', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: fd.name,
+        workspace: fd.workspace,
+        schedule: fd.schedule,
+        prompt: fd.prompt,
+        engine: fd.engine || 'claude',
+      }),
+    });
+    form.reset();
+    clearDraft('new-loop');
     refreshAll();
   } catch (err) {
-    showError(`${action} ${name} failed: ${err.message}`);
+    showError(`add loop failed: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Add';
+  }
+}
+
+async function onParseNl(e) {
+  const btn = e.target;
+  const form = btn.closest('form');
+  const nl = (form.elements.nl.value || '').trim();
+  if (!nl) { showError('请先输入自然语言时间描述'); return; }
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = 'Parsing…';
+  try {
+    const r = await api('/cron/parse-nl', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: nl }),
+    });
+    form.elements.schedule.value = r.cron;
+    clearError();
+  } catch (err) {
+    showError(`parse-nl failed: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
+async function onLoopAction(e) {
+  const btn = e.target;
+  const name = btn.dataset.name;
+  let endpoint, method;
+  if (btn.classList.contains('pause-btn')) {
+    endpoint = `/loops/${encodeURIComponent(name)}/pause`; method = 'POST';
+  } else if (btn.classList.contains('resume-btn')) {
+    endpoint = `/loops/${encodeURIComponent(name)}/resume`; method = 'POST';
+  } else if (btn.classList.contains('delete-btn')) {
+    if (!confirm(`Delete cron loop "${name}"?\nRemoves /etc/cron.d/cc-loops entry + jobs/${name}.json.`)) return;
+    endpoint = `/loops/${encodeURIComponent(name)}`; method = 'DELETE';
+  } else return;
+  btn.disabled = true;
+  try {
+    await api(endpoint, { method });
+    refreshAll();
+  } catch (err) {
+    showError(`${method} ${name} failed: ${err.message}`);
   } finally {
     btn.disabled = false;
   }

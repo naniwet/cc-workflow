@@ -1,30 +1,37 @@
 """FastAPI gateway — dev-plan §4.2.
 
-Phase 1 routes:
-  GET  /healthz                              PUBLIC
-  GET  /                                     basic
-  POST /run                                  basic
-  GET  /runs/{task_id}                       basic
-  GET  /sessions                             basic
-  GET  /loops                                basic
-  POST /loops/{name}/pause                   basic
-  POST /loops/{name}/resume                  basic
-  POST /im/feishu/webhook                    Feishu signature (NOT basic)
+Routes:
+  GET    /healthz                              PUBLIC
+  GET    /                                     basic   (Phase 1 simple page)
+  POST   /run                                  basic
+  GET    /runs/{task_id}                       basic
+  GET    /sessions                             basic
+  GET    /workspaces                           basic   (P0-6b)
+  POST   /workspaces                           basic   (P0-6c — new)
+  GET    /loops                                basic
+  POST   /loops                                basic   (P0-6c — add cron)
+  DELETE /loops/{name}                         basic   (P0-6c — delete cron)
+  POST   /loops/{name}/pause                   basic
+  POST   /loops/{name}/resume                  basic
+  POST   /cron/parse-nl                        basic   (P0-6c — NL → cron via LLM)
+  POST   /im/feishu/webhook                    Feishu signature (NOT basic)
+  /pwa/*                                       static, unprotected layer
 
-basic auth (the §4.2 "basic" half) implemented via backend/auth.py.
-CSRF (the other half of §4.2), /csrf, /loops/{name}/trigger,
-/push/subscribe — Phase 2 / Phase 3.
+basic auth via backend/auth.py. CSRF + /csrf endpoint stay Phase 3.
 """
 from __future__ import annotations
 
 from typing import Literal, Optional
+
+import re
+import subprocess
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, config, cron_state, db, im_feishu, runner
+from . import auth, config, cron_state, db, im_feishu, llm, runner
 
 PROTECT = [Depends(auth.require_basic_auth)]
 
@@ -85,6 +92,33 @@ def get_workspaces() -> list[str]:
     return ui_cards._discover_workspaces()
 
 
+class NewWorkspaceRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+
+
+@app.post("/workspaces", dependencies=PROTECT, status_code=201)
+def create_workspace(req: NewWorkspaceRequest) -> dict:
+    """Create ~/workspaces/<name>/ as a fresh git repo (init + empty README + first commit)."""
+    target = config.WORKSPACES_DIR / req.name
+    if target.exists():
+        raise HTTPException(409, {"error": "workspace already exists", "name": req.name})
+    target.mkdir(parents=True, exist_ok=False)
+    try:
+        for cmd in (
+            ["git", "init", "-q"],
+            ["git", "config", "user.email", "cc-workflow@local"],
+            ["git", "config", "user.name", "cc-workflow"],
+        ):
+            subprocess.run(cmd, cwd=target, check=True)
+        (target / "README.md").write_text(f"# {req.name}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=target, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=target, check=True)
+    except subprocess.CalledProcessError as e:
+        # Leave the half-initialized dir for inspection; surface error.
+        raise HTTPException(500, {"error": "git init failed", "detail": str(e)})
+    return {"ok": True, "name": req.name, "path": str(target)}
+
+
 # ---------- /loops (T+1d — P0-2 + P0-3 后半) ----------
 # pause/resume only writes the `enabled` field in jobs/<name>.json. Actual
 # enforcement (agent-run early-exits when enabled=false) is Phase 3 / P0-7g.
@@ -93,6 +127,47 @@ def get_workspaces() -> list[str]:
 @app.get("/loops", dependencies=PROTECT)
 def get_loops() -> list[dict]:
     return cron_state.list_jobs()
+
+
+class NewLoopRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    schedule: str = Field(..., min_length=9, max_length=128)  # at least "* * * * *"
+    workspace: str = Field(..., min_length=1, max_length=128)
+    prompt: str = Field(..., min_length=1, max_length=4096)
+    engine: Literal["claude", "codex"] = "claude"
+
+
+@app.post("/loops", dependencies=PROTECT, status_code=201)
+def create_loop(req: NewLoopRequest) -> dict:
+    """Add a cron entry to /etc/cron.d/cc-loops + initialize jobs/<name>.json."""
+    try:
+        return cron_state.add_cron_loop(
+            name=req.name,
+            schedule=req.schedule,
+            workspace=req.workspace,
+            prompt=req.prompt,
+            engine=req.engine,
+        )
+    except FileExistsError as e:
+        raise HTTPException(409, {"error": str(e)})
+    except ValueError as e:
+        raise HTTPException(400, {"error": str(e)})
+    except OSError as e:
+        raise HTTPException(500, {"error": f"cron file write failed: {e}"})
+
+
+@app.delete("/loops/{name}", dependencies=PROTECT)
+def delete_loop(name: str) -> dict:
+    """Remove the marker block from cc-loops + delete jobs/<name>.json."""
+    try:
+        removed = cron_state.remove_cron_loop(name)
+    except ValueError as e:
+        raise HTTPException(400, {"error": str(e)})
+    except OSError as e:
+        raise HTTPException(500, {"error": f"cron file write failed: {e}"})
+    if not removed:
+        raise HTTPException(404, {"error": "loop not found in cc-loops", "name": name})
+    return {"ok": True, "name": name}
 
 
 @app.post("/loops/{name}/pause", dependencies=PROTECT)
@@ -113,6 +188,42 @@ def resume_loop(name: str) -> dict:
             status_code=404, detail={"error": "loop not found", "code": 404}
         )
     return {"status": "resumed", "name": name, "enabled": True}
+
+
+# ---------- /cron/parse-nl ----------
+# First user-facing LLM call from backend (not via agent-run.sh).
+# llm.complete() reuses the same providers.json profile agent-run uses.
+
+
+class ParseNlRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=200)
+
+
+_CRON_LINE_RE = re.compile(r"^([0-9*/,\-]+\s+){4}[0-9*/,\-]+$")
+
+
+@app.post("/cron/parse-nl", dependencies=PROTECT)
+def parse_nl_cron(req: ParseNlRequest) -> dict:
+    """Convert natural-language schedule (zh/en) to a 5-field cron expression."""
+    prompt = (
+        "Convert the following natural-language schedule description (Chinese or English) "
+        "to a STANDARD 5-field cron expression: minute hour day-of-month month day-of-week. "
+        "Reply with ONLY the cron expression on one line — no quotes, no explanation, no markdown.\n\n"
+        f"Description: {req.text}\nCron:"
+    )
+    try:
+        reply = llm.complete(prompt, max_tokens=64).strip()
+    except RuntimeError as e:
+        raise HTTPException(502, {"error": "llm_call_failed", "detail": str(e)})
+
+    for line in reply.splitlines():
+        line = line.strip().strip("`").strip("'\"")
+        if _CRON_LINE_RE.match(line):
+            return {"cron": line, "raw_reply": reply}
+    raise HTTPException(
+        422,
+        {"error": "llm_did_not_return_cron", "raw_reply": reply},
+    )
 
 
 # ---------- Feishu webhook (T+1.5d — P0-4) ----------

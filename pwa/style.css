@@ -101,4 +101,26 @@ label { display: block; font-size: 11px; color: #a8adb8; margin-top: 6px; }
 .banner-error { background: #3b0a0a; color: #ff9b9b; border-top: 1px solid #5b1212; }
 .hidden { display: none; }
 
+/* collapsible add-forms */
+.add-form { margin: 12px 0; }
+.add-form > summary {
+  cursor: pointer; padding: 8px 12px;
+  background: #15171c; border: 1px dashed #2a2d35; border-radius: 6px;
+  font-size: 13px; color: #a8adb8;
+  list-style: none;
+}
+.add-form > summary::-webkit-details-marker { display: none; }
+.add-form > summary::before { content: "+ "; color: #1a73e8; font-weight: 700; }
+.add-form[open] > summary { background: #20232b; color: #fff; }
+.add-form form {
+  padding: 12px; background: #15171c; border: 1px solid #2a2d35;
+  border-radius: 6px; margin-top: 4px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.form-row { display: flex; gap: 12px; }
+.form-row > label { flex: 1; }
+.parse-row { display: flex; gap: 8px; align-items: flex-end; }
+.parse-row > input { flex: 1; }
+.parse-row > button { white-space: nowrap; }
+
 pre { background: #0b0b0d; padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }

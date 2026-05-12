@@ -1,34 +1,51 @@
-"""Cron job state — read/write ~/.cc-state/jobs/<name>.json.
+"""Cron job state — read/write ~/.cc-state/jobs/<name>.json + /etc/cron.d/cc-loops.
 
-agent-run.sh writes these files (per dev-plan §4.1 side effects); backend
-reads them for `GET /loops` and toggles `enabled` for
-`POST /loops/<name>/pause | resume`.
+Read/toggle helpers (Phase 1):
+  - list_jobs() / get_job() / set_enabled()    jobs/<name>.json
+Cron-file writers (Phase 2 — P0-6c add/delete):
+  - add_cron_loop()    append a marker-bounded entry to /etc/cron.d/cc-loops,
+                        initialize jobs/<name>.json
+  - remove_cron_loop() strip the marker block, delete jobs/<name>.json
 
-Phase 1 scope:
-  - list_jobs()      list all jobs
-  - get_job(name)    one job, or None
-  - set_enabled()    toggle enabled, atomic write
+Marker convention (per-entry, easy to find for delete):
+    # === BEGIN cc-job: <name> ===
+    * * * * * root /usr/local/bin/agent-run ...
+    # === END cc-job: <name> ===
+
+Both writers do tmp + os.replace for atomicity; backend systemd User=root so
+the writes to /etc/cron.d/ succeed.
 
 Out of scope (Phase 3 / P0-7g):
-  - agent-run.sh respecting `enabled=false` (manual pause / consecutive_errors
-    disable enforcement). Currently pause writes state but cron still fires
-    agent-run; that's fine for A0 Gate.
-
+  - agent-run.sh respecting `enabled=false` enforcement. Today pause writes
+    state but cron still fires; A0 Gate is fine without enforcement.
 Out of scope (Phase 3):
-  - POST /loops/<name>/trigger — needs prompt/workspace recovery.
+  - POST /loops/<name>/trigger — needs prompt/workspace recovery from cron file.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
+import time
 from pathlib import Path
 from typing import Optional
 
 from . import config
 
+CC_LOOPS_PATH = Path("/etc/cron.d/cc-loops")
+AGENT_RUN_BIN = "/usr/local/bin/agent-run"
+_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
 
 def _job_file(name: str) -> Path:
     return config.JOBS_DIR / f"{name}.json"
+
+
+def _validate_name(name: str) -> str:
+    if not name or not _NAME_RE.match(name):
+        raise ValueError(f"invalid loop name: {name!r} (allowed: [A-Za-z0-9._-]+)")
+    return name
 
 
 def list_jobs() -> list[dict]:
@@ -70,3 +87,118 @@ def set_enabled(name: str, enabled: bool) -> Optional[dict]:
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, fp)
     return data
+
+
+# ---------- cron file writers (P0-6c) ----------
+
+
+def _init_job_state(name: str) -> None:
+    """Mirror agent-run.sh's job_init so /loops shows the new entry immediately."""
+    fp = _job_file(name)
+    if fp.exists():
+        return
+    config.JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    fp.write_text(
+        json.dumps(
+            {
+                "name": name,
+                "last_run_at": None,
+                "last_finished_at": None,
+                "last_exit": None,
+                "last_output_summary": None,
+                "consecutive_errors": 0,
+                "last_error_at": None,
+                "last_error_msg": None,
+                "total_runs": 0,
+                "enabled": True,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_cron_file(content: str) -> None:
+    """Atomic write to /etc/cron.d/cc-loops with 0644 root:root."""
+    CC_LOOPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CC_LOOPS_PATH.with_suffix(".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, CC_LOOPS_PATH)
+
+
+def _ensure_header(existing: str) -> str:
+    """Make sure the PATH line is present at the top of cc-loops."""
+    if "PATH=" in existing.splitlines()[0:3] if existing else False:
+        return existing
+    header = "PATH=/usr/local/bin:/usr/bin:/bin\n"
+    if existing and not existing.startswith("PATH="):
+        return header + existing
+    return existing or header
+
+
+def add_cron_loop(
+    *,
+    name: str,
+    schedule: str,
+    workspace: str,
+    prompt: str,
+    engine: str = "claude",
+) -> dict:
+    """Append a marker-bounded cron entry. Returns the new job state.
+
+    Raises:
+        ValueError on bad name / schedule / workspace.
+        FileExistsError if a loop with this name already exists.
+    """
+    _validate_name(name)
+    parts = (schedule or "").split()
+    if len(parts) < 5:
+        raise ValueError(
+            f"schedule must have at least 5 fields (got {len(parts)}): {schedule!r}"
+        )
+    if _job_file(name).exists():
+        raise FileExistsError(f"loop {name!r} already exists")
+
+    # shlex.quote keeps the prompt safe inside a cron shell line.
+    quoted_prompt = shlex.quote(prompt)
+    cron_line = (
+        f"{schedule} root {AGENT_RUN_BIN} --engine={engine} "
+        f"{shlex.quote(workspace)} {quoted_prompt} {name} "
+        f"--source cron --job-name {name}"
+    )
+    block = (
+        f"# === BEGIN cc-job: {name} ===\n"
+        f"# created @ {int(time.time())}\n"
+        f"{cron_line}\n"
+        f"# === END cc-job: {name} ===\n"
+    )
+
+    existing = CC_LOOPS_PATH.read_text(encoding="utf-8") if CC_LOOPS_PATH.exists() else ""
+    existing = _ensure_header(existing)
+    new_content = existing.rstrip() + "\n\n" + block
+    _write_cron_file(new_content)
+    _init_job_state(name)
+    return get_job(name) or {"name": name}
+
+
+def remove_cron_loop(name: str) -> bool:
+    """Strip the BEGIN/END block for `name`. Return True if removed.
+
+    Also deletes ~/.cc-state/jobs/<name>.json. No-op if no marker found.
+    """
+    _validate_name(name)
+    if not CC_LOOPS_PATH.exists():
+        return False
+    content = CC_LOOPS_PATH.read_text(encoding="utf-8")
+    pattern = re.compile(
+        rf"# === BEGIN cc-job: {re.escape(name)} ===\n.*?\n# === END cc-job: {re.escape(name)} ===\n?",
+        re.DOTALL,
+    )
+    new_content, count = pattern.subn("", content)
+    if count == 0:
+        return False
+    _write_cron_file(new_content)
+    _job_file(name).unlink(missing_ok=True)
+    return True
