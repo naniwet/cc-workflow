@@ -133,12 +133,22 @@ class NewWorkspaceRequest(BaseModel):
 
 @app.get("/providers", dependencies=PROTECT)
 def list_providers() -> list[str]:
-    """Profile names available in providers.json (e.g. ['claude', 'deepseek', 'kimi'])."""
+    """Provider names that the backend can actually drive — i.e. with non-empty env.
+
+    Empty-env profiles like the default `claude` slot map to "use anthropic
+    local OAuth from agent-run.sh"; the backend (llm.py) can't talk to them
+    directly because there's no API key. So we omit them from the dropdown.
+    Users who want anthropic-OAuth still get it as the global config.toml
+    fallback when no per-workspace override is set.
+    """
     try:
         data = json.loads(config.PROVIDERS_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
-    return sorted((data.get("profiles") or {}).keys())
+    profiles = data.get("profiles") or {}
+    return sorted(
+        name for name, p in profiles.items() if (p.get("env") or {})
+    )
 
 
 @app.get("/workspaces/{name}/settings", dependencies=PROTECT)

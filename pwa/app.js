@@ -196,18 +196,19 @@ function renderWorkspacesView() {
   for (const f of $('view').querySelectorAll('.trigger-form')) {
     f.addEventListener('submit', onTriggerSubmit);
   }
-  for (const f of $('view').querySelectorAll('.ws-settings-form')) {
-    f.addEventListener('submit', onWsSettingsSave);
+  for (const sel of $('view').querySelectorAll('.provider-inline')) {
+    sel.addEventListener('change', onProviderInlineChange);
   }
 }
 
-async function onWsSettingsSave(e) {
-  e.preventDefault();
-  const form = e.target;
-  const name = form.dataset.workspace;
-  const provider = form.elements.provider.value || null;
-  const btn = form.querySelector('button[type="submit"]');
-  btn.disabled = true; btn.textContent = 'Saving…';
+async function onProviderInlineChange(e) {
+  const sel = e.target;
+  const name = sel.dataset.workspace;
+  const provider = sel.value || null;     // "" → null = clear override
+  // Snapshot the previous value so we can revert on failure.
+  const before = sel.dataset.prev || '';
+  sel.dataset.prev = sel.value;
+  sel.disabled = true;
   try {
     await api(`/workspaces/${encodeURIComponent(name)}/settings`, {
       method: 'PUT',
@@ -216,9 +217,11 @@ async function onWsSettingsSave(e) {
     });
     refreshAll();
   } catch (err) {
-    showError(`save settings failed: ${err.message}`);
+    sel.value = before;
+    sel.dataset.prev = before;
+    showError(`save provider failed: ${err.message}`);
   } finally {
-    btn.disabled = false; btn.textContent = 'Save';
+    sel.disabled = false;
   }
 }
 
@@ -268,32 +271,20 @@ function workspaceColHtml(name, data) {
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const providers = lastData.providers || [];
+  // Inline provider select right in the header — change = save (no separate
+  // settings panel). Empty option means "fall back to global config.toml".
   const providerOptions = providers
     .map((p) => `<option value="${esc(p)}"${p === wsProvider ? ' selected' : ''}>${esc(p)}</option>`)
     .join('');
-  // Use a separate <details> per workspace so opening one column's settings
-  // doesn't blow away your typing in another column. data-details-id encodes
-  // the workspace name so the open-state snapshot is per-column.
   return `
     <div class="ws-col">
-      <h2>
-        ${esc(name)}
-        <span class="muted" style="font-size:11px;font-weight:normal">
-          · ${wsProvider ? `provider <code>${esc(wsProvider)}</code>` : '<em>(global)</em>'}
-        </span>
-      </h2>
-      <details class="add-form" data-details-id="ws-settings-${esc(name)}">
-        <summary>provider settings</summary>
-        <form data-form-id="ws-settings-${esc(name)}" data-workspace="${esc(name)}" class="ws-settings-form">
-          <label>provider override
-            <select name="provider">
-              <option value=""${wsProvider ? '' : ' selected'}>(use global default)</option>
-              ${providerOptions}
-            </select>
-          </label>
-          <button type="submit" class="secondary">Save</button>
-        </form>
-      </details>
+      <div class="ws-head">
+        <h2>${esc(name)}</h2>
+        <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
+          <option value=""${wsProvider ? '' : ' selected'}>(default)</option>
+          ${providerOptions}
+        </select>
+      </div>
       <div>
         <strong class="muted">active</strong>
         ${active}
@@ -305,12 +296,6 @@ function workspaceColHtml(name, data) {
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
         <label>prompt
           <textarea name="prompt" placeholder="reply with only OK" required></textarea>
-        </label>
-        <label>provider (one-shot override)
-          <select name="provider">
-            <option value="">(use workspace / global)</option>
-            ${providers.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join('')}
-          </select>
         </label>
         <button type="submit">Run</button>
       </form>
@@ -338,24 +323,24 @@ async function onTriggerSubmit(e) {
   const form = e.target;
   const ws = form.dataset.workspace;
   const prompt = form.elements.prompt.value.trim();
-  const providerOverride = form.elements.provider?.value || '';
   if (!prompt) return;
   const btn = form.querySelector('button[type="submit"]') || form.querySelector('button');
   btn.disabled = true;
   btn.textContent = 'Running…';
   try {
-    const body = {
-      workspace: ws,
-      prompt,
-      engine: 'claude',
-      session_key: `pwa-${ws}`,
-      source: 'pwa',
-    };
-    if (providerOverride) body.provider = providerOverride;
+    // Provider comes from workspace settings (set via the inline header
+    // select). No per-trigger override here — keeps the form simple;
+    // switch the header dropdown if you want a different provider.
     await api('/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        workspace: ws,
+        prompt,
+        engine: 'claude',
+        session_key: `pwa-${ws}`,
+        source: 'pwa',
+      }),
     });
     form.reset();
     clearDraft(form.dataset.formId);

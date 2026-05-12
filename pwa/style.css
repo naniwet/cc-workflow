@@ -57,6 +57,13 @@ h1, h2, h3 { margin: 12px 0 8px; color: #fff; }
   gap: 8px;
 }
 .ws-col h2 { margin: 0; font-size: 14px; }
+.ws-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ws-head h2 { flex: 1; }
+.provider-inline {
+  width: auto; padding: 2px 6px; font-size: 11px;
+  background: transparent; color: #a8adb8; border-color: #2a2d35;
+}
+.provider-inline:hover { color: #fff; border-color: #1a73e8; }
 
 /* task / cron list rows */
 .row {
