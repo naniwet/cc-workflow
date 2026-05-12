@@ -81,7 +81,7 @@ h1, h2, h3 { margin: 12px 0 8px; color: #fff; }
   margin-top: auto;
   display: flex;
   gap: 8px;
-  align-items: stretch;                          /* button matches textarea height */
+  align-items: flex-end;                         /* button hugs textarea bottom */
 }
 .ws-col .trigger-form textarea {
   flex: 1;                                       /* textarea eats remaining width */
@@ -89,7 +89,7 @@ h1, h2, h3 { margin: 12px 0 8px; color: #fff; }
 }
 .ws-col .trigger-form button {
   white-space: nowrap;                           /* never wrap "Run" */
-  align-self: stretch;
+  flex: 0 0 auto;                                /* natural width, no stretch */
 }
 
 /* task / cron list rows */
