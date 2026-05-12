@@ -132,7 +132,15 @@ function snapshotDrafts() {
     const id = form.dataset.formId;
     drafts[id] = {};
     for (const el of form.querySelectorAll('textarea, input, select')) {
-      if (el.name) drafts[id][el.name] = el.value;
+      if (!el.name) continue;
+      // Checkboxes / radios are about .checked, not .value (their .value is
+      // the literal "on"). Without this branch an unchecked box snaps back
+      // to its default-checked state on the next polling re-render.
+      if (el.type === 'checkbox' || el.type === 'radio') {
+        drafts[id][el.name] = el.checked;
+      } else {
+        drafts[id][el.name] = el.value;
+      }
     }
   }
   for (const d of document.querySelectorAll('details[data-details-id]')) {
@@ -152,7 +160,12 @@ function restoreDrafts() {
     const saved = drafts[id];
     if (!saved) continue;
     for (const el of form.querySelectorAll('textarea, input, select')) {
-      if (el.name && saved[el.name] != null) el.value = saved[el.name];
+      if (!el.name || saved[el.name] == null) continue;
+      if (el.type === 'checkbox' || el.type === 'radio') {
+        el.checked = !!saved[el.name];
+      } else {
+        el.value = saved[el.name];
+      }
     }
   }
   for (const d of document.querySelectorAll('details[data-details-id]')) {
@@ -422,7 +435,13 @@ function renderTasksView() {
         <label>prompt
           <textarea name="prompt" placeholder="summarize yesterday's commits" required></textarea>
         </label>
-        <button type="submit">Add</button>
+        <div class="add-loop-foot">
+          <label class="inline-check">
+            <input type="checkbox" name="run_now" checked>
+            Run once now
+          </label>
+          <button type="submit">Add</button>
+        </div>
       </form>
     </details>
     <p class="muted">
@@ -483,6 +502,8 @@ async function onAddLoop(e) {
         schedule: fd.schedule,
         prompt: fd.prompt,
         engine: fd.engine || 'claude',
+        // Checkbox: FormData omits unchecked boxes entirely, so undefined → false.
+        run_now: fd.run_now === 'on',
       }),
     });
     form.reset();

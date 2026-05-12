@@ -238,13 +238,26 @@ class NewLoopRequest(BaseModel):
     workspace: str = Field(..., min_length=1, max_length=128)
     prompt: str = Field(..., min_length=1, max_length=4096)
     engine: Literal["claude", "codex"] = "claude"
+    # When true (the PWA's default), fire one immediate run right after the
+    # cron entry is written — so the user gets a "first result" without
+    # waiting for the next scheduled tick. Source is "pwa" (not "cron")
+    # because cron didn't fire it, the Add button did; session_key matches
+    # what future cron-fired runs use so the agent sees a contiguous chat.
+    run_now: bool = True
 
 
 @app.post("/loops", dependencies=PROTECT, status_code=201)
 def create_loop(req: NewLoopRequest) -> dict:
-    """Add a cron entry to /etc/cron.d/cc-loops + initialize jobs/<name>.json."""
+    """Add a cron entry to /etc/cron.d/cc-loops + initialize jobs/<name>.json.
+
+    If `run_now` is true, also fires one immediate run via runner.submit().
+    The immediate run is tagged source="pwa", NOT source="cron", and is NOT
+    counted in jobs/<name>.json's total_runs — that file tracks cron-fired
+    runs only, this one's a PWA-initiated sanity check that happens to
+    share the loop's session_key.
+    """
     try:
-        return cron_state.add_cron_loop(
+        result = cron_state.add_cron_loop(
             name=req.name,
             schedule=req.schedule,
             workspace=req.workspace,
@@ -257,6 +270,20 @@ def create_loop(req: NewLoopRequest) -> dict:
         raise HTTPException(400, {"error": str(e)})
     except OSError as e:
         raise HTTPException(500, {"error": f"cron file write failed: {e}"})
+
+    if req.run_now:
+        first_run_id = db.new_run_id()
+        runner.submit(
+            run_id=first_run_id,
+            workspace=req.workspace,
+            prompt=req.prompt,
+            engine=req.engine,
+            session_key=req.name,        # align with cron-fired runs for this loop
+            source="pwa",                # honest: PWA triggered this, not cron
+            provider=_provider_for(req.workspace),
+        )
+        result["first_run_id"] = first_run_id
+    return result
 
 
 @app.delete("/loops/{name}", dependencies=PROTECT)
