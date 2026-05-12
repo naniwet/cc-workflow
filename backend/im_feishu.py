@@ -66,6 +66,7 @@ from . import config
 
 FEISHU_OPENAPI = "https://open.feishu.cn/open-apis"
 _PREFIX_RE = re.compile(r"^\s*\[([A-Za-z0-9._-]+)\]\s*(.+)$", re.DOTALL)
+_SLASH_RE = re.compile(r"^/([a-z][a-z0-9_-]*)\b\s*(.*)$", re.IGNORECASE | re.DOTALL)
 
 
 def _secrets() -> dict:
@@ -111,6 +112,47 @@ def _aes_decrypt(encrypted_b64: str, encrypt_key: str) -> bytes:
 # ---------- webhook entry ----------
 
 
+def _verify_and_decrypt(
+    body: bytes,
+    sig: Optional[str],
+    ts: Optional[str],
+    nonce: Optional[str],
+) -> "tuple[Optional[dict], Optional[dict]]":
+    """Verify signature + decrypt body. Shared between event webhook and card
+    callback (both use the same Encrypt Key scheme).
+
+    Returns (payload, None) on success or (None, error_dict) on failure.
+    error_dict has shape {"error": str, "code": int}.
+    """
+    encrypt_key = _secrets().get("encrypt_key", "")
+
+    # Signature check first — body bytes used as-is (encrypted or plain).
+    # Only enforced if Encrypt Key is configured AND a signature header is present;
+    # this lets the initial app setup (no Encrypt Key yet) still accept events.
+    if encrypt_key and sig:
+        if not verify_signature(body, sig, ts or "", nonce or ""):
+            return None, {"error": "bad signature", "code": 401}
+
+    try:
+        raw_payload = json.loads(body.decode("utf-8"))
+    except Exception as e:
+        return None, {"error": f"invalid json: {e}", "code": 400}
+
+    if isinstance(raw_payload, dict) and "encrypt" in raw_payload:
+        if not encrypt_key:
+            return None, {
+                "error": "encrypted body but [feishu].encrypt_key not set",
+                "code": 500,
+            }
+        try:
+            plain = _aes_decrypt(raw_payload["encrypt"], encrypt_key)
+            return json.loads(plain.decode("utf-8")), None
+        except Exception as e:
+            return None, {"error": f"decrypt failed: {e}", "code": 500}
+
+    return raw_payload, None
+
+
 def handle_webhook(
     body: bytes,
     sig: Optional[str],
@@ -120,37 +162,13 @@ def handle_webhook(
     """Return shapes (consumed by main.py):
       {"challenge": "..."}                                 url_verification
       {"ok": True, "run_intent": {...}}                    submit a run
+      {"ok": True, "card_reply": True}                     slash command — card sent inline
       {"ok": True, "ignored": "<reason>"}                  no-op event
       {"error": "...", "code": <int>}                      failure
     """
-    encrypt_key = _secrets().get("encrypt_key", "")
-
-    # Signature check first — body bytes used as-is (encrypted or plain).
-    # Only enforced if Encrypt Key is configured AND a signature header is present;
-    # this lets the initial app setup (no Encrypt Key yet) still accept events.
-    if encrypt_key and sig:
-        if not verify_signature(body, sig, ts or "", nonce or ""):
-            return {"error": "bad signature", "code": 401}
-
-    # Parse body. With Encrypt Key on, body is {"encrypt": "<base64>"} → decrypt.
-    try:
-        raw_payload = json.loads(body.decode("utf-8"))
-    except Exception as e:
-        return {"error": f"invalid json: {e}", "code": 400}
-
-    if isinstance(raw_payload, dict) and "encrypt" in raw_payload:
-        if not encrypt_key:
-            return {
-                "error": "encrypted body but [feishu].encrypt_key not set",
-                "code": 500,
-            }
-        try:
-            plain = _aes_decrypt(raw_payload["encrypt"], encrypt_key)
-            payload = json.loads(plain.decode("utf-8"))
-        except Exception as e:
-            return {"error": f"decrypt failed: {e}", "code": 500}
-    else:
-        payload = raw_payload
+    payload, err = _verify_and_decrypt(body, sig, ts, nonce)
+    if err:
+        return err
 
     # url_verification — respond with challenge (works for both plain + encrypted modes)
     if payload.get("type") == "url_verification":
@@ -185,6 +203,19 @@ def _handle_message(payload: dict) -> dict:
     if not text:
         return {"ok": True, "ignored": "empty"}
 
+    # Slash command: render and send a Card inline, return a no-run intent.
+    # Detected before workspace-prefix parsing so "/sessions" doesn't get
+    # misread as a prompt for the default workspace.
+    m = _SLASH_RE.match(text)
+    if m and chat_id:
+        cmd = m.group(1).lower()
+        card = _slash_to_card(cmd)
+        if card is not None:
+            reply_card(chat_id, card)
+            return {"ok": True, "card_reply": True, "slash": cmd}
+        # Unknown slash — let it fall through to the run-intent path so the
+        # user gets the LLM's response rather than silent ignore.
+
     workspace, prompt = _parse_workspace_prompt(text)
     return {
         "ok": True,
@@ -196,6 +227,19 @@ def _handle_message(payload: dict) -> dict:
             "source": "feishu",
         },
     }
+
+
+def _slash_to_card(cmd: str) -> Optional["object"]:
+    """Map a slash-command name to a Card factory. Returns None for unknown
+    commands so the caller can fall through to the LLM run path."""
+    from . import ui_cards                    # lazy: ui_cards may import config
+    table = {
+        "sessions": ui_cards.sessions_card,
+        "loops": ui_cards.loops_card,
+        "run": ui_cards.run_form_card,
+    }
+    fn = table.get(cmd)
+    return fn() if fn else None
 
 
 def _parse_workspace_prompt(text: str) -> tuple[str, str]:
@@ -310,3 +354,264 @@ def reply_from_run(run: dict) -> None:
         return
     chat_id = sk[len("feishu-"):]
     reply_to_chat(chat_id, _format_reply(run))
+
+
+# ---------- interactive cards (P0-5b/c/d) ----------
+# Card rendering follows Feishu's schema 2.0 interactive-card JSON.
+# Reference: open.feishu.cn → 互动卡片 → 卡片结构 (schema 2.0). The shapes
+# here cover what ui_cards.py emits today; richer kinds (e.g. image, chart)
+# would need new branches in render_card's section dispatch.
+
+
+def render_card(card) -> dict:
+    """IM-agnostic Card → Feishu interactive-card JSON dict.
+
+    Pure function — no IO. Test it standalone:
+        from backend import ui_cards, im_feishu
+        print(im_feishu.render_card(ui_cards.sessions_card()))
+    """
+    elements: list = []
+
+    # ----- sections -----
+    for sec in card.sections:
+        if sec.kind == "divider":
+            elements.append({"tag": "hr"})
+        elif sec.kind == "text":
+            elements.append({"tag": "markdown", "content": str(sec.content or "")})
+        elif sec.kind == "code":
+            elements.append({"tag": "markdown", "content": f"```\n{sec.content}\n```"})
+        elif sec.kind == "kv":
+            fields = [
+                {"is_short": True, "text": {"tag": "lark_md", "content": f"**{k}**\n{v}"}}
+                for k, v in (sec.content or {}).items()
+            ]
+            elements.append({"tag": "div", "fields": fields})
+        elif sec.kind == "table":
+            rows = sec.content or []
+            if rows:
+                md = ["| " + " | ".join(map(str, rows[0])) + " |",
+                      "| " + " | ".join(["---"] * len(rows[0])) + " |"]
+                for r in rows[1:]:
+                    md.append("| " + " | ".join(map(str, r)) + " |")
+                elements.append({"tag": "markdown", "content": "\n".join(md)})
+
+    # ----- form fields (if any) — wrap fields + buttons in a <form> so the
+    # button click submits the field values to the callback. -----
+    form_inner: list = []
+    for f in card.fields:
+        if f.kind == "dropdown":
+            form_inner.append({
+                "tag": "select_static",
+                "name": f.name,
+                "placeholder": {"tag": "plain_text", "content": f.label},
+                "options": [
+                    {"text": {"tag": "plain_text", "content": str(o)}, "value": str(o)}
+                    for o in f.options
+                ],
+                **({"initial_option": f.default} if f.default else {}),
+            })
+        elif f.kind == "textarea":
+            form_inner.append({
+                "tag": "input",
+                "name": f.name,
+                "placeholder": {"tag": "plain_text", "content": f.label},
+                "type": "multiline",
+            })
+        else:                                # "text" default
+            form_inner.append({
+                "tag": "input",
+                "name": f.name,
+                "placeholder": {"tag": "plain_text", "content": f.label},
+                "type": "text",
+            })
+
+    # ----- buttons -----
+    button_blocks = [
+        {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": b.label},
+            "type": "primary" if b.action in ("submit_run", "refresh_card") else "default",
+            "value": {"action": b.action, **b.params},
+        }
+        for b in card.buttons
+    ]
+
+    if card.fields:
+        # Form: buttons must be INSIDE the form so form_value is populated.
+        if button_blocks:
+            form_inner.append({"tag": "action", "actions": button_blocks})
+        elements.append({"tag": "form", "name": "ccw_form", "elements": form_inner})
+    else:
+        if button_blocks:
+            elements.append({"tag": "action", "actions": button_blocks})
+
+    # ----- footer -----
+    if card.footer:
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "markdown", "content": f"_{card.footer}_"})
+
+    return {
+        "schema": "2.0",
+        "config": {"update_multi": True, "wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": card.title},
+            "template": "blue",
+        },
+        "body": {"elements": elements},
+    }
+
+
+def reply_card(chat_id: str, card) -> bool:
+    """Send an interactive Card to a Feishu chat. Analog of reply_to_chat."""
+    if not chat_id:
+        return False
+    token = _tenant_access_token()
+    if not token:
+        return False
+    body = json.dumps(
+        {
+            "receive_id": chat_id,
+            "msg_type": "interactive",
+            "content": json.dumps(render_card(card), ensure_ascii=False),
+        }
+    ).encode("utf-8")
+    req = urlreq.Request(
+        f"{FEISHU_OPENAPI}/im/v1/messages?receive_id_type=chat_id",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+        method="POST",
+    )
+    try:
+        with urlreq.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except urlerror.URLError:
+        return False
+
+
+def parse_card_action(payload: dict):
+    """Feishu card.action.trigger payload → ui_cards.CardAction.
+
+    Defensive parser — Feishu's exact shape has churned across schema
+    versions, so we accept value as either dict or stringified JSON and
+    merge form_value into params.
+    """
+    from . import ui_cards                    # lazy
+
+    action_block = payload.get("action") or {}
+    value = action_block.get("value") or {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = {}
+    if not isinstance(value, dict):
+        value = {}
+
+    action_name = value.pop("action", "") if isinstance(value, dict) else ""
+    form_value = action_block.get("form_value") or {}
+
+    # button params come from value; form fields come from form_value.
+    # form takes precedence in case of name collision (form is user input).
+    params = {**value, **(form_value if isinstance(form_value, dict) else {})}
+
+    ctx = payload.get("context") or {}
+    operator = payload.get("operator") or {}
+    return ui_cards.CardAction(
+        action=action_name,
+        params=params,
+        chat_id=ctx.get("open_chat_id") or "",
+        user_id=operator.get("open_id") or operator.get("user_id") or "",
+    )
+
+
+def handle_card_callback(
+    body: bytes,
+    sig: Optional[str],
+    ts: Optional[str],
+    nonce: Optional[str],
+) -> dict:
+    """Process a Feishu card-button callback.
+
+    Feishu sends these to a DIFFERENT URL than the message-event webhook
+    (configured in 飞书后台 → 消息卡片 → 回调地址). Auth is the same
+    Encrypt Key signature scheme as the event webhook.
+
+    Return shapes:
+        {"error": "...", "code": 401/400/500}    failure (becomes HTTP error)
+        {"challenge": "..."}                      url_verification on initial setup
+        {"toast": {...}, "card": {...}}           Feishu-shaped response that
+                                                  updates the card / shows a toast
+    """
+    payload, err = _verify_and_decrypt(body, sig, ts, nonce)
+    if err:
+        return err
+
+    # url_verification handshake — same as the event webhook
+    if payload.get("type") == "url_verification":
+        return {"challenge": payload.get("challenge", "")}
+
+    action = parse_card_action(payload)
+    return _dispatch_action(action)
+
+
+def _dispatch_action(action) -> dict:
+    """Route a CardAction to its handler. Returns Feishu-shaped response.
+
+    Supported actions (must match ui_cards button factories):
+        refresh_card    — re-run the registered factory, replace the card
+        pause_loop      — set enabled=false, re-render loops_card
+        resume_loop     — set enabled=true, re-render loops_card
+        submit_run      — queue a runner.submit from the run_form_card
+    """
+    # Lazy imports — avoid circular at module load (these import ui_cards
+    # which doesn't depend on us, so no real cycle, but keep symmetric).
+    from . import cron_state, db, runner, ui_cards
+
+    a = (action.action or "").strip()
+
+    if a == "refresh_card":
+        token = action.params.get("token", "")
+        card = ui_cards.regenerate(token)
+        if card is None:
+            return _toast("error", "card expired — re-issue the slash command")
+        return _card_update(card)
+
+    if a in ("pause_loop", "resume_loop"):
+        name = (action.params.get("name") or "").strip()
+        if not name:
+            return _toast("error", "missing loop name")
+        cron_state.set_enabled(name, a == "resume_loop")
+        return _card_update(ui_cards.loops_card())
+
+    if a == "submit_run":
+        workspace = (action.params.get("workspace") or "").strip()
+        prompt = (action.params.get("prompt") or "").strip()
+        if not workspace or not prompt:
+            return _toast("error", "workspace and prompt are required")
+        run_id = db.new_run_id()
+        runner.submit(
+            run_id=run_id,
+            workspace=workspace,
+            prompt=prompt,
+            engine="claude",
+            session_key=f"feishu-{action.chat_id}" if action.chat_id else None,
+            source="feishu",
+            on_finish=reply_from_run,
+        )
+        return _toast("success", f"queued: {run_id[:8]}")
+
+    return _toast("error", f"unknown action: {a}")
+
+
+def _toast(level: str, content: str) -> dict:
+    """Feishu toast response shape — flashes briefly after a button click."""
+    return {"toast": {"type": level, "content": content}}
+
+
+def _card_update(card) -> dict:
+    """Feishu card-replace response shape — swaps the entire card in-chat."""
+    # Per Feishu docs, schema-2.0 card updates go under card.type=raw + data.
+    return {"card": {"type": "raw", "data": render_card(card)}}

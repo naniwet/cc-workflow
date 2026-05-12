@@ -15,6 +15,7 @@ Routes:
   POST   /loops/{name}/resume                  basic
   POST   /cron/parse-nl                        basic   (P0-6c — NL → cron via LLM)
   POST   /im/feishu/webhook                    Feishu signature (NOT basic)
+  POST   /im/feishu/card_callback              Feishu signature (NOT basic) — P0-5d
   /pwa/*                                       static, unprotected layer
 
 basic auth via backend/auth.py. CSRF + /csrf endpoint stay Phase 3.
@@ -417,6 +418,30 @@ async def feishu_webhook(request: Request) -> dict:
         run_id = db.new_run_id()
         runner.submit(run_id=run_id, on_finish=im_feishu.reply_from_run, **intent)
         parsed["task_id"] = run_id
+    return parsed
+
+
+# Feishu card-callback URL — register this in 飞书开放平台 → 消息卡片 → 回调地址:
+#   https://<your-domain>/im/feishu/card_callback
+# Distinct from /im/feishu/webhook (events) by Feishu's design; both use the
+# same Encrypt Key signature scheme so handle_card_callback delegates to the
+# shared _verify_and_decrypt helper inside im_feishu.
+@app.post("/im/feishu/card_callback")
+async def feishu_card_callback(request: Request) -> dict:
+    body = await request.body()
+    parsed = im_feishu.handle_card_callback(
+        body,
+        request.headers.get("x-lark-signature"),
+        request.headers.get("x-lark-request-timestamp"),
+        request.headers.get("x-lark-request-nonce"),
+    )
+    code = parsed.get("code")
+    if code == 401:
+        raise HTTPException(status_code=401, detail=parsed)
+    if code and code >= 400:
+        raise HTTPException(status_code=code, detail=parsed)
+    # Either {"challenge": "..."} (initial setup) or {"toast": ..., "card": ...}
+    # — both are returned to Feishu verbatim.
     return parsed
 
 
