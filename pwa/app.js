@@ -499,6 +499,7 @@ async function onAddLoop(e) {
 async function onParseNl(e) {
   const btn = e.target;
   const form = btn.closest('form');
+  const formId = form.dataset.formId;           // "new-loop"
   const nl = (form.elements.nl.value || '').trim();
   if (!nl) { showError('请先输入自然语言描述(时间 + 要做的事)'); return; }
   btn.disabled = true;
@@ -510,11 +511,20 @@ async function onParseNl(e) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: nl }),
     });
-    form.elements.schedule.value = r.cron || '';
-    // Only overwrite the prompt textarea if the LLM extracted one AND the
-    // user hasn't typed something there already (don't blow away work).
-    if (r.prompt && !form.elements.prompt.value.trim()) {
-      form.elements.prompt.value = r.prompt;
+    // Polling may have re-rendered the form while we awaited — the `form`
+    // reference above can point to a now-detached DOM node, and writing
+    // .value on it would be invisible. Re-query the live form and ALSO
+    // update drafts so the very next polling cycle preserves these values
+    // (otherwise snapshotDrafts captures the empty pre-fill state).
+    const liveForm = document.querySelector(`form[data-form-id="${formId}"]`) || form;
+    liveForm.elements.schedule.value = r.cron || '';
+    if (r.prompt && !liveForm.elements.prompt.value.trim()) {
+      liveForm.elements.prompt.value = r.prompt;
+    }
+    drafts[formId] ??= {};
+    drafts[formId].schedule = r.cron || '';
+    if (r.prompt && !(drafts[formId].prompt || '').trim()) {
+      drafts[formId].prompt = r.prompt;
     }
     clearError();
   } catch (err) {
