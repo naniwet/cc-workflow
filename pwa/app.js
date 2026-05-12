@@ -78,11 +78,46 @@ function setActiveTab(name) {
     a.classList.toggle('active', a.dataset.tab === name);
   }
 }
+
+// Drafts: keep what the user is typing in each workspace's prompt box across
+// re-renders. Polling re-renders blow away DOM, so we snapshot textareas/inputs
+// before render() and restore them after.
+const drafts = {};                                  // key: form-id, val: name → value
+
+function snapshotDrafts() {
+  for (const form of document.querySelectorAll('form[data-form-id]')) {
+    const id = form.dataset.formId;
+    drafts[id] = {};
+    for (const el of form.querySelectorAll('textarea, input')) {
+      if (el.name) drafts[id][el.name] = el.value;
+    }
+  }
+}
+
+function restoreDrafts() {
+  for (const form of document.querySelectorAll('form[data-form-id]')) {
+    const id = form.dataset.formId;
+    const saved = drafts[id];
+    if (!saved) continue;
+    for (const el of form.querySelectorAll('textarea, input')) {
+      if (el.name && saved[el.name] != null) el.value = saved[el.name];
+    }
+  }
+}
+
+function clearDraft(formId) { delete drafts[formId]; }
+
 function render() {
+  // Don't tear DOM out from under a focused input — refresh resumes after blur.
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return;
+
+  snapshotDrafts();
   const name = currentRoute();
   const handler = ROUTES[name] || ROUTES.workspaces;
   setActiveTab(name in ROUTES ? name : 'workspaces');
   handler();
+  restoreDrafts();
 }
 window.addEventListener('hashchange', render);
 
@@ -136,7 +171,7 @@ function workspaceColHtml(name, data) {
         <strong class="muted">recent</strong>
         ${recent}
       </div>
-      <form class="trigger-form" data-workspace="${esc(name)}">
+      <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
         <label>prompt
           <textarea name="prompt" placeholder="reply with only OK" required></textarea>
         </label>
@@ -183,6 +218,7 @@ async function onTriggerSubmit(e) {
       }),
     });
     form.reset();
+    clearDraft(form.dataset.formId);
     refreshAll();
   } catch (err) {
     showError(`trigger failed: ${err.message}`);
