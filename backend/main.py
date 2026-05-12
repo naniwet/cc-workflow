@@ -302,27 +302,54 @@ class ParseNlRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=200)
 
 
-_CRON_LINE_RE = re.compile(r"^([0-9*/,\-]+\s+){4}[0-9*/,\-]+$")
+# 5-field cron pattern, allowing day-of-week names (MON, TUE…) too.
+_CRON_TOKEN = r"[0-9*/,\-]+"
+_CRON_DOW_TOKEN = r"[0-9*/,\-A-Za-z]+"
+_CRON_INLINE_RE = re.compile(
+    rf"(?<![A-Za-z0-9])({_CRON_TOKEN}\s+{_CRON_TOKEN}\s+{_CRON_TOKEN}\s+{_CRON_DOW_TOKEN}\s+{_CRON_DOW_TOKEN})(?![A-Za-z0-9])"
+)
+_CODE_FENCE_RE = re.compile(r"^```(?:\w+)?\s*|\s*```$", flags=re.MULTILINE)
 
 
 @app.post("/cron/parse-nl", dependencies=PROTECT)
 def parse_nl_cron(req: ParseNlRequest) -> dict:
-    """Convert natural-language schedule (zh/en) to a 5-field cron expression."""
+    """Convert natural-language schedule (zh/en) to a 5-field cron expression.
+
+    Strategy:
+      1. Ask the LLM to reply as a tiny JSON object  {"cron": "..."}
+      2. If JSON parses → take .cron.
+      3. Fallback regex search for any 5-token cron-shaped substring anywhere
+         in the reply (handles LLMs that ignore the JSON instruction).
+    """
     prompt = (
-        "Convert the following natural-language schedule description (Chinese or English) "
-        "to a STANDARD 5-field cron expression: minute hour day-of-month month day-of-week. "
-        "Reply with ONLY the cron expression on one line — no quotes, no explanation, no markdown.\n\n"
-        f"Description: {req.text}\nCron:"
+        "Convert the following schedule description (Chinese or English) to a "
+        "STANDARD 5-field cron expression: minute hour day-of-month month day-of-week.\n"
+        'Reply with ONLY a one-line JSON object: {"cron": "<expression>"}\n'
+        "No code fences, no extra prose.\n\n"
+        f"Description: {req.text}"
     )
     try:
-        reply = llm.complete(prompt, max_tokens=64).strip()
+        reply = llm.complete(prompt, max_tokens=96).strip()
     except RuntimeError as e:
         raise HTTPException(502, {"error": "llm_call_failed", "detail": str(e)})
 
-    for line in reply.splitlines():
-        line = line.strip().strip("`").strip("'\"")
-        if _CRON_LINE_RE.match(line):
-            return {"cron": line, "raw_reply": reply}
+    # Strip ``` code fences if the LLM wrapped its reply.
+    cleaned = _CODE_FENCE_RE.sub("", reply).strip()
+
+    # Pass 1: JSON contract.
+    try:
+        parsed = json.loads(cleaned)
+        cron = (parsed.get("cron") or "").strip().strip("`'\"")
+        if cron and len(cron.split()) >= 5:
+            return {"cron": cron, "raw_reply": reply}
+    except (json.JSONDecodeError, AttributeError):
+        pass
+
+    # Pass 2: regex sweep — find a cron-shaped token sequence anywhere.
+    m = _CRON_INLINE_RE.search(cleaned)
+    if m:
+        return {"cron": m.group(1).strip(), "raw_reply": reply}
+
     raise HTTPException(
         422,
         {"error": "llm_did_not_return_cron", "raw_reply": reply},

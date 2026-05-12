@@ -31,16 +31,23 @@ if ('serviceWorker' in navigator) {
 async function api(path, opts = {}) {
   const r = await fetch(path, { credentials: 'same-origin', ...opts });
   if (!r.ok) {
-    // Try to pull a useful detail out of the JSON body so the banner shows
-    // *why* the call failed, not just the status code.
+    // Pull the most informative bit out of the JSON detail so the banner
+    // tells you WHY the call failed — prefer human-readable strings (raw
+    // LLM replies, error messages) over short machine codes.
     let detail = '';
     try {
       const body = await r.json();
       const d = body?.detail;
-      if (typeof d === 'string') detail = d;
-      else if (d && typeof d === 'object') {
-        detail = d.detail || d.error || d.raw_reply || JSON.stringify(d);
-      } else if (body?.error) detail = body.error;
+      if (typeof d === 'string') {
+        detail = d;
+      } else if (d && typeof d === 'object') {
+        if (d.raw_reply) detail = `${d.error || 'error'} · LLM said: ${String(d.raw_reply).slice(0, 200)}`;
+        else if (typeof d.detail === 'string') detail = d.detail;
+        else if (d.error) detail = d.error;
+        else detail = JSON.stringify(d);
+      } else if (body?.error) {
+        detail = body.error;
+      }
     } catch { /* body not JSON; ignore */ }
     throw new Error(`${r.status} ${path}${detail ? ' — ' + detail : ''}`);
   }
