@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover — fallback for 3.10 and below
 CCW_DIR = Path(os.environ.get("CC_WORKFLOW_HOME", Path.home() / ".cc-workflow"))
 CONFIG_TOML = CCW_DIR / "config.toml"
 SECRETS_TOML = CCW_DIR / "secrets.toml"
+PROVIDERS_FILE = CCW_DIR / "providers.json"     # ccswitch-style profiles, read by llm.py + workspace settings
 
 STATE_DIR = Path(os.environ.get("CC_STATE_HOME", Path.home() / ".cc-state"))
 RUNS_DB = STATE_DIR / "runs.db"
