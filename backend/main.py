@@ -131,6 +131,13 @@ class NewWorkspaceRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
 
 
+@app.get("/config", dependencies=PROTECT)
+def get_global_config() -> dict:
+    """Read-only view of ~/.cc-workflow/config.toml. PWA uses .provider to label
+    the 'use global default' option with the actual provider name."""
+    return config.load_config() or {}
+
+
 @app.get("/providers", dependencies=PROTECT)
 def list_providers() -> list[str]:
     """Provider names that the backend can actually drive — i.e. with non-empty env.

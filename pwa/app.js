@@ -67,15 +67,17 @@ let lastData = {
   loops: [],
   providers: [],
   wsSettings: {},                       // name → {provider?}
+  globalProvider: '',                   // config.toml's provider field
 };
 
 async function refreshAll() {
   try {
-    const [ws, sess, lp, providers] = await Promise.all([
+    const [ws, sess, lp, providers, cfg] = await Promise.all([
       api('/workspaces'),
       api('/sessions'),
       api('/loops'),
       api('/providers'),
+      api('/config'),
     ]);
     // Workspace settings: one fetch per workspace (small N, fine for now).
     const settingsList = await Promise.all(
@@ -92,6 +94,7 @@ async function refreshAll() {
       loops: lp,
       providers,
       wsSettings: Object.fromEntries(settingsList),
+      globalProvider: cfg?.provider || '',
     };
     clearError();
     $('status').textContent = '· ' + new Date().toLocaleTimeString();
@@ -271,8 +274,12 @@ function workspaceColHtml(name, data) {
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const providers = lastData.providers || [];
-  // Inline provider select right in the header — change = save (no separate
-  // settings panel). Empty option means "fall back to global config.toml".
+  const globalProvider = lastData.globalProvider || '';
+  // Inline provider select right in the header — change = save. The empty
+  // option's label is the *global* provider's name so a workspace with no
+  // override displays e.g. "deepseek" (real name) rather than "(default)".
+  // Picking that option clears the override; picking a named one sets it.
+  const defaultLabel = globalProvider || '—';
   const providerOptions = providers
     .map((p) => `<option value="${esc(p)}"${p === wsProvider ? ' selected' : ''}>${esc(p)}</option>`)
     .join('');
@@ -280,8 +287,8 @@ function workspaceColHtml(name, data) {
     <div class="ws-col">
       <div class="ws-head">
         <h2>${esc(name)}</h2>
-        <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
-          <option value=""${wsProvider ? '' : ' selected'}>(default)</option>
+        <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace (no override = global default)">
+          <option value=""${wsProvider ? '' : ' selected'}>${esc(defaultLabel)}</option>
           ${providerOptions}
         </select>
       </div>
