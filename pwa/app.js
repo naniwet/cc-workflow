@@ -83,14 +83,18 @@ function setActiveTab(name) {
 // re-renders. Polling re-renders blow away DOM, so we snapshot textareas/inputs
 // before render() and restore them after.
 const drafts = {};                                  // key: form-id, val: name → value
+const detailsOpen = {};                             // key: details-id, val: bool
 
 function snapshotDrafts() {
   for (const form of document.querySelectorAll('form[data-form-id]')) {
     const id = form.dataset.formId;
     drafts[id] = {};
-    for (const el of form.querySelectorAll('textarea, input')) {
+    for (const el of form.querySelectorAll('textarea, input, select')) {
       if (el.name) drafts[id][el.name] = el.value;
     }
+  }
+  for (const d of document.querySelectorAll('details[data-details-id]')) {
+    detailsOpen[d.dataset.detailsId] = d.open;
   }
 }
 
@@ -99,13 +103,21 @@ function restoreDrafts() {
     const id = form.dataset.formId;
     const saved = drafts[id];
     if (!saved) continue;
-    for (const el of form.querySelectorAll('textarea, input')) {
+    for (const el of form.querySelectorAll('textarea, input, select')) {
       if (el.name && saved[el.name] != null) el.value = saved[el.name];
     }
   }
+  for (const d of document.querySelectorAll('details[data-details-id]')) {
+    if (detailsOpen[d.dataset.detailsId]) d.open = true;
+  }
 }
 
-function clearDraft(formId) { delete drafts[formId]; }
+function clearDraft(formId) {
+  delete drafts[formId];
+}
+function clearDetails(detailsId) {
+  delete detailsOpen[detailsId];
+}
 
 function render() {
   // Don't tear DOM out from under a focused input — refresh resumes after blur.
@@ -131,7 +143,7 @@ function renderWorkspacesView() {
 
   $('view').innerHTML = `
     <h1>Workspaces</h1>
-    <details class="add-form">
+    <details class="add-form" data-details-id="add-ws">
       <summary>New workspace</summary>
       <form data-form-id="new-ws">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
@@ -170,6 +182,7 @@ async function onAddWorkspace(e) {
     });
     form.reset();
     clearDraft('new-ws');
+    clearDetails('add-ws');
     refreshAll();
   } catch (err) {
     showError(`create workspace failed: ${err.message}`);
@@ -274,7 +287,7 @@ function renderTasksView() {
     : '<p class="muted">No cron loops yet. Use the form above.</p>';
   $('view').innerHTML = `
     <h1>Tasks (cron)</h1>
-    <details class="add-form">
+    <details class="add-form" data-details-id="add-loop">
       <summary>New cron loop</summary>
       <form data-form-id="new-loop">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
@@ -369,6 +382,7 @@ async function onAddLoop(e) {
     });
     form.reset();
     clearDraft('new-loop');
+    clearDetails('add-loop');
     refreshAll();
   } catch (err) {
     showError(`add loop failed: ${err.message}`);
