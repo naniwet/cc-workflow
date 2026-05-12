@@ -23,6 +23,11 @@ STATE_DIR = Path(os.environ.get("CC_STATE_HOME", Path.home() / ".cc-state"))
 RUNS_DB = STATE_DIR / "runs.db"
 JOBS_DIR = STATE_DIR / "jobs"
 
+# Where agent-run.sh resolves <workspace> names — must match agent-run.sh's
+# WORKSPACES_DIR constant. Used by ui_cards.run_form_card() to populate the
+# workspace dropdown.
+WORKSPACES_DIR = Path(os.environ.get("WORKSPACES_HOME", Path.home() / "workspaces"))
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
