@@ -440,66 +440,76 @@ CREATE INDEX idx_runs_workspace ON runs(workspace, started_at);
 > - ❌ 不做 Web Push handler / VAPID(留 P1)
 > - ❌ 不做圆桌会议视图(整体留 P1-3,P0 不留空壳)
 
-#### T+2.5d: IM Card 抽象层 (P0-5a)
+> **顺序约定(P0-6 先,P0-5 后)**: PWA-lite 是用户价值最显著的部分(4 repo 同屏 + cron CRUD,飞书做不了),先做;Feishu 卡片是基础体验 polish(飞书文本触发已经 Phase 1 工作),后做。
+> **Card 抽象层 JIT 提取**: PWA-lite 直接走 backend REST API + HTML 渲染,**不引入 Card 抽象**;等到 T+4.5d 真正开始 Feishu 卡片(第 2 个消费者)时,**那时**才提取 `ui_cards.py`——避免单消费者的过度抽象。
+
+#### T+2.5d: PWA-lite shell (P0-6a)
 
 任务:
-20. `backend/ui_cards.py` 定义:
+20. `pwa/manifest.json`: name / icons 192+512 / start_url=`/pwa/` / display=standalone
+21. `pwa/sw.js`: cache-only(precache index/app.js/style.css/manifest;运行时 cache-first)— **不监听 push 事件**
+22. `pwa/index.html`: SPA shell + nav(顶部 2 个 tab:Workspaces / Tasks)
+23. backend/main.py 加静态路由 `/pwa/*`
+24. nginx 配置 `/pwa/` 路径(确保 HTTPS,装桌面要求)
+
+**通过判定**: A6.1 过(iPhone 装桌面 + 启动是独立 app + 无浏览器 chrome)
+
+#### T+3d: Workspaces 视图 (P0-6b)
+
+任务:
+25. `pwa/app.js` 加 `WorkspacesView`:从 `/sessions` API 拉数据,按 workspace 分组
+26. 响应式 grid(4 列 ≥ desktop / 2 列 tablet / 1 列 mobile)
+27. 每列内嵌触发表单(workspace 固定 + prompt textarea + Run 按钮)
+28. 3 秒轮询刷新
+
+**通过判定**: A6.2 过(4 repo 同屏 + 各列独立触发)
+
+#### T+3.5d: Tasks 视图 (P0-6c)
+
+任务:
+29. `pwa/app.js` 加 `TasksView`:从 `/loops` API 拉 cron 列表
+30. 添加表单:workspace dropdown + cron 表达式输入(带常用预设 + 表达式校验)+ prompt textarea
+31. 编辑 / 暂停 / 触发 / 删除按钮(走 backend `/loops/{name}/*` 路由)
+32. 每条 cron 展开看最近 5 次运行历史
+
+**通过判定**: A6.3, A6.4 过
+
+#### T+4d: 长输出详情页 + 飞书消息截断降级 (P0-6d/e)
+
+任务:
+33. `pwa/run_view.html`:`/runs/{id}/view` 路由,完整 stream-json → 渲染 markdown / pre
+34. backend/im_feishu.py 加"长输出降级":output > 4000 字符 → 飞书消息发前 1500 + PWA 详情链接(`/pwa/runs/<id>/view`)
+
+**通过判定**: A6.5 过
+
+**中间 Gate(P0-6 完工)**: PWA-lite 真好用,Workspaces + Tasks 都能用,长输出有兜底链接。**到此为止 PWA 是单消费者,不需要 Card 抽象**。
+
+---
+
+#### T+4.5d: IM Card 抽象层 (P0-5a) — 此时提取
+
+> 为什么现在才做: 接下来要做 Feishu 卡片,**这是第 2 个消费者**(第 1 个是 PWA-lite 但 PWA 不走抽象)。Feishu 卡片不能直接拼 JSON——后续加钉钉就要重复一次。所以**在引入 Feishu 卡片的同一阶段提取抽象**,避免事后改造成本。
+
+任务:
+35. `backend/ui_cards.py` 定义:
     - `@dataclass Card(title, sections, buttons, refresh_token, footer)`
     - `@dataclass Section(kind, content)` — kind ∈ {text, kv, table, divider}
     - `@dataclass Button(label, action, params)` — action 走 backend 回调
     - `@dataclass FormField(name, label, kind, options)` — kind ∈ {text, dropdown, textarea}
-21. backend 路径产出 Card:`/sessions` 路由生成"活跃 sessions Card"、`/loops` 生成"loops Card" 等
+36. backend 路径产出 Card:`/sessions` 卡片路由生成"活跃 sessions Card"、`/loops` 生成"loops Card" 等(**仅给 Feishu 用,PWA 仍走原 REST**)
 
 **通过判定**: `backend/ui_cards.py` 存在 + `Card` 抽象**不含任何 Feishu 字符串**
 
-#### T+3d: Feishu Adapter 卡片扩展 (P0-5b/c/d/e)
+#### T+5d: Feishu adapter 卡片扩展 (P0-5b/c/d)
 
 任务:
-22. `backend/im_feishu.py` 加 `render_card(card: Card) -> dict` — Card → Feishu Open Platform 互动卡片 JSON
-23. `backend/im_feishu.py` 加 `parse_card_action(payload: dict) -> CardAction` — Feishu 卡片按钮回调 → 抽象 Action
-24. 加 slash 命令路由:`/sessions` `/loops` `/run` `/templates`
-25. 加新建任务表单卡片(workspace dropdown + prompt textarea + Run 按钮)
-26. 飞书 Open Platform 后台配置:加"消息卡片回调 URL" → `/im/feishu/card_callback`
+37. `backend/im_feishu.py` 加 `render_card(card: Card) -> dict` — Card → Feishu Open Platform 互动卡片 JSON
+38. `backend/im_feishu.py` 加 `parse_card_action(payload: dict) -> CardAction` — Feishu 卡片按钮回调 → 抽象 Action
+39. 加 slash 命令路由:`/sessions` `/loops` `/run` `/templates`
+40. 加新建任务表单卡片(workspace dropdown + prompt textarea + Run 按钮)
+41. 飞书 Open Platform 后台配置:加"消息卡片回调 URL" → `/im/feishu/card_callback`
 
 **通过判定**: A5.1, A5.2, A5.3, A5.4, A5.5 全过
-
-#### T+3.5d: PWA-lite shell (P0-6a)
-
-任务:
-27. `pwa/manifest.json`: name / icons 192+512 / start_url=`/pwa/` / display=standalone
-28. `pwa/sw.js`: cache-only(precache index/app.js/style.css/manifest;运行时 cache-first)— **不监听 push 事件**
-29. `pwa/index.html`: SPA shell + nav(顶部 2 个 tab:Workspaces / Tasks)
-30. backend/main.py 加静态路由 `/pwa/*`
-
-**通过判定**: A6.1 过(iPhone 装桌面 + 启动是独立 app)
-
-#### T+4d: Workspaces 视图 (P0-6b)
-
-任务:
-31. `pwa/app.js` 加 `WorkspacesView`:从 `/sessions` API 拉数据,按 workspace 分组
-32. 响应式 grid(4 列 ≥ desktop / 2 列 tablet / 1 列 mobile)
-33. 每列内嵌触发表单(workspace 固定 + prompt textarea + Run 按钮)
-34. 3 秒轮询刷新
-
-**通过判定**: A6.2 过(4 repo 同屏 + 各列独立触发)
-
-#### T+4.5d: Tasks 视图 (P0-6c)
-
-任务:
-35. `pwa/app.js` 加 `TasksView`:从 `/loops` API 拉 cron 列表
-36. 添加表单:workspace dropdown + cron 表达式输入(带常用预设 + 表达式校验)+ prompt textarea
-37. 编辑 / 暂停 / 触发 / 删除按钮(走 backend `/loops/{name}/*` 路由)
-38. 每条 cron 展开看最近 5 次运行历史
-
-**通过判定**: A6.3, A6.4 过
-
-#### T+5d: 长输出兜底 + run_view (P0-6d/e)
-
-任务:
-39. `pwa/run_view.html`:`/runs/{id}/view` 路由,完整 stream-json → 渲染 markdown / pre
-40. backend/im_feishu.py 加"长输出降级":output > 4000 字符 → 飞书消息发前 1500 + PWA 详情链接
-
-**通过判定**: A6.5 过
 
 #### ═══ Phase 2 Gate (A0') ═══
 

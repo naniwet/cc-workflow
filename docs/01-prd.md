@@ -419,16 +419,20 @@ T+2d          简陋 HTML 触发页(backend/static/index.html)
 
 **A0 不过,不许进 Phase 2**。
 
-### Phase 2: 富交互(飞书卡片 + PWA-lite 2 视图)
+### Phase 2: 富交互(PWA-lite 先,Feishu 卡片 后)
+
+**顺序**: PWA-lite 是用户价值最显著的部分(4 repo 同屏 + cron CRUD,飞书卡片做不了),先做。Feishu 卡片是基础体验 polish(Phase 1 文本触发已工作),后做。
+**Card 抽象 JIT 提取**: PWA 直接走 backend REST,不引入抽象;等 Feishu 卡片(第 2 消费者)出现时**才**提取 `ui_cards.py`。
 
 ```
-T+2.5d        IM Card 抽象层 (backend/ui_cards.py)
-T+3d          Feishu adapter 扩展:卡片渲染 + 回调解析 + slash 命令
-T+3.5d        PWA-lite shell (manifest + cache-only sw + 路由)
-T+4d          Workspaces 视图(4 repo 同屏布局)
-T+4.5d        Tasks 视图(cron CRUD + 历史)
-T+5d          长输出降级路径 + run_view 详情页
-─── A0' Gate: 飞书卡片可用 + PWA-lite 装桌面可用 + 2 视图工作 ───
+T+2.5d        PWA-lite shell (manifest + cache-only sw + nav)
+T+3d          Workspaces 视图(4 repo 同屏)
+T+3.5d        Tasks 视图(cron CRUD + 历史)
+T+4d          长输出详情页 + 飞书消息截断降级
+─── 中间 Gate: PWA-lite 真好用,Workspaces + Tasks 都能用 ───
+T+4.5d        IM Card 抽象层 (backend/ui_cards.py)
+T+5d          Feishu adapter 扩展:卡片渲染 + 回调 + slash 命令
+─── A0' Gate: PWA-lite + 飞书卡片 都到位 ───
 ```
 
 **A0' 不过,修到通过**(IM Card 抽象在不在是结构性,无降级路径)。
