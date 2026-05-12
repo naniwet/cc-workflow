@@ -394,9 +394,9 @@ function renderTasksView() {
             </select>
           </label>
         </div>
-        <label>自然语言时间(可选,点 Parse 调 LLM 转 cron)
+        <label>自然语言(可选,LLM 同时填 cron 和 prompt)
           <div class="parse-row">
-            <input name="nl" placeholder="每天早上 9 点" autocomplete="off">
+            <input name="nl" placeholder="每天早上 9 点 拉一下最新代码" autocomplete="off">
             <button type="button" class="secondary parse-btn">Parse</button>
           </div>
         </label>
@@ -484,7 +484,7 @@ async function onParseNl(e) {
   const btn = e.target;
   const form = btn.closest('form');
   const nl = (form.elements.nl.value || '').trim();
-  if (!nl) { showError('请先输入自然语言时间描述'); return; }
+  if (!nl) { showError('请先输入自然语言描述(时间 + 要做的事)'); return; }
   btn.disabled = true;
   const orig = btn.textContent;
   btn.textContent = 'Parsing…';
@@ -494,7 +494,12 @@ async function onParseNl(e) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: nl }),
     });
-    form.elements.schedule.value = r.cron;
+    form.elements.schedule.value = r.cron || '';
+    // Only overwrite the prompt textarea if the LLM extracted one AND the
+    // user hasn't typed something there already (don't blow away work).
+    if (r.prompt && !form.elements.prompt.value.trim()) {
+      form.elements.prompt.value = r.prompt;
+    }
     clearError();
   } catch (err) {
     showError(`parse-nl failed: ${err.message}`);

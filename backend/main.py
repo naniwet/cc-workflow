@@ -313,42 +313,53 @@ _CODE_FENCE_RE = re.compile(r"^```(?:\w+)?\s*|\s*```$", flags=re.MULTILINE)
 
 @app.post("/cron/parse-nl", dependencies=PROTECT)
 def parse_nl_cron(req: ParseNlRequest) -> dict:
-    """Convert natural-language schedule (zh/en) to a 5-field cron expression.
+    """Parse a natural-language input into BOTH a cron expression and the task prompt.
+
+    The user typically writes one sentence like "每天早上 9 点拉一下最新代码"
+    — that's a schedule ("每天早上 9 点") + a task ("拉一下最新代码"). We ask
+    the LLM to split them and reply as JSON `{"cron": "...", "prompt": "..."}`.
 
     Strategy:
-      1. Ask the LLM to reply as a tiny JSON object  {"cron": "..."}
-      2. If JSON parses → take .cron.
-      3. Fallback regex search for any 5-token cron-shaped substring anywhere
-         in the reply (handles LLMs that ignore the JSON instruction).
+      1. JSON contract: try json.loads; take .cron and .prompt.
+      2. Fallback: regex-sweep for any 5-token cron-shaped substring; .prompt
+         stays empty so the user can fill it manually.
     """
     prompt = (
-        "Convert the following schedule description (Chinese or English) to a "
-        "STANDARD 5-field cron expression: minute hour day-of-month month day-of-week.\n"
-        'Reply with ONLY a one-line JSON object: {"cron": "<expression>"}\n'
-        "No code fences, no extra prose.\n\n"
-        f"Description: {req.text}"
+        "Parse the user's input into a SCHEDULE and a TASK.\n"
+        "  schedule = WHEN (a moment in time, like '每天早上 9 点' / 'every Monday')\n"
+        "  task     = WHAT to do (the rest, e.g. '拉一下最新代码')\n"
+        "\n"
+        "Output ONLY a one-line JSON object:\n"
+        '  {"cron": "<5-field-cron>", "prompt": "<task description verbatim>"}\n'
+        "\n"
+        "Rules:\n"
+        "- cron is the standard 5-field POSIX form: minute hour day-of-month month day-of-week.\n"
+        "- prompt is in the user's original language; if they gave only a time and no task, prompt=\"\".\n"
+        "- No code fences, no commentary outside the JSON.\n"
+        "\n"
+        f"User input: {req.text}"
     )
     try:
-        reply = llm.complete(prompt, max_tokens=96).strip()
+        reply = llm.complete(prompt, max_tokens=200).strip()
     except RuntimeError as e:
         raise HTTPException(502, {"error": "llm_call_failed", "detail": str(e)})
 
-    # Strip ``` code fences if the LLM wrapped its reply.
     cleaned = _CODE_FENCE_RE.sub("", reply).strip()
 
     # Pass 1: JSON contract.
     try:
         parsed = json.loads(cleaned)
         cron = (parsed.get("cron") or "").strip().strip("`'\"")
+        task = (parsed.get("prompt") or "").strip()
         if cron and len(cron.split()) >= 5:
-            return {"cron": cron, "raw_reply": reply}
+            return {"cron": cron, "prompt": task, "raw_reply": reply}
     except (json.JSONDecodeError, AttributeError):
         pass
 
-    # Pass 2: regex sweep — find a cron-shaped token sequence anywhere.
+    # Pass 2: regex sweep — cron only, no prompt extraction.
     m = _CRON_INLINE_RE.search(cleaned)
     if m:
-        return {"cron": m.group(1).strip(), "raw_reply": reply}
+        return {"cron": m.group(1).strip(), "prompt": "", "raw_reply": reply}
 
     raise HTTPException(
         422,
