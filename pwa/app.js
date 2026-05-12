@@ -350,9 +350,12 @@ function workspaceColHtml(name, data) {
     <div class="ws-col">
       <div class="ws-head">
         <h2>${esc(name)}</h2>
-        <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
-          ${providerOptions}
-        </select>
+        <div class="ws-provider">
+          <span class="ws-provider-label">as</span>
+          <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
+            ${providerOptions}
+          </select>
+        </div>
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
