@@ -78,6 +78,13 @@ def get_sessions() -> dict:
     return db.list_sessions_view()
 
 
+@app.get("/workspaces", dependencies=PROTECT)
+def get_workspaces() -> list[str]:
+    """List ~/workspaces/* git repos. Used by PWA Workspaces view + run_form_card."""
+    from . import ui_cards
+    return ui_cards._discover_workspaces()
+
+
 # ---------- /loops (T+1d — P0-2 + P0-3 后半) ----------
 # pause/resume only writes the `enabled` field in jobs/<name>.json. Actual
 # enforcement (agent-run early-exits when enabled=false) is Phase 3 / P0-7g.
