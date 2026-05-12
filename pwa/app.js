@@ -125,6 +125,7 @@ function setActiveTab(name) {
 // before render() and restore them after.
 const drafts = {};                                  // key: form-id, val: name → value
 const detailsOpen = {};                             // key: details-id, val: bool
+const timelineScroll = {};                          // key: ws name → {scrollTop, atBottom}
 
 function snapshotDrafts() {
   for (const form of document.querySelectorAll('form[data-form-id]')) {
@@ -136,6 +137,12 @@ function snapshotDrafts() {
   }
   for (const d of document.querySelectorAll('details[data-details-id]')) {
     detailsOpen[d.dataset.detailsId] = d.open;
+  }
+  for (const t of document.querySelectorAll('.ws-timeline[data-ws]')) {
+    timelineScroll[t.dataset.ws] = {
+      scrollTop: t.scrollTop,
+      atBottom: Math.abs(t.scrollHeight - t.clientHeight - t.scrollTop) < 40,
+    };
   }
 }
 
@@ -150,6 +157,17 @@ function restoreDrafts() {
   }
   for (const d of document.querySelectorAll('details[data-details-id]')) {
     if (detailsOpen[d.dataset.detailsId]) d.open = true;
+  }
+  // Timeline: chat-like "stick to bottom" behaviour. If user was near the
+  // bottom (or it's the first render), scroll to bottom so new runs are
+  // visible. If user had scrolled up to read history, preserve position.
+  for (const t of document.querySelectorAll('.ws-timeline[data-ws]')) {
+    const saved = timelineScroll[t.dataset.ws];
+    if (!saved || saved.atBottom) {
+      t.scrollTop = t.scrollHeight;
+    } else {
+      t.scrollTop = saved.scrollTop;
+    }
   }
 }
 
@@ -272,41 +290,41 @@ function groupByWorkspace(workspaces, sessions) {
 }
 
 function workspaceColHtml(name, data) {
-  const active = data.active.length
-    ? data.active.map(runRowHtml).join('')
-    : '<p class="muted">(none)</p>';
-  const recent = data.recent.length
-    ? data.recent.slice(0, 5).map(runRowHtml).join('')
-    : '<p class="muted">(none)</p>';
+  // ONE chat-like timeline: active + queued + recent merged, sorted by
+  // started_at ascending so oldest is on top and newest at the bottom
+  // (matches how you read a chat / git log / timeline). Cap at 10 rows
+  // to keep the column compact; scroll-overflow for the rest.
+  const all = [
+    ...(data.active || []),
+    ...(data.queued || []),
+    ...(data.recent || []),
+  ];
+  all.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+  const timeline = all.slice(-10);
+  const timelineHtml = timeline.length
+    ? timeline.map(runRowHtml).join('')
+    : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const providers = lastData.providers || [];
   const globalProvider = lastData.globalProvider || '';
-  // Inline provider select right in the header — change = save. The empty
-  // option's label is the *global* provider's name so a workspace with no
-  // override displays e.g. "deepseek" (real name) rather than "(default)".
-  // Picking that option clears the override; picking a named one sets it.
-  const defaultLabel = globalProvider || '—';
+  // Select shows the actual effective provider — workspace override if
+  // set, else global default. No separate "(default)" option to avoid
+  // the duplicate label. Picking any provider writes an override.
+  const effective = wsProvider || globalProvider;
   const providerOptions = providers
-    .map((p) => `<option value="${esc(p)}"${p === wsProvider ? ' selected' : ''}>${esc(p)}</option>`)
+    .map((p) => `<option value="${esc(p)}"${p === effective ? ' selected' : ''}>${esc(p)}</option>`)
     .join('');
+
   return `
     <div class="ws-col">
       <div class="ws-head">
         <h2>${esc(name)}</h2>
-        <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace (no override = global default)">
-          <option value=""${wsProvider ? '' : ' selected'}>${esc(defaultLabel)}</option>
+        <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
           ${providerOptions}
         </select>
       </div>
-      <div>
-        <strong class="muted">active</strong>
-        ${active}
-      </div>
-      <div>
-        <strong class="muted">recent</strong>
-        ${recent}
-      </div>
+      <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
         <label>prompt
           <textarea name="prompt" placeholder="reply with only OK" required></textarea>

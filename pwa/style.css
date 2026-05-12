@@ -51,7 +51,7 @@ h1, h2, h3 { margin: 12px 0 8px; color: #fff; }
   border: 1px solid #2a2d35;
   border-radius: 8px;
   padding: 12px;
-  min-height: 200px;
+  min-height: 240px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -64,6 +64,20 @@ h1, h2, h3 { margin: 12px 0 8px; color: #fff; }
   background: transparent; color: #a8adb8; border-color: #2a2d35;
 }
 .provider-inline:hover { color: #fff; border-color: #1a73e8; }
+
+/* Chat-like timeline: oldest on top, newest at bottom, scroll for overflow. */
+.ws-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;             /* room for scrollbar */
+}
+.ws-timeline::-webkit-scrollbar { width: 6px; }
+.ws-timeline::-webkit-scrollbar-thumb { background: #2a2d35; border-radius: 3px; }
+.ws-timeline::-webkit-scrollbar-track { background: transparent; }
+.ws-col .trigger-form { margin-top: auto; }     /* form sticks to bottom */
 
 /* task / cron list rows */
 .row {
