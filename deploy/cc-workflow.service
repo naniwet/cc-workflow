@@ -1,22 +1,54 @@
 [Unit]
 Description=cc-workflow backend (FastAPI on 127.0.0.1:8765, fronted by nginx :80)
+Documentation=https://github.com/naniwet/cc-workflow/blob/main/deploy/INSTALL.md
 After=network.target
+# Soft dependency on cron — we write /etc/cron.d/cc-loops; if cron isn't there,
+# the file just sits inert until cron is installed. No need to require it.
 
 [Service]
 Type=simple
-# Replace <user> with the actual login user on the server (e.g. ubuntu, root).
-# If running as root, set HOME-based paths to /root/projects/cc-workflow.
-User=<user>
-WorkingDirectory=/home/<user>/projects/cc-workflow
-# Uses the project-local venv (PEP 668 — Ubuntu 24.04+ blocks system pip).
-# Setup once:  python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn pydantic tomli
+
+# Default: run as root so we can:
+#   - write /etc/cron.d/cc-loops without sudoers
+#   - read/write /root/.cc-workflow/{config.toml,secrets.toml,providers.json}
+#   - read/write /root/.cc-state/{runs.db,jobs/*.json}
+# For a non-root install, change User=, the HOME path, and grant the user
+# write access to /etc/cron.d/ via a sudoers rule (or symlink the dir).
+User=root
+WorkingDirectory=/root/projects/cc-workflow
+Environment=HOME=/root
+
+# Project-local venv — Ubuntu 24.04+ blocks system-wide pip (PEP 668).
+# First-time setup:
+#   python3 -m venv .venv
+#   .venv/bin/pip install fastapi uvicorn pydantic tomli cryptography
+# (cryptography is only needed if Feishu Encrypt Key is configured.)
 #
-# Bind 127.0.0.1 — public traffic comes through nginx on :80 (see deploy/nginx.conf).
-# HTTP basic auth is enforced at the FastAPI layer (backend/auth.py). Phase 3
-# adds HTTPS via certbot and may move basic auth into nginx.
-ExecStart=/home/<user>/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+# Bind 127.0.0.1 — public traffic comes through nginx on :80. HTTP basic
+# auth is enforced at the FastAPI layer (backend/auth.py).
+ExecStart=/root/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+
+# Restart policy — recover from transient crashes, give up after a real
+# crash loop so journalctl shows something other than an endless retry.
 Restart=on-failure
 RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=5
+
+# Logging — single tag so `journalctl -t cc-workflow` works regardless of
+# how the unit was loaded.
+SyslogIdentifier=cc-workflow
+
+# Security hardening (defense in depth — won't help against an exploit in
+# our own code that runs as root, but blocks common privilege escalation).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Don't ProtectSystem=strict — we need to write /etc/cron.d/cc-loops.
+# Don't ProtectHome=true — we read/write /root/.cc-workflow + /root/.cc-state.
 
 [Install]
 WantedBy=multi-user.target
