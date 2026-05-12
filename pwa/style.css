@@ -1,0 +1,104 @@
+/* cc-workflow PWA — Phase 2 P0-6a shell styles.
+   Two views (Workspaces / Tasks) load progressively via app.js. */
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, "Roboto Mono", monospace;
+  background: #0b0b0d;
+  color: #e7e9ee;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 16px;
+  background: #15171c;
+  border-bottom: 1px solid #2a2d35;
+}
+.brand { font-weight: 700; letter-spacing: 0.02em; color: #fff; }
+.tabs { display: flex; gap: 4px; flex: 1; }
+.tab {
+  padding: 6px 12px;
+  color: #a8adb8;
+  text-decoration: none;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.tab:hover { background: #20232b; color: #fff; }
+.tab.active { background: #1a73e8; color: #fff; }
+.status { font-size: 11px; color: #6b7280; }
+
+/* ---------- views ---------- */
+main { padding: 16px; max-width: 1600px; margin: 0 auto; }
+h1, h2, h3 { margin: 12px 0 8px; color: #fff; }
+.muted { color: #6b7280; }
+
+/* Workspaces grid (4 cols desktop, 2 tablet, 1 mobile) */
+.ws-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 1100px) { .ws-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px)  { .ws-grid { grid-template-columns: 1fr; } }
+
+.ws-col {
+  background: #15171c;
+  border: 1px solid #2a2d35;
+  border-radius: 8px;
+  padding: 12px;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ws-col h2 { margin: 0; font-size: 14px; }
+
+/* task / cron list rows */
+.row {
+  padding: 6px 8px;
+  background: #0b0b0d;
+  border: 1px solid #2a2d35;
+  border-radius: 6px;
+  font-size: 12px;
+  display: flex; justify-content: space-between; gap: 8px;
+}
+.row code { color: #1a73e8; }
+.tag {
+  display: inline-block;
+  padding: 1px 6px; font-size: 10px; border-radius: 3px;
+  border: 1px solid #2a2d35; color: #a8adb8;
+}
+.tag-running { background: #3b2f0a; color: #f5c447; border-color: #5b4912; }
+.tag-queued  { background: #0a273b; color: #4ea0ff; border-color: #12365b; }
+.tag-done    { background: #0a3b1a; color: #4ade80; border-color: #145828; }
+.tag-failed  { background: #3b0a0a; color: #ff6b6b; border-color: #5b1212; }
+
+/* forms */
+input, select, textarea, button {
+  font: inherit;
+  background: #0b0b0d;
+  color: #e7e9ee;
+  border: 1px solid #2a2d35;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+textarea { min-height: 60px; resize: vertical; width: 100%; }
+input, select { width: 100%; }
+button { cursor: pointer; background: #1a73e8; color: #fff; border-color: #1a73e8; font-weight: 600; }
+button:hover { background: #1659b3; }
+button.secondary { background: transparent; color: #a8adb8; border-color: #2a2d35; }
+button.secondary:hover { background: #20232b; color: #fff; }
+button.danger { background: transparent; color: #ff6b6b; border-color: #5b1212; }
+
+label { display: block; font-size: 11px; color: #a8adb8; margin-top: 6px; }
+
+.banner { padding: 8px 16px; font-size: 12px; }
+.banner-error { background: #3b0a0a; color: #ff9b9b; border-top: 1px solid #5b1212; }
+.hidden { display: none; }
+
+pre { background: #0b0b0d; padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }

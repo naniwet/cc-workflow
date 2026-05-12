@@ -21,6 +21,7 @@ from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth, config, cron_state, db, im_feishu, runner
@@ -143,3 +144,21 @@ _INDEX_HTML = config.REPO_ROOT / "backend" / "static" / "index.html"
 @app.get("/", include_in_schema=False, dependencies=PROTECT)
 def _root() -> FileResponse:
     return FileResponse(_INDEX_HTML)
+
+
+# ---------- Phase 2 PWA-lite (P0-6a shell; views land in P0-6b/c) ----------
+# /pwa/* serves the SPA: manifest / sw / index / app.js / style.css / icon.svg.
+#
+# Auth note: StaticFiles doesn't accept FastAPI dependencies, so /pwa/* is
+# UN-protected at the FastAPI layer. This is acceptable because the static
+# files contain no secrets — they're just the shell. The first API call
+# (e.g. /sessions) is PROTECT-ed and triggers the browser's basic-auth
+# prompt; the browser then caches the credential for subsequent fetch()
+# calls in the same origin. Phase 3 P0-7c can add `auth_basic` at the
+# nginx location level if we ever want defense-in-depth.
+#
+# SW scope: /pwa/sw.js controls /pwa/ (its own directory) — no special
+# Service-Worker-Allowed header required.
+_PWA_DIR = config.REPO_ROOT / "pwa"
+if _PWA_DIR.exists():
+    app.mount("/pwa", StaticFiles(directory=str(_PWA_DIR), html=True), name="pwa")
