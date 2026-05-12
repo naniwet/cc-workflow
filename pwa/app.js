@@ -30,7 +30,20 @@ if ('serviceWorker' in navigator) {
 // ---------- API + error banner ----------
 async function api(path, opts = {}) {
   const r = await fetch(path, { credentials: 'same-origin', ...opts });
-  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  if (!r.ok) {
+    // Try to pull a useful detail out of the JSON body so the banner shows
+    // *why* the call failed, not just the status code.
+    let detail = '';
+    try {
+      const body = await r.json();
+      const d = body?.detail;
+      if (typeof d === 'string') detail = d;
+      else if (d && typeof d === 'object') {
+        detail = d.detail || d.error || d.raw_reply || JSON.stringify(d);
+      } else if (body?.error) detail = body.error;
+    } catch { /* body not JSON; ignore */ }
+    throw new Error(`${r.status} ${path}${detail ? ' — ' + detail : ''}`);
+  }
   const ct = r.headers.get('content-type') || '';
   return ct.includes('json') ? r.json() : r.text();
 }
@@ -52,16 +65,34 @@ let lastData = {
   workspaces: [],
   sessions: { active: [], queued: [], recent: [] },
   loops: [],
+  providers: [],
+  wsSettings: {},                       // name → {provider?}
 };
 
 async function refreshAll() {
   try {
-    const [ws, sess, lp] = await Promise.all([
+    const [ws, sess, lp, providers] = await Promise.all([
       api('/workspaces'),
       api('/sessions'),
       api('/loops'),
+      api('/providers'),
     ]);
-    lastData = { workspaces: ws, sessions: sess, loops: lp };
+    // Workspace settings: one fetch per workspace (small N, fine for now).
+    const settingsList = await Promise.all(
+      ws.map((n) =>
+        api(`/workspaces/${encodeURIComponent(n)}/settings`).then(
+          (s) => [n, s || {}],
+          () => [n, {}],
+        ),
+      ),
+    );
+    lastData = {
+      workspaces: ws,
+      sessions: sess,
+      loops: lp,
+      providers,
+      wsSettings: Object.fromEntries(settingsList),
+    };
     clearError();
     $('status').textContent = '· ' + new Date().toLocaleTimeString();
     render();
@@ -165,6 +196,30 @@ function renderWorkspacesView() {
   for (const f of $('view').querySelectorAll('.trigger-form')) {
     f.addEventListener('submit', onTriggerSubmit);
   }
+  for (const f of $('view').querySelectorAll('.ws-settings-form')) {
+    f.addEventListener('submit', onWsSettingsSave);
+  }
+}
+
+async function onWsSettingsSave(e) {
+  e.preventDefault();
+  const form = e.target;
+  const name = form.dataset.workspace;
+  const provider = form.elements.provider.value || null;
+  const btn = form.querySelector('button[type="submit"]');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api(`/workspaces/${encodeURIComponent(name)}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider }),
+    });
+    refreshAll();
+  } catch (err) {
+    showError(`save settings failed: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save';
+  }
 }
 
 async function onAddWorkspace(e) {
@@ -210,9 +265,35 @@ function workspaceColHtml(name, data) {
   const recent = data.recent.length
     ? data.recent.slice(0, 5).map(runRowHtml).join('')
     : '<p class="muted">(none)</p>';
+
+  const wsProvider = lastData.wsSettings[name]?.provider || '';
+  const providers = lastData.providers || [];
+  const providerOptions = providers
+    .map((p) => `<option value="${esc(p)}"${p === wsProvider ? ' selected' : ''}>${esc(p)}</option>`)
+    .join('');
+  // Use a separate <details> per workspace so opening one column's settings
+  // doesn't blow away your typing in another column. data-details-id encodes
+  // the workspace name so the open-state snapshot is per-column.
   return `
     <div class="ws-col">
-      <h2>${esc(name)}</h2>
+      <h2>
+        ${esc(name)}
+        <span class="muted" style="font-size:11px;font-weight:normal">
+          · ${wsProvider ? `provider <code>${esc(wsProvider)}</code>` : '<em>(global)</em>'}
+        </span>
+      </h2>
+      <details class="add-form" data-details-id="ws-settings-${esc(name)}">
+        <summary>provider settings</summary>
+        <form data-form-id="ws-settings-${esc(name)}" data-workspace="${esc(name)}" class="ws-settings-form">
+          <label>provider override
+            <select name="provider">
+              <option value=""${wsProvider ? '' : ' selected'}>(use global default)</option>
+              ${providerOptions}
+            </select>
+          </label>
+          <button type="submit" class="secondary">Save</button>
+        </form>
+      </details>
       <div>
         <strong class="muted">active</strong>
         ${active}
@@ -224,6 +305,12 @@ function workspaceColHtml(name, data) {
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
         <label>prompt
           <textarea name="prompt" placeholder="reply with only OK" required></textarea>
+        </label>
+        <label>provider (one-shot override)
+          <select name="provider">
+            <option value="">(use workspace / global)</option>
+            ${providers.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join('')}
+          </select>
         </label>
         <button type="submit">Run</button>
       </form>
@@ -251,21 +338,24 @@ async function onTriggerSubmit(e) {
   const form = e.target;
   const ws = form.dataset.workspace;
   const prompt = form.elements.prompt.value.trim();
+  const providerOverride = form.elements.provider?.value || '';
   if (!prompt) return;
-  const btn = form.querySelector('button');
+  const btn = form.querySelector('button[type="submit"]') || form.querySelector('button');
   btn.disabled = true;
   btn.textContent = 'Running…';
   try {
+    const body = {
+      workspace: ws,
+      prompt,
+      engine: 'claude',
+      session_key: `pwa-${ws}`,
+      source: 'pwa',
+    };
+    if (providerOverride) body.provider = providerOverride;
     await api('/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        workspace: ws,
-        prompt,
-        engine: 'claude',
-        session_key: `pwa-${ws}`,
-        source: 'pwa',
-      }),
+      body: JSON.stringify(body),
     });
     form.reset();
     clearDraft(form.dataset.formId);

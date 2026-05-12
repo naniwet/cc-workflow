@@ -32,6 +32,7 @@ ENGINE=""
 SOURCE="manual"
 JOB_NAME=""
 JOB_FILE=""
+PROVIDER_OVERRIDE=""
 SESSION_KEY="default"
 WORKSPACE=""
 PROMPT=""
@@ -47,6 +48,11 @@ usage() {
     cat >&2 <<'EOF'
 Usage: agent-run --engine=<claude|codex> <workspace> "<prompt>" [session_key]
                  [--source <pwa|feishu|cron|manual>] [--job-name <name>]
+                 [--provider <name>]
+
+  --provider <name>   Override config.toml's provider (must match a profile
+                      key in ~/.cc-workflow/providers.json). For per-workspace
+                      LLM backend; falls back to config.toml then "claude".
 
 Exit (sysexits.h): 0 ok | 64 usage | 65 concurrency | 66 engine | 67 push-main | 68 timeout
 EOF
@@ -66,6 +72,9 @@ while [[ $# -gt 0 ]]; do
         --job-name)   [[ $# -ge 2 ]] || { usage; die "$EX_USAGE" "--job-name needs value"; }
                       JOB_NAME="$2"; shift 2 ;;
         --job-name=*) JOB_NAME="${1#--job-name=}"; shift ;;
+        --provider)   [[ $# -ge 2 ]] || { usage; die "$EX_USAGE" "--provider needs value"; }
+                      PROVIDER_OVERRIDE="$2"; shift 2 ;;
+        --provider=*) PROVIDER_OVERRIDE="${1#--provider=}"; shift ;;
         -h|--help)    usage; exit "$EX_OK" ;;
         --)           shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
         -*)           usage; die "$EX_USAGE" "unknown flag: $1" ;;
@@ -111,8 +120,15 @@ chmod 700 "$LOGS_DIR" 2>/dev/null || true   # P0-7e
 # A profile with empty env (e.g. "claude") = "use anthropic local OAuth, export nothing".
 # Schema and placeholder convention (<...>) borrowed from ccswitch.
 
-# Read `provider = "name"` from config.toml. Empty / missing → "claude".
+# Read provider name. Priority:
+#   1. --provider <name> CLI flag (PROVIDER_OVERRIDE)
+#   2. ~/.cc-workflow/config.toml [provider]
+#   3. fallback "claude" (empty-env profile → no env vars exported)
 ccw_provider_name() {
+    if [[ -n "$PROVIDER_OVERRIDE" ]]; then
+        printf '%s' "$PROVIDER_OVERRIDE"
+        return
+    fi
     [[ -f "$CCW_CONFIG" ]] || { printf 'claude'; return; }
     awk -F'=' '
         /^[[:space:]]*provider[[:space:]]*=/ {

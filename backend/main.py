@@ -23,8 +23,11 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
+import json
+import os
 import re
 import subprocess
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -32,6 +35,36 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth, config, cron_state, db, im_feishu, llm, runner
+
+# ---------- workspace settings (per-workspace LLM provider override) ----------
+# Stored at ~/.cc-workflow/workspaces.json. Schema:
+#   { "<workspace-name>": { "provider": "deepseek" }, ... }
+
+_WORKSPACES_SETTINGS_PATH = config.CCW_DIR / "workspaces.json"
+
+
+def _load_ws_settings() -> dict:
+    if not _WORKSPACES_SETTINGS_PATH.exists():
+        return {}
+    try:
+        return json.loads(_WORKSPACES_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_ws_settings(data: dict) -> None:
+    _WORKSPACES_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _WORKSPACES_SETTINGS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, _WORKSPACES_SETTINGS_PATH)
+
+
+def _provider_for(workspace: str, override: Optional[str] = None) -> Optional[str]:
+    """Pick provider with override > workspace.provider > None (let agent-run
+    fall back to config.toml). Returning None means "don't pass --provider"."""
+    if override:
+        return override
+    return (_load_ws_settings().get(workspace) or {}).get("provider")
 
 PROTECT = [Depends(auth.require_basic_auth)]
 
@@ -49,6 +82,7 @@ class RunRequest(BaseModel):
     engine: Literal["claude", "codex"]
     session_key: Optional[str] = Field(default=None, max_length=128)
     source: Literal["pwa", "feishu", "cron", "manual"] = "manual"
+    provider: Optional[str] = Field(default=None, max_length=64)   # one-shot LLM override
 
 
 @app.get("/healthz")  # intentionally NOT protected (monitoring / liveness)
@@ -66,6 +100,7 @@ def post_run(req: RunRequest) -> dict:
         engine=req.engine,
         session_key=req.session_key,
         source=req.source,
+        provider=_provider_for(req.workspace, req.provider),
     )
     return {"task_id": run_id, "status": "queued"}
 
@@ -94,6 +129,57 @@ def get_workspaces() -> list[str]:
 
 class NewWorkspaceRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+
+
+@app.get("/providers", dependencies=PROTECT)
+def list_providers() -> list[str]:
+    """Profile names available in providers.json (e.g. ['claude', 'deepseek', 'kimi'])."""
+    try:
+        data = json.loads(config.PROVIDERS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return sorted((data.get("profiles") or {}).keys())
+
+
+@app.get("/workspaces/{name}/settings", dependencies=PROTECT)
+def get_workspace_settings(name: str) -> dict:
+    """Return per-workspace overrides ({} when none set)."""
+    return _load_ws_settings().get(name, {})
+
+
+class WorkspaceSettingsRequest(BaseModel):
+    # provider=None or absent → clear the per-workspace override (use global).
+    provider: Optional[str] = Field(default=None, max_length=64)
+
+
+@app.put("/workspaces/{name}/settings", dependencies=PROTECT)
+def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
+    # Validate workspace exists.
+    target = config.WORKSPACES_DIR / name
+    if not (target / ".git").exists():
+        raise HTTPException(404, {"error": "workspace not found", "name": name})
+
+    # Validate provider name against providers.json keys.
+    if body.provider is not None and body.provider != "":
+        valid = set(list_providers())
+        if body.provider not in valid:
+            raise HTTPException(
+                400, {"error": "unknown provider", "got": body.provider, "valid": sorted(valid)}
+            )
+
+    data = _load_ws_settings()
+    current = data.get(name, {})
+    if body.provider in (None, ""):
+        current.pop("provider", None)
+    else:
+        current["provider"] = body.provider
+
+    if current:
+        data[name] = current
+    else:
+        data.pop(name, None)
+    _save_ws_settings(data)
+    return current
 
 
 @app.post("/workspaces", dependencies=PROTECT, status_code=201)
