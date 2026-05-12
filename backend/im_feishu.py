@@ -17,10 +17,15 @@ Feishu v2 security (per official docs 加密策略):
     be AES-256-CBC-decrypted before parsing. Key = sha256(encrypt_key),
     IV = first 16 bytes of the AES cipher blob.
 
-Workspace parsing — MINIMAL_CHOICE text-prefix convention:
-  "[repo-name] prompt..."  → workspace = "repo-name", prompt = "prompt..."
-  "prompt..."               → workspace = secrets.toml [feishu].default_workspace
-                               (or "test-repo")
+Workspace resolution — 4-tier priority (highest first):
+  1. "[repo-name] prompt..."     → one-shot override, doesn't change state
+  2. /use'd default for chat_id  → from ~/.cc-workflow/feishu_chats.json
+  3. secrets.toml [feishu].default_workspace
+  4. "test-repo"                  → hard fallback
+
+`/use <workspace>` slash command stores the per-chat default so users with
+multiple workspaces don't have to type the [prefix] every message. `/where`
+queries the current effective default for the calling chat.
 
 session_key encoding: "feishu-<chat_id>" — reply_from_run reads chat_id back.
 
@@ -49,6 +54,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import re
 from typing import Optional
 from urllib import error as urlerror
@@ -67,6 +73,11 @@ from . import config
 FEISHU_OPENAPI = "https://open.feishu.cn/open-apis"
 _PREFIX_RE = re.compile(r"^\s*\[([A-Za-z0-9._-]+)\]\s*(.+)$", re.DOTALL)
 _SLASH_RE = re.compile(r"^/([a-z][a-z0-9_-]*)\b\s*(.*)$", re.IGNORECASE | re.DOTALL)
+
+# Per-chat workspace memory — survives backend restart. Format:
+#   {"<chat_id>": {"workspace": "<repo-name>"}}
+# Atomic write via tmp + os.replace so concurrent /use requests can't tear.
+_CHAT_WS_FILE = config.CCW_DIR / "feishu_chats.json"
 
 
 def _secrets() -> dict:
@@ -203,20 +214,17 @@ def _handle_message(payload: dict) -> dict:
     if not text:
         return {"ok": True, "ignored": "empty"}
 
-    # Slash command: render and send a Card inline, return a no-run intent.
-    # Detected before workspace-prefix parsing so "/sessions" doesn't get
-    # misread as a prompt for the default workspace.
+    # Slash commands — handled before workspace resolution so "/use foo"
+    # doesn't get misread as a prompt for the default workspace.
     m = _SLASH_RE.match(text)
     if m and chat_id:
-        cmd = m.group(1).lower()
-        card = _slash_to_card(cmd)
-        if card is not None:
-            reply_card(chat_id, card)
-            return {"ok": True, "card_reply": True, "slash": cmd}
-        # Unknown slash — let it fall through to the run-intent path so the
-        # user gets the LLM's response rather than silent ignore.
+        handled = _handle_slash(m.group(1).lower(), m.group(2).strip(), chat_id)
+        if handled is not None:
+            return handled
+        # Unknown slash falls through to LLM — the user gets a response
+        # instead of silent ignore.
 
-    workspace, prompt = _parse_workspace_prompt(text)
+    workspace, prompt = _resolve_workspace(chat_id, text)
     return {
         "ok": True,
         "run_intent": {
@@ -229,23 +237,94 @@ def _handle_message(payload: dict) -> dict:
     }
 
 
-def _slash_to_card(cmd: str) -> Optional["object"]:
-    """Map a slash-command name to a Card factory. Returns None for unknown
-    commands so the caller can fall through to the LLM run path."""
-    from . import ui_cards                    # lazy: ui_cards may import config
-    table = {
+def _handle_slash(cmd: str, rest: str, chat_id: str) -> Optional[dict]:
+    """Dispatch a slash command. Returns:
+      dict  — handled (skip the run-intent path; reply has already been sent)
+      None  — unknown command (caller falls through to LLM)
+    """
+    from . import ui_cards                    # lazy: avoid potential import order issues
+
+    # Card-rendering slashes — wrap a Card factory and send via reply_card.
+    cards = {
         "sessions": ui_cards.sessions_card,
         "loops": ui_cards.loops_card,
         "run": ui_cards.run_form_card,
     }
-    fn = table.get(cmd)
-    return fn() if fn else None
+    if cmd in cards:
+        reply_card(chat_id, cards[cmd]())
+        return {"ok": True, "card_reply": True, "slash": cmd}
+
+    # /use <workspace> — set this chat's default workspace. Persists across
+    # backend restart in ~/.cc-workflow/feishu_chats.json.
+    if cmd == "use":
+        ws = (rest or "").strip()
+        if not ws:
+            current = (_load_chat_ws().get(chat_id) or {}).get("workspace")
+            tip = "用法: /use <workspace-name>"
+            if current:
+                tip += f"\n当前默认: {current}"
+            reply_to_chat(chat_id, tip)
+            return {"ok": True, "slash": "use", "missing_arg": True}
+        chats = _load_chat_ws()
+        chats[chat_id] = {"workspace": ws}
+        _save_chat_ws(chats)
+        reply_to_chat(
+            chat_id,
+            f"✓ 这个聊天的默认 workspace = {ws}\n"
+            f"后续不打 [prefix] 都进 {ws}。临时换用 [别的] prompt;改默认用 /use <别的>。",
+        )
+        return {"ok": True, "slash": "use", "workspace": ws}
+
+    # /where — query the effective default for this chat.
+    if cmd == "where":
+        chats = _load_chat_ws()
+        chat_default = (chats.get(chat_id) or {}).get("workspace")
+        global_default = _secrets().get("default_workspace") or "test-repo"
+        if chat_default:
+            body = f"当前 workspace: {chat_default}\n(per-chat /use 设置;全局默认是 {global_default})"
+        else:
+            body = f"当前 workspace: {global_default}\n(全局默认 — /use <name> 改成本聊天专属)"
+        reply_to_chat(chat_id, body)
+        return {"ok": True, "slash": "where"}
+
+    return None
 
 
-def _parse_workspace_prompt(text: str) -> tuple[str, str]:
+def _load_chat_ws() -> dict:
+    """Read feishu_chats.json. Returns {} when file is missing or corrupt."""
+    if not _CHAT_WS_FILE.exists():
+        return {}
+    try:
+        return json.loads(_CHAT_WS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_chat_ws(data: dict) -> None:
+    """Atomic write so concurrent /use requests don't tear the file."""
+    _CHAT_WS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _CHAT_WS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, _CHAT_WS_FILE)
+
+
+def _resolve_workspace(chat_id: str, text: str) -> "tuple[str, str]":
+    """Pick (workspace, prompt) using the 4-tier priority documented at the
+    top of this module.
+        1. [prefix]  — one-shot override
+        2. /use'd default for this chat
+        3. secrets.toml [feishu].default_workspace
+        4. "test-repo" hard fallback
+    """
     m = _PREFIX_RE.match(text)
     if m:
         return m.group(1), m.group(2).strip()
+
+    if chat_id:
+        chat_default = (_load_chat_ws().get(chat_id) or {}).get("workspace")
+        if chat_default:
+            return chat_default, text
+
     return _secrets().get("default_workspace") or "test-repo", text
 
 
