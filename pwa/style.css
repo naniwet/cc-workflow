@@ -77,7 +77,20 @@ h1, h2, h3 { margin: 12px 0 8px; color: #fff; }
 .ws-timeline::-webkit-scrollbar { width: 6px; }
 .ws-timeline::-webkit-scrollbar-thumb { background: #2a2d35; border-radius: 3px; }
 .ws-timeline::-webkit-scrollbar-track { background: transparent; }
-.ws-col .trigger-form { margin-top: auto; }     /* form sticks to bottom */
+.ws-col .trigger-form {                          /* form sticks to bottom */
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;                          /* button matches textarea height */
+}
+.ws-col .trigger-form textarea {
+  flex: 1;                                       /* textarea eats remaining width */
+  min-height: 60px;
+}
+.ws-col .trigger-form button {
+  white-space: nowrap;                           /* never wrap "Run" */
+  align-self: stretch;
+}
 
 /* task / cron list rows */
 .row {

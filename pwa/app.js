@@ -326,9 +326,7 @@ function workspaceColHtml(name, data) {
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
-        <label>prompt
-          <textarea name="prompt" placeholder="reply with only OK" required></textarea>
-        </label>
+        <textarea name="prompt" placeholder="reply with only OK" required></textarea>
         <button type="submit">Run</button>
       </form>
     </div>
