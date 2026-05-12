@@ -34,6 +34,14 @@ secrets.toml schema:
   app_secret        = "xxx"
   encrypt_key       = "xxx"           # from 飞书 → 事件订阅 → 加密策略 (enabled)
   default_workspace = "test-repo"     # optional
+
+config.toml schema (for the long-output PWA link in reply_from_run):
+  pwa_base_url      = "https://your-server.example.com"
+  # Used in the truncation footer when a run's output exceeds Feishu's 4000-char
+  # text-message cap. Set this to the public origin where /pwa/ is served so
+  # the appended link "{base}/pwa/#runs/{run_id}" lets the user open the full
+  # output in the PWA detail view. If unset, the footer just says "(truncated)"
+  # without a link.
 """
 from __future__ import annotations
 
@@ -248,16 +256,57 @@ def reply_to_chat(chat_id: str, text: str) -> bool:
         return False
 
 
+# Feishu text message hard cap is 4000 chars. We aim slightly under so the
+# status header + (optional) truncation footer fit. Leaving room for a long
+# absolute URL on the footer side.
+_FEISHU_TEXT_BUDGET = 3500
+
+
+def _pwa_run_url(run_id: str) -> Optional[str]:
+    """Public URL to the PWA's run-detail view, or None if pwa_base_url unset."""
+    cfg = (config.load_config() or {})
+    base = (cfg.get("pwa_base_url") or "").rstrip("/")
+    if not base or not run_id:
+        return None
+    return f"{base}/pwa/#runs/{run_id}"
+
+
+def _format_reply(run: dict) -> str:
+    """Compose the Feishu reply text, truncating output to fit 4000 chars.
+
+    Layout:
+        [status · exit N]
+        <output>
+        \n…(truncated, full output: <url>)        # only if output > budget
+
+    Pure function — easy to unit-test without touching network.
+    """
+    status_line = f"[{run.get('status', '?')} · exit {run.get('exit_code')}]\n"
+    output = (run.get("output") or "").strip() or "(no output)"
+
+    body_budget = _FEISHU_TEXT_BUDGET - len(status_line)
+    if len(output) <= body_budget:
+        return status_line + output
+
+    link = _pwa_run_url(run.get("id", ""))
+    footer = (
+        f"\n…(truncated, full output: {link})" if link else "\n…(truncated)"
+    )
+    head = output[: max(0, body_budget - len(footer))]
+    return status_line + head + footer
+
+
 def reply_from_run(run: dict) -> None:
-    """runner.on_finish callback — send the run result back to the Feishu chat."""
+    """runner.on_finish callback — send the run result back to the Feishu chat.
+
+    Truncates output that exceeds Feishu's 4000-char text-message cap and,
+    when pwa_base_url is configured, appends a link so the user can open the
+    full output in the PWA's #runs/<id> detail view.
+    """
     if not run or run.get("source") != "feishu":
         return
     sk = run.get("session_key") or ""
     if not sk.startswith("feishu-"):
         return
     chat_id = sk[len("feishu-"):]
-    output = (run.get("output") or "").strip() or "(no output)"
-    if len(output) > 1500:
-        output = output[:1500] + "\n…(truncated)"
-    summary = f"[{run.get('status', '?')} · exit {run.get('exit_code')}]\n{output}"
-    reply_to_chat(chat_id, summary)
+    reply_to_chat(chat_id, _format_reply(run))

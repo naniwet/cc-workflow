@@ -102,6 +102,22 @@ h1, h2, h3 { margin: 12px 0 8px; color: #fff; }
   display: flex; justify-content: space-between; gap: 8px;
 }
 .row code { color: #1a73e8; }
+
+/* Clickable rows in the workspace timeline — navigate to #runs/<id>. */
+.run-link,
+.run-link:hover,
+.run-link:focus,
+.run-link:visited {
+  text-decoration: none;
+  color: inherit;
+}
+.run-link:hover { background: #1a1d24; cursor: pointer; }
+
+/* Run detail view (#runs/<id>) */
+.back-link { color: #a8adb8; text-decoration: none; font-size: 12px; }
+.back-link:hover { color: #fff; }
+.run-meta { font-size: 12px; color: #a8adb8; margin: 4px 0 16px; }
+.run-meta .tag { margin-right: 4px; }
 .tag {
   display: inline-block;
   padding: 1px 6px; font-size: 10px; border-radius: 3px;

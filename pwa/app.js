@@ -112,13 +112,25 @@ async function refreshAll() {
 }
 
 // ---------- router ----------
+// Two flavours:
+//   #workspaces / #tasks       → tab views, handler in ROUTES
+//   #runs/<id>                 → single-run detail (full output, link target
+//                                 from Feishu when output is truncated)
 const ROUTES = { workspaces: renderWorkspacesView, tasks: renderTasksView };
-const currentRoute = () => location.hash.replace('#', '') || 'workspaces';
+function parseRoute() {
+  const h = location.hash.replace('#', '');
+  if (h.startsWith('runs/')) return { name: 'runs', id: h.slice(5) };
+  return { name: h || 'workspaces', id: null };
+}
 function setActiveTab(name) {
   for (const a of document.querySelectorAll('.tab')) {
     a.classList.toggle('active', a.dataset.tab === name);
   }
 }
+
+// Cache terminal-state runs so polling re-renders don't re-fetch them, and so
+// scroll/selection survives across the 3s render() cycle.
+const runDetailCache = {};                          // id → row (status=done/failed only)
 
 // Drafts: keep what the user is typing in each workspace's prompt box across
 // re-renders. Polling re-renders blow away DOM, so we snapshot textareas/inputs
@@ -197,10 +209,15 @@ function render() {
   if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return;
 
   snapshotDrafts();
-  const name = currentRoute();
-  const handler = ROUTES[name] || ROUTES.workspaces;
-  setActiveTab(name in ROUTES ? name : 'workspaces');
-  handler();
+  const route = parseRoute();
+  if (route.name === 'runs' && route.id) {
+    setActiveTab(null);                            // no tab is active for detail page
+    renderRunDetailView(route.id);
+  } else {
+    const handler = ROUTES[route.name] || ROUTES.workspaces;
+    setActiveTab(route.name in ROUTES ? route.name : 'workspaces');
+    handler();
+  }
   restoreDrafts();
 }
 window.addEventListener('hashchange', render);
@@ -348,8 +365,10 @@ function workspaceColHtml(name, data) {
 
 function runRowHtml(r) {
   const status = r.status || '?';
+  // <a> not <div> — clicking jumps to #runs/<id> for the full-output detail.
+  // .run-link strips the default underline + blue; .row keeps the layout.
   return `
-    <div class="row">
+    <a class="row run-link" href="#runs/${esc(r.id || '')}" title="View full output">
       <span>
         <span class="tag tag-${esc(status)}">${esc(status)}</span>
         <code>${esc((r.id || '').slice(0, 8))}</code>
@@ -357,7 +376,7 @@ function runRowHtml(r) {
         ${r.exit_code != null && r.exit_code !== 0 ? `· exit ${esc(r.exit_code)}` : ''}
         ${r.source ? `· ${esc(r.source)}` : ''}
       </span>
-    </div>
+    </a>
   `;
 }
 
@@ -394,6 +413,68 @@ async function onTriggerSubmit(e) {
     btn.disabled = false;
     btn.textContent = 'Run';
   }
+}
+
+// ---------- Run detail view (#runs/<id>) ----------
+// Standalone page: full prompt + full output of a single run. Two callers:
+//   - clicking any row in the workspace timeline
+//   - opening the link Feishu sends when output exceeds 4000 chars (P0-6e)
+
+async function renderRunDetailView(id) {
+  // Cache hit on a terminal-state row: only re-paint if the DOM doesn't
+  // already show it. This keeps text selection / scroll stable across the
+  // 3s polling re-render after the run has finished.
+  const cached = runDetailCache[id];
+  if (cached && (cached.status === 'done' || cached.status === 'failed')) {
+    if (!$('view').querySelector('.run-meta')) paintRunDetail(id, cached);
+    return;
+  }
+
+  let row;
+  try {
+    row = await api(`/runs/${encodeURIComponent(id)}`);
+  } catch (err) {
+    $('view').innerHTML = `
+      <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
+      <h1>Run <code>${esc(id.slice(0, 8))}</code></h1>
+      <p class="muted">Failed to load: ${esc(err.message)}</p>
+    `;
+    return;
+  }
+
+  if (row.status === 'done' || row.status === 'failed') {
+    runDetailCache[id] = row;
+  }
+
+  // User may have navigated away while we awaited — bail if so.
+  const route = parseRoute();
+  if (route.name !== 'runs' || route.id !== id) return;
+
+  paintRunDetail(id, row);
+}
+
+function paintRunDetail(id, row) {
+  const status = row.status || '?';
+  const startedAt = row.started_at
+    ? new Date(row.started_at * 1000).toLocaleString()
+    : '';
+  $('view').innerHTML = `
+    <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
+    <h1>Run <code>${esc(id.slice(0, 8))}</code></h1>
+    <div class="run-meta">
+      <span class="tag tag-${esc(status)}">${esc(status)}</span>
+      ${row.workspace ? ` <code>${esc(row.workspace)}</code>` : ''}
+      ${row.engine ? ` · ${esc(row.engine)}` : ''}
+      ${row.elapsed_s != null ? ` · ${esc(row.elapsed_s)}s` : ''}
+      ${row.exit_code != null ? ` · exit ${esc(row.exit_code)}` : ''}
+      ${row.source ? ` · ${esc(row.source)}` : ''}
+      ${startedAt ? ` · ${esc(startedAt)}` : ''}
+    </div>
+    <h3>Prompt</h3>
+    <pre>${esc(row.prompt || '')}</pre>
+    <h3>Output</h3>
+    <pre>${esc(row.output || '(empty)')}</pre>
+  `;
 }
 
 // ---------- Tasks view ----------
