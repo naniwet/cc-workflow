@@ -123,7 +123,9 @@ function parseRoute() {
   return { name: h || 'workspaces', id: null };
 }
 function setActiveTab(name) {
-  for (const a of document.querySelectorAll('.tab')) {
+  // [data-tab] covers BOTH the topbar tabs (.tab) and the mobile bottom-nav
+  // tabs (.bottom-tab) — same active class, same router target.
+  for (const a of document.querySelectorAll('[data-tab]')) {
     a.classList.toggle('active', a.dataset.tab === name);
   }
 }
@@ -138,6 +140,11 @@ const runDetailCache = {};                          // id → row (status=done/f
 const drafts = {};                                  // key: form-id, val: name → value
 const detailsOpen = {};                             // key: details-id, val: bool
 const timelineScroll = {};                          // key: ws name → {scrollTop, atBottom}
+const carouselScroll = { left: 0 };                 // mobile carousel scrollLeft
+
+// IntersectionObserver for the mobile workspace carousel — disconnect+rebuild
+// on every renderWorkspacesView so it's bound to the live DOM.
+let _carouselObserver = null;
 
 function snapshotDrafts() {
   for (const form of document.querySelectorAll('form[data-form-id]')) {
@@ -164,6 +171,9 @@ function snapshotDrafts() {
       atBottom: Math.abs(t.scrollHeight - t.clientHeight - t.scrollTop) < 40,
     };
   }
+  // Mobile carousel: which workspace is currently snapped into view.
+  const grid = document.querySelector('.ws-grid');
+  if (grid && grid.scrollLeft > 0) carouselScroll.left = grid.scrollLeft;
 }
 
 function restoreDrafts() {
@@ -194,6 +204,10 @@ function restoreDrafts() {
       t.scrollTop = saved.scrollTop;
     }
   }
+  // Mobile carousel: restore which workspace was in view. Without this,
+  // every 3s polling cycle would snap the user back to workspace #1.
+  const grid = document.querySelector('.ws-grid');
+  if (grid && carouselScroll.left) grid.scrollLeft = carouselScroll.left;
 }
 
 function clearDraft(formId) {
@@ -225,10 +239,13 @@ window.addEventListener('hashchange', render);
 // ---------- Workspaces view ----------
 function renderWorkspacesView() {
   const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
-  const cols = Object.keys(groups)
-    .sort()
-    .map((w) => workspaceColHtml(w, groups[w]))
-    .join('');
+  const sortedNames = Object.keys(groups).sort();
+  const cols = sortedNames.map((w) => workspaceColHtml(w, groups[w])).join('');
+  const dots = sortedNames.length > 1
+    ? sortedNames.map((n, i) =>
+        `<button class="ws-dot${i === 0 ? ' active' : ''}" data-ws="${esc(n)}" aria-label="${esc(n)}"></button>`
+      ).join('')
+    : '';
 
   $('view').innerHTML = `
     <h1>Workspaces</h1>
@@ -245,7 +262,7 @@ function renderWorkspacesView() {
       </form>
     </details>
     ${cols
-      ? `<div class="ws-grid">${cols}</div>`
+      ? `<div class="ws-grid">${cols}</div>${dots ? `<div class="ws-dots">${dots}</div>` : ''}`
       : `<p class="muted">No workspaces yet. Use the form above or create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
   `;
 
@@ -257,6 +274,46 @@ function renderWorkspacesView() {
   for (const sel of $('view').querySelectorAll('.provider-inline')) {
     sel.addEventListener('change', onProviderInlineChange);
   }
+  setupCarousel();
+}
+
+// Wire up the mobile carousel: each .ws-col is a scroll-snap target inside
+// .ws-grid. IntersectionObserver tracks which column is centered; clicking
+// a dot scrolls to that column. On desktop where .ws-grid is `display: grid`
+// (not a scroll container), all columns intersect 100% — the observer fires
+// once on init but the dots are CSS `display: none` so the no-op is invisible.
+function setupCarousel() {
+  if (_carouselObserver) {
+    _carouselObserver.disconnect();
+    _carouselObserver = null;
+  }
+  const grid = $('view').querySelector('.ws-grid');
+  const dots = [...$('view').querySelectorAll('.ws-dot')];
+  if (!grid || dots.length === 0) return;
+
+  const cols = [...grid.children];
+
+  _carouselObserver = new IntersectionObserver((entries) => {
+    let bestIdx = -1, bestRatio = 0;
+    for (const e of entries) {
+      const idx = cols.indexOf(e.target);
+      if (idx < 0) continue;
+      if (e.intersectionRatio > bestRatio) {
+        bestRatio = e.intersectionRatio;
+        bestIdx = idx;
+      }
+    }
+    if (bestIdx >= 0) {
+      dots.forEach((d, i) => d.classList.toggle('active', i === bestIdx));
+    }
+  }, { root: grid, threshold: [0.25, 0.5, 0.75, 1] });
+
+  cols.forEach((c) => _carouselObserver.observe(c));
+  dots.forEach((d, i) => {
+    d.addEventListener('click', () => {
+      cols[i]?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    });
+  });
 }
 
 async function onProviderInlineChange(e) {

@@ -25,6 +25,30 @@
 
   <main id="view"><p class="muted">Loading…</p></main>
 
+  <!-- Mobile bottom-nav (< 768px). Same data-tab semantics as the topbar
+       tabs — setActiveTab() updates both in lockstep. SVGs are inline so
+       there's nothing to fetch and no icon-font flash. -->
+  <nav class="bottom-nav" id="bottom-nav">
+    <a href="#workspaces" data-tab="workspaces" class="bottom-tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3"  y="3"  width="7" height="7" rx="1"/>
+        <rect x="14" y="3"  width="7" height="7" rx="1"/>
+        <rect x="3"  y="14" width="7" height="7" rx="1"/>
+        <rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+      <span>Workspaces</span>
+    </a>
+    <a href="#tasks" data-tab="tasks" class="bottom-tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="9 11 12 14 22 4"/>
+        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+      </svg>
+      <span>Tasks</span>
+    </a>
+  </nav>
+
   <div id="error-banner" class="banner banner-error hidden"></div>
 
   <script type="module" src="/pwa/app.js"></script>
