@@ -113,6 +113,31 @@ h1, h2, h3 { margin: 12px 0 8px; color: #fff; }
 }
 .run-link:hover { background: #1a1d24; cursor: pointer; }
 
+/* Workspace-timeline rows show prompt + output preview underneath the
+   meta line, chat-bubble style. Scoped to .ws-timeline so the Tasks tab's
+   loop rows keep their original horizontal layout. */
+.ws-timeline .row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.ws-timeline .row-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.row-prompt,
+.row-output {
+  font-size: 11px;
+  padding-left: 4px;
+  word-break: break-word;
+  white-space: pre-wrap;        /* preserve newlines within the 200-char snippet */
+  line-height: 1.35;
+}
+.row-prompt { color: #8b94a3; }   /* dim — what you said */
+.row-output { color: #4ade80; }   /* green — what Claude said (matches tag-done) */
+
 /* Run detail view (#runs/<id>) */
 .back-link { color: #a8adb8; text-decoration: none; font-size: 12px; }
 .back-link:hover { color: #fff; }

@@ -365,17 +365,24 @@ function workspaceColHtml(name, data) {
 
 function runRowHtml(r) {
   const status = r.status || '?';
-  // <a> not <div> — clicking jumps to #runs/<id> for the full-output detail.
-  // .run-link strips the default underline + blue; .row keeps the layout.
+  // 3-row layout: meta line · prompt preview · output preview.
+  //   ▸ <prompt>            user's input (gray)
+  //   ↳ <output_preview>    Claude's reply (green) — only when run finished
+  // Both snippets are SQL-capped at 200 chars by db.py. Click anywhere on
+  // the row navigates to the full-output detail page.
+  const prompt = r.prompt || '';
+  const output = r.output_preview || '';
   return `
-    <a class="row run-link" href="#runs/${esc(r.id || '')}" title="View full output">
-      <span>
+    <a class="row run-link" href="#runs/${esc(r.id || '')}" title="Click for full output">
+      <div class="row-head">
         <span class="tag tag-${esc(status)}">${esc(status)}</span>
         <code>${esc((r.id || '').slice(0, 8))}</code>
         ${r.elapsed_s != null ? `· ${esc(r.elapsed_s)}s` : ''}
         ${r.exit_code != null && r.exit_code !== 0 ? `· exit ${esc(r.exit_code)}` : ''}
         ${r.source ? `· ${esc(r.source)}` : ''}
-      </span>
+      </div>
+      ${prompt ? `<div class="row-prompt">▸ ${esc(prompt)}</div>` : ''}
+      ${output ? `<div class="row-output">↳ ${esc(output)}</div>` : ''}
     </a>
   `;
 }

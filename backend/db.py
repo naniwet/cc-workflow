@@ -124,11 +124,21 @@ def get_run(run_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
-# Columns returned by /sessions endpoint. Keeping the projection narrow keeps
-# response size predictable and avoids leaking the full prompt by default.
+# Columns returned by /sessions endpoint.
+#
+# Q1 PWA polish: prompt + output snippet added so the workspace timeline
+# can render chat-bubble previews inline (you don't have to navigate to
+# the detail page to see what Claude said back). Both are capped at 200
+# chars via SQL substr so response size stays bounded:
+#   10 rows × 3 buckets × ~400 bytes/row ≈ 12 KB worst case, fine for 3s
+#   polling.
+# Originally excluded to "avoid leaking prompt by default" — that concern
+# doesn't apply to a single-user system behind basic auth.
 _RUN_SUMMARY_COLS = (
     "id, workspace, engine, session_key, status, "
-    "exit_code, started_at, finished_at, elapsed_s, source"
+    "exit_code, started_at, finished_at, elapsed_s, source, "
+    "substr(prompt, 1, 200) AS prompt, "
+    "substr(output, 1, 200) AS output_preview"
 )
 
 
