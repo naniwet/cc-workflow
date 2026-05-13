@@ -473,6 +473,11 @@ function clearDraft(formId) {
 }
 function clearDetails(detailsId) {
   delete detailsOpen[detailsId];
+  // Also collapse the live DOM element — without this, the next
+  // snapshotDrafts() captures `<details open>` and restoreDrafts() puts
+  // detailsOpen back to true, so the panel never actually closes.
+  const el = document.querySelector(`details[data-details-id="${detailsId}"]`);
+  if (el) el.open = false;
 }
 
 function render() {
