@@ -39,6 +39,8 @@ const ICONS = {
   success: `<svg ${_S}><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>`,
   info:    `<svg ${_S}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
   warning: `<svg ${_S}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+  // 6-dot vertical grip — drag handle on PC workspace cards
+  grip:    `<svg ${_S}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>`,
 };
 
 // Tag helper — status string → <span class="tag tag-X"> with icon prefix.
@@ -223,6 +225,36 @@ const carouselScroll = { left: 0 };                 // mobile carousel scrollLef
 // on every renderWorkspacesView so it's bound to the live DOM.
 let _carouselObserver = null;
 
+// PC drag-to-reorder state. Persisted as localStorage['ws-order'] —
+// per-browser, not synced to server. Workspaces not in the saved order
+// fall through to alphabetical at the end (covers freshly-created or
+// freshly-pulled workspaces). Removed workspaces are silently dropped.
+let _wsOrder = [];
+
+function loadWsOrder() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('ws-order'));
+    _wsOrder = Array.isArray(raw) ? raw.filter((n) => typeof n === 'string') : [];
+  } catch { _wsOrder = []; }
+}
+
+function saveWsOrder() {
+  try {
+    localStorage.setItem('ws-order', JSON.stringify(_wsOrder));
+  } catch { /* private-mode / quota — silently skip; order is in-memory still */ }
+}
+
+// Apply the saved order: known names appear in user order, then any new
+// (unsaved) names sorted alphabetically at the end. Deterministic.
+function orderedWorkspaces(names) {
+  const known = new Set(names);
+  const userOrdered = _wsOrder.filter((n) => known.has(n));
+  const newOnes = names.filter((n) => !userOrdered.includes(n)).sort();
+  return [...userOrdered, ...newOnes];
+}
+
+loadWsOrder();
+
 function snapshotDrafts() {
   for (const form of document.querySelectorAll('form[data-form-id]')) {
     const id = form.dataset.formId;
@@ -337,10 +369,11 @@ function renderWorkspacesView() {
 
 // PC overview = the prior renderWorkspacesView body. Each .ws-col is now
 // hyperlink-aware (the name h2 is an <a> to #workspaces/<name>) so users
-// can opt into focus mode without losing the at-a-glance grid.
+// can opt into focus mode without losing the at-a-glance grid. Order is
+// driven by orderedWorkspaces() so the user's drag-and-drop is respected.
 function renderDesktopOverview() {
   const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
-  const sortedNames = Object.keys(groups).sort();
+  const sortedNames = orderedWorkspaces(Object.keys(groups));
   const cols = sortedNames.map((w) => workspaceColHtml(w, groups[w])).join('');
 
   const globalProvider = lastData.globalProvider || '';
@@ -476,6 +509,85 @@ function bindOverviewHandlers() {
     sel.addEventListener('change', onProviderInlineChange);
   }
   setupCarousel();
+  setupDragReorder();
+}
+
+// ---------- PC drag-to-reorder ----------
+// Mobile: drag handles are display:none via CSS, so the handlers below are
+// no-ops there. Strategy:
+//   - dragstart on .ws-drag-handle stores the source workspace name
+//   - dragover on .ws-col allows drop; visual marker via .drop-target
+//   - drop on .ws-col reorders: insert source before/after the target
+//     depending on whether the cursor is left or right of the target's
+//     horizontal midpoint
+// HTML5 drag API does the heavy lifting (momentum, drag image, etc).
+function setupDragReorder() {
+  const grid = $('view').querySelector('.ws-grid');
+  if (!grid) return;
+  for (const col of grid.querySelectorAll('.ws-col')) {
+    col.addEventListener('dragover', onColDragOver);
+    col.addEventListener('dragleave', onColDragLeave);
+    col.addEventListener('drop', onColDrop);
+  }
+  for (const h of grid.querySelectorAll('.ws-drag-handle')) {
+    h.addEventListener('dragstart', onHandleDragStart);
+    h.addEventListener('dragend', onHandleDragEnd);
+  }
+}
+
+function onHandleDragStart(e) {
+  const col = e.target.closest('.ws-col');
+  if (!col) return;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', col.dataset.ws);
+  // Use the entire column as the drag preview, not just the handle icon.
+  // Offset slightly so the preview's top-left sits a bit below the cursor.
+  e.dataTransfer.setDragImage(col, Math.min(80, col.offsetWidth / 2), 20);
+  col.classList.add('dragging');
+}
+
+function onHandleDragEnd(e) {
+  e.target.closest('.ws-col')?.classList.remove('dragging');
+}
+
+function onColDragOver(e) {
+  // preventDefault is what enables dropping; without it the browser refuses
+  // to fire drop events.
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drop-target');
+}
+
+function onColDragLeave(e) {
+  e.currentTarget.classList.remove('drop-target');
+}
+
+function onColDrop(e) {
+  e.preventDefault();
+  const target = e.currentTarget;
+  target.classList.remove('drop-target');
+  const sourceName = e.dataTransfer.getData('text/plain');
+  const targetName = target.dataset.ws;
+  if (!sourceName || !targetName || sourceName === targetName) return;
+  const rect = target.getBoundingClientRect();
+  const insertBefore = e.clientX < rect.left + rect.width / 2;
+  reorderWorkspaceTo(sourceName, targetName, insertBefore);
+}
+
+function reorderWorkspaceTo(sourceName, targetName, insertBefore) {
+  // Build the full current order, splice source out, then splice back in
+  // at the target's position (before or after based on drop-edge).
+  const order = orderedWorkspaces(lastData.workspaces || []);
+  const srcIdx = order.indexOf(sourceName);
+  if (srcIdx < 0) return;
+  order.splice(srcIdx, 1);
+  const tgtIdx = order.indexOf(targetName);
+  if (tgtIdx < 0) return;
+  order.splice(insertBefore ? tgtIdx : tgtIdx + 1, 0, sourceName);
+  _wsOrder = order;
+  saveWsOrder();
+  showToast('success', `${sourceName} moved`, { ttl: 1500 });
+  render();
 }
 
 // Wire up the mobile carousel: each .ws-col is a scroll-snap target inside
@@ -613,15 +725,22 @@ function workspaceColHtml(name, data, opts = {}) {
     .map((p) => `<option value="${esc(p)}"${p === effective ? ' selected' : ''}>${esc(p)}</option>`)
     .join('');
 
-  // Overview: h2 wraps in a link so clicking it drills into detail.
+  // Overview: h2 wraps in a link so clicking it drills into detail; also
+  // gets a drag handle for PC drag-to-reorder.
   // Detail: plain h2 (we're already in detail; the back-link handles exit).
+  // No drag handle either — we're already focused on one workspace.
   const headerTitle = detail
     ? `<h2>${esc(name)}</h2>`
     : `<h2><a class="ws-name-link" href="#workspaces/${encodeURIComponent(name)}">${esc(name)}</a></h2>`;
 
+  const dragHandle = detail
+    ? ''
+    : `<span class="ws-drag-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">${ICONS.grip}</span>`;
+
   return `
     <div class="ws-col ${extraClass}" data-ws="${esc(name)}">
       <div class="ws-head">
+        ${dragHandle}
         ${headerTitle}
         <div class="ws-provider">
           <span class="ws-provider-label">as</span>
