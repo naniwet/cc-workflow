@@ -228,66 +228,108 @@ const carouselScroll = { left: 0 };                 // mobile carousel scrollLef
 // on every renderWorkspacesView so it's bound to the live DOM.
 let _carouselObserver = null;
 
-// PC drag-to-reorder state. Persisted as localStorage['ws-order'] —
-// per-browser, not synced to server. Workspaces not in the saved order
-// fall through to alphabetical at the end (covers freshly-created or
-// freshly-pulled workspaces). Removed workspaces are silently dropped.
-let _wsOrder = [];
+// PC row-based layout. Persisted as localStorage['ws-layout'] — a 2D
+// array of workspace names, one inner array per row. e.g.
+//     [["demo-repo", "test-repo", "ai-meeting"], ["chat-history-room"]]
+// gives a "3 on top, 1 on bottom" layout. Within a row, every card gets
+// an equal flex share, so the bottom card here would be full-width.
+// Per-browser; not synced to server.
+let _wsLayout = [];
+const WS_MAX_PER_ROW_MIN = 1, WS_MAX_PER_ROW_MAX = 8;
+let _wsMaxPerRow = 4;
 
-function loadWsOrder() {
+function _sanitizeLayout(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((row) => Array.isArray(row))
+    .map((row) => row.filter((n) => typeof n === 'string'))
+    .filter((row) => row.length > 0);
+}
+
+function loadWsLayout() {
   try {
-    const raw = JSON.parse(localStorage.getItem('ws-order'));
-    _wsOrder = Array.isArray(raw) ? raw.filter((n) => typeof n === 'string') : [];
-  } catch { _wsOrder = []; }
-}
-
-function saveWsOrder() {
+    _wsLayout = _sanitizeLayout(JSON.parse(localStorage.getItem('ws-layout')));
+    if (_wsLayout.length > 0) return;
+  } catch { /* fall through to migration */ }
+  // Migration: older sessions stored a flat order under "ws-order".
+  // Treat it as a single row so the user's prior reorder isn't lost.
   try {
-    localStorage.setItem('ws-order', JSON.stringify(_wsOrder));
-  } catch { /* private-mode / quota — silently skip; order is in-memory still */ }
+    const order = JSON.parse(localStorage.getItem('ws-order'));
+    if (Array.isArray(order) && order.length > 0) {
+      _wsLayout = [order.filter((n) => typeof n === 'string')];
+      saveWsLayout();
+      return;
+    }
+  } catch {}
+  _wsLayout = [];
 }
 
-// Apply the saved order: known names appear in user order, then any new
-// (unsaved) names sorted alphabetically at the end. Deterministic.
-function orderedWorkspaces(names) {
-  const known = new Set(names);
-  const userOrdered = _wsOrder.filter((n) => known.has(n));
-  const newOnes = names.filter((n) => !userOrdered.includes(n)).sort();
-  return [...userOrdered, ...newOnes];
-}
-
-// Grid column count (1-6), per-browser preference.
-let _wsCols = 4;
-const WS_COLS_MIN = 1, WS_COLS_MAX = 6;
-
-function loadWsCols() {
+function saveWsLayout() {
   try {
-    const v = parseInt(localStorage.getItem('ws-cols'), 10);
-    _wsCols = v >= WS_COLS_MIN && v <= WS_COLS_MAX ? v : 4;
-  } catch { _wsCols = 4; }
+    localStorage.setItem('ws-layout', JSON.stringify(_wsLayout));
+  } catch { /* private-mode / quota — silently skip */ }
 }
 
-function saveWsCols() {
-  try { localStorage.setItem('ws-cols', String(_wsCols)); } catch {}
-}
-
-// Set of workspace names marked "wide" (each spans 2 grid columns).
-let _wsWide = new Set();
-
-function loadWsWide() {
+function loadWsMaxPerRow() {
   try {
-    const arr = JSON.parse(localStorage.getItem('ws-wide'));
-    _wsWide = new Set(Array.isArray(arr) ? arr.filter((n) => typeof n === 'string') : []);
-  } catch { _wsWide = new Set(); }
+    let v = parseInt(localStorage.getItem('ws-max-per-row'), 10);
+    if (!(v >= WS_MAX_PER_ROW_MIN && v <= WS_MAX_PER_ROW_MAX)) {
+      // Migration: older sessions used "ws-cols" with a similar semantic.
+      v = parseInt(localStorage.getItem('ws-cols'), 10);
+    }
+    _wsMaxPerRow = v >= WS_MAX_PER_ROW_MIN && v <= WS_MAX_PER_ROW_MAX ? v : 4;
+  } catch { _wsMaxPerRow = 4; }
 }
 
-function saveWsWide() {
-  try { localStorage.setItem('ws-wide', JSON.stringify([..._wsWide])); } catch {}
+function saveWsMaxPerRow() {
+  try { localStorage.setItem('ws-max-per-row', String(_wsMaxPerRow)); } catch {}
 }
 
-loadWsOrder();
-loadWsCols();
-loadWsWide();
+// Build the effective layout for the current workspaces:
+//   - drop names no longer present (deleted workspaces)
+//   - append fresh names (newly-created since last save) to the last row,
+//     creating a new row when the last is at max-per-row
+//   - drop now-empty rows
+function effectiveLayout(allNames) {
+  const present = new Set(allNames);
+  const placed = new Set();
+  const layout = [];
+  for (const row of _wsLayout) {
+    const kept = row.filter((n) => present.has(n) && !placed.has(n));
+    if (kept.length) {
+      layout.push(kept);
+      for (const n of kept) placed.add(n);
+    }
+  }
+  const fresh = allNames.filter((n) => !placed.has(n)).sort();
+  for (const n of fresh) {
+    if (layout.length === 0 || layout[layout.length - 1].length >= _wsMaxPerRow) {
+      layout.push([n]);
+    } else {
+      layout[layout.length - 1].push(n);
+    }
+  }
+  return layout;
+}
+
+// Mutators — call save+render after.
+function _removeFromLayout(name) {
+  for (const row of _wsLayout) {
+    const i = row.indexOf(name);
+    if (i >= 0) { row.splice(i, 1); return; }
+  }
+}
+
+function _findLayoutCoord(name) {
+  for (let r = 0; r < _wsLayout.length; r++) {
+    const c = _wsLayout[r].indexOf(name);
+    if (c >= 0) return { row: r, col: c };
+  }
+  return null;
+}
+
+loadWsLayout();
+loadWsMaxPerRow();
 
 function snapshotDrafts() {
   for (const form of document.querySelectorAll('form[data-form-id]')) {
@@ -401,14 +443,15 @@ function renderWorkspacesView() {
   }
 }
 
-// PC overview = the prior renderWorkspacesView body. Each .ws-col is now
-// hyperlink-aware (the name h2 is an <a> to #workspaces/<name>) so users
-// can opt into focus mode without losing the at-a-glance grid. Order is
-// driven by orderedWorkspaces() so the user's drag-and-drop is respected.
+// PC overview = row-based layout. Each row is a flex container where
+// cards share width equally; drop a card on the gap above/below a row to
+// create a new row. The toolbar caps how many cards a single row can
+// hold, so dragging into a full row is rejected and the user is nudged
+// toward a row gap instead.
 function renderDesktopOverview() {
   const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
-  const sortedNames = orderedWorkspaces(Object.keys(groups));
-  const cols = sortedNames.map((w) => workspaceColHtml(w, groups[w])).join('');
+  const allNames = Object.keys(groups);
+  const layout = effectiveLayout(allNames);
 
   const globalProvider = lastData.globalProvider || '';
   const newWsProviderOptions = [
@@ -416,25 +459,38 @@ function renderDesktopOverview() {
     ...(lastData.providers || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`),
   ].join('');
 
-  // Toolbar: column-count picker (1-6). Inline style on .ws-grid applies
-  // user choice; existing @media rules in CSS are weaker (selector class)
-  // and stay only as a fallback for the no-JS / pre-render moment.
-  const colsBtns = [];
-  for (let n = WS_COLS_MIN; n <= WS_COLS_MAX; n++) {
-    const active = n === _wsCols;
-    colsBtns.push(
+  // Toolbar: max-per-row picker (1-8).
+  const maxBtns = [];
+  for (let n = WS_MAX_PER_ROW_MIN; n <= WS_MAX_PER_ROW_MAX; n++) {
+    const active = n === _wsMaxPerRow;
+    maxBtns.push(
       `<button class="ws-cols-btn${active ? ' active' : ''}" type="button"
-               data-cols="${n}" role="radio" aria-checked="${active}">${n}</button>`
+               data-max="${n}" role="radio" aria-checked="${active}">${n}</button>`
     );
   }
+
+  // Render: alternating row-gap + row. The trailing gap (after the last
+  // row) is a drop target for "create new row at the bottom".
+  const layoutHtml = layout.length === 0
+    ? ''
+    : layout.map((row, rowIdx) => {
+        const cells = row.map((n) =>
+          workspaceColHtml(n, groups[n] || { active: [], queued: [], recent: [] })
+        ).join('');
+        return `
+          <div class="ws-row-gap" data-gap-before="${rowIdx}" aria-hidden="true"></div>
+          <div class="ws-row" data-row-idx="${rowIdx}">${cells}</div>
+        `;
+      }).join('') + `<div class="ws-row-gap" data-gap-before="${layout.length}" aria-hidden="true"></div>`;
 
   $('view').innerHTML = `
     <h1>Workspaces</h1>
     <div class="ws-toolbar">
-      <span class="ws-toolbar-label muted">Layout</span>
-      <div class="ws-cols-toggle" role="radiogroup" aria-label="Grid columns">
-        ${colsBtns.join('')}
+      <span class="ws-toolbar-label muted">Max per row</span>
+      <div class="ws-cols-toggle" role="radiogroup" aria-label="Max workspaces per row">
+        ${maxBtns.join('')}
       </div>
+      <span class="ws-toolbar-hint muted">Drag a card between rows to split / merge rows.</span>
     </div>
     <details class="add-form" data-details-id="add-ws">
       <summary>New workspace</summary>
@@ -459,37 +515,28 @@ function renderDesktopOverview() {
         </p>
       </form>
     </details>
-    ${cols
-      ? `<div class="ws-grid" style="grid-template-columns: repeat(${_wsCols}, minmax(0, 1fr));">${cols}</div>`
+    ${layoutHtml
+      ? `<div class="ws-layout">${layoutHtml}</div>`
       : `<p class="muted">No workspaces yet. Use the form above or create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
   `;
 
   bindOverviewHandlers();
-  // Toolbar + per-card wide buttons. Re-bound on every render because
-  // innerHTML wipes prior listeners.
   for (const b of $('view').querySelectorAll('.ws-cols-btn')) {
-    b.addEventListener('click', onColsBtnClick);
+    b.addEventListener('click', onMaxPerRowBtnClick);
   }
-  for (const b of $('view').querySelectorAll('.ws-wide-toggle')) {
-    b.addEventListener('click', onWideToggleClick);
+  for (const gap of $('view').querySelectorAll('.ws-row-gap')) {
+    gap.addEventListener('dragover', onRowGapDragOver);
+    gap.addEventListener('dragleave', onRowGapDragLeave);
+    gap.addEventListener('drop', onRowGapDrop);
   }
 }
 
-// ---------- Layout toolbar handlers ----------
-function onColsBtnClick(e) {
-  const n = parseInt(e.currentTarget.dataset.cols, 10);
-  if (!(n >= WS_COLS_MIN && n <= WS_COLS_MAX) || n === _wsCols) return;
-  _wsCols = n;
-  saveWsCols();
-  render();
-}
-
-function onWideToggleClick(e) {
-  const name = e.currentTarget.dataset.ws;
-  if (!name) return;
-  if (_wsWide.has(name)) _wsWide.delete(name);
-  else _wsWide.add(name);
-  saveWsWide();
+// ---------- Layout toolbar handler ----------
+function onMaxPerRowBtnClick(e) {
+  const n = parseInt(e.currentTarget.dataset.max, 10);
+  if (!(n >= WS_MAX_PER_ROW_MIN && n <= WS_MAX_PER_ROW_MAX) || n === _wsMaxPerRow) return;
+  _wsMaxPerRow = n;
+  saveWsMaxPerRow();
   render();
 }
 
@@ -653,18 +700,79 @@ function onColDrop(e) {
 }
 
 function reorderWorkspaceTo(sourceName, targetName, insertBefore) {
-  // Build the full current order, splice source out, then splice back in
-  // at the target's position (before or after based on drop-edge).
-  const order = orderedWorkspaces(lastData.workspaces || []);
-  const srcIdx = order.indexOf(sourceName);
-  if (srcIdx < 0) return;
-  order.splice(srcIdx, 1);
-  const tgtIdx = order.indexOf(targetName);
-  if (tgtIdx < 0) return;
-  order.splice(insertBefore ? tgtIdx : tgtIdx + 1, 0, sourceName);
-  _wsOrder = order;
-  saveWsOrder();
-  showToast('success', `${sourceName} moved`, { ttl: 1500 });
+  // Layout-aware: target card lives in some row; insert source into
+  // that row at the right position. If source comes from a different
+  // row and target's row is at max-per-row, reject and tell the user.
+  const targetCoord = _findLayoutCoord(targetName);
+  if (!targetCoord) return;
+  const sourceCoord = _findLayoutCoord(sourceName);
+
+  if (
+    sourceCoord &&
+    sourceCoord.row !== targetCoord.row &&
+    _wsLayout[targetCoord.row].length >= _wsMaxPerRow
+  ) {
+    showToast(
+      'warning',
+      `Row already at max ${_wsMaxPerRow}. Drop to a row gap (between rows) to create a new row instead.`,
+      { ttl: 3000 },
+    );
+    return;
+  }
+
+  _removeFromLayout(sourceName);
+  // Recompute target position — splicing source out might have shifted
+  // indices when source was in the same row.
+  const fresh = _findLayoutCoord(targetName);
+  if (!fresh) return;
+  const insertCol = insertBefore ? fresh.col : fresh.col + 1;
+  _wsLayout[fresh.row].splice(insertCol, 0, sourceName);
+  // Drop any rows we just emptied.
+  _wsLayout = _wsLayout.filter((row) => row.length > 0);
+  saveWsLayout();
+  render();
+}
+
+// ---------- Row-gap drop zone (create a new row at this position) ----------
+function onRowGapDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drop-target');
+}
+
+function onRowGapDragLeave(e) {
+  e.currentTarget.classList.remove('drop-target');
+}
+
+function onRowGapDrop(e) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drop-target');
+  const sourceName = e.dataTransfer.getData('text/plain');
+  if (!sourceName) return;
+  const gapBefore = parseInt(e.currentTarget.dataset.gapBefore, 10);
+  if (isNaN(gapBefore)) return;
+
+  // Reject no-op: if source is alone in its row AND we're dropping into
+  // a gap adjacent to that row, the result would be identical.
+  const src = _findLayoutCoord(sourceName);
+  if (
+    src && _wsLayout[src.row].length === 1 &&
+    (gapBefore === src.row || gapBefore === src.row + 1)
+  ) {
+    return;
+  }
+
+  _removeFromLayout(sourceName);
+  // Recompute insert position — removal may have shifted things if the
+  // source's row collapsed.
+  let insertAt = gapBefore;
+  if (src && src.row < gapBefore && _wsLayout.length < gapBefore + 1) {
+    // source's row collapsed → indices shift left
+    insertAt = Math.max(0, gapBefore - 1);
+  }
+  _wsLayout.splice(insertAt, 0, [sourceName]);
+  _wsLayout = _wsLayout.filter((row) => row.length > 0);
+  saveWsLayout();
   render();
 }
 
@@ -804,33 +912,23 @@ function workspaceColHtml(name, data, opts = {}) {
     .join('');
 
   // Overview: h2 wraps in a link so clicking it drills into detail; also
-  // gets a drag handle for PC drag-to-reorder + a width-toggle button.
+  // gets a drag handle for PC drag-to-reorder.
   // Detail: plain h2 (we're already in detail; the back-link handles exit).
-  // No drag handle / wide toggle either — we're already focused on one ws.
-  const isWide = _wsWide.has(name);
-  const wideClass = isWide && !detail ? ' ws-col-wide' : '';
-
+  // No drag handle either — we're focused on one workspace.
   const headerTitle = detail
     ? `<h2>${esc(name)}</h2>`
     : `<h2><a class="ws-name-link" href="#workspaces/${encodeURIComponent(name)}">${esc(name)}</a></h2>`;
 
   const dragHandle = detail
     ? ''
-    : `<span class="ws-drag-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">${ICONS.grip}</span>`;
-
-  const wideToggle = detail
-    ? ''
-    : `<button class="ws-wide-toggle${isWide ? ' is-wide' : ''}" type="button"
-               data-ws="${esc(name)}" title="${isWide ? 'Shrink to 1×' : 'Expand to 2× wide'}"
-               aria-label="Toggle width">${isWide ? ICONS.minimize : ICONS.maximize}</button>`;
+    : `<span class="ws-drag-handle" draggable="true" title="Drag to reorder / move to another row" aria-label="Drag to reorder">${ICONS.grip}</span>`;
 
   return `
-    <div class="ws-col ${extraClass}${wideClass}" data-ws="${esc(name)}">
+    <div class="ws-col ${extraClass}" data-ws="${esc(name)}">
       <div class="ws-head">
         <div class="ws-head-row">
           ${dragHandle}
           ${headerTitle}
-          ${wideToggle}
         </div>
         <div class="ws-provider">
           <span class="ws-provider-label">as</span>

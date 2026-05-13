@@ -155,7 +155,11 @@ a:hover { color: var(--accent-blue-hover); }
 main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
 
 /* ============================================================================
- *  Workspaces grid
+ *  Workspaces grid — used ONLY by the mobile carousel detail view now.
+ *  PC overview uses .ws-layout > .ws-row (row-based, defined further down).
+ *  The desktop / tablet @media rules below are dead in practice (PC takes
+ *  the .ws-layout path, mobile takes carousel) but kept as harmless
+ *  fallbacks for the brief pre-JS render moment.
  * ============================================================================ */
 .ws-grid {
   display: grid;
@@ -231,33 +235,37 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
 .ws-drag-handle:hover { color: var(--text-primary); background: var(--bg-elevated); }
 .ws-drag-handle:active { cursor: grabbing; }
 
-/* Per-card width toggle — "expand to span 2 cols / shrink back". Sits
-   at the right of .ws-head-row (pushed by h2's flex:1). */
-.ws-wide-toggle {
-  display: inline-flex;
-  align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-tertiary);
-  padding: var(--space-1);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
-  flex-shrink: 0;
-  font: inherit;
+/* Row-based PC overview layout. Each row is its own flex container so
+   cards share the row's width equally; row count is implicit (= # of
+   inner arrays in _wsLayout). */
+.ws-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0;                                /* rows touch row-gap drop zones */
 }
-.ws-wide-toggle svg { width: 14px; height: 14px; display: block; }
-.ws-wide-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); border-color: var(--border-subtle); }
-.ws-wide-toggle.is-wide {
-  color: var(--accent-blue);
-  border-color: rgba(47, 126, 255, 0.30);
-  background: var(--accent-blue-faint);
+.ws-row {
+  display: flex;
+  gap: var(--space-3);
 }
-.ws-wide-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
+.ws-row .ws-col {
+  flex: 1 1 0;
+  min-width: 0;
+}
 
-/* Apply 2-col span when a workspace is marked "wide". `grid-column: span 2`
-   gracefully clamps to grid width if the grid is only 1 col. */
-.ws-col-wide { grid-column: span 2; }
+/* Slim drop zone between rows. Expands + highlights when a card is
+   dragged over it. Dropping here splits/creates a row. */
+.ws-row-gap {
+  height: 8px;
+  margin: 0;
+  border-radius: var(--radius-md);
+  transition: height var(--t-base), background var(--t-base), border-color var(--t-base);
+  border: 2px dashed transparent;
+}
+.ws-row-gap.drop-target {
+  height: 56px;
+  background: var(--accent-blue-faint);
+  border-color: var(--accent-blue);
+}
 
 /* Visual state during drag */
 .ws-col.dragging { opacity: 0.35; }
@@ -926,10 +934,9 @@ pre {
   /* Detail page <pre>: stay readable on narrow viewport */
   pre { font-size: var(--text-sm); padding: var(--space-3); }
 
-  /* Drag-to-reorder + wide-toggle + layout toolbar are PC-only —
+  /* Drag-to-reorder + layout toolbar are PC-only —
      mobile uses overview-card-list which doesn't have a grid to rearrange. */
   .ws-drag-handle,
-  .ws-wide-toggle,
   .ws-toolbar { display: none; }
 
   /* ---------------------------------------------------------------
