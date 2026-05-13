@@ -1204,6 +1204,13 @@ function runRowHtml(r) {
   // the row navigates to the full-output detail page.
   const prompt = r.prompt || '';
   const output = r.output_preview || '';
+  // Relative "Nm ago" with absolute timestamp on hover — matches the
+  // pattern used in loopRowHtml ("last 2m ago" + title=absolute).
+  const startedRel = r.started_at ? timeAgo(r.started_at) : '';
+  const startedAbs = r.started_at
+    ? new Date(r.started_at * 1000).toLocaleString()
+    : '';
+
   return `
     <a class="row run-link" href="#runs/${esc(r.id || '')}" title="Click for full output">
       <div class="row-head">
@@ -1212,6 +1219,7 @@ function runRowHtml(r) {
         ${r.elapsed_s != null ? `· ${esc(r.elapsed_s)}s` : ''}
         ${r.exit_code != null && r.exit_code !== 0 ? `· exit ${esc(r.exit_code)}` : ''}
         ${r.source ? `· ${esc(r.source)}` : ''}
+        ${r.started_at ? `· <span class="row-time" title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
       </div>
       ${prompt ? `<div class="row-prompt">▸ ${esc(prompt)}</div>` : ''}
       ${output ? `<div class="row-output">↳ ${esc(output)}</div>` : ''}

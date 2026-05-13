@@ -524,6 +524,8 @@ body.is-dragging .ws-col:not(.dragging) {
 }
 .row-prompt { color: var(--text-secondary); }      /* you said — dim gray */
 .row-output { color: var(--accent-cyan); }         /* claude said — cyan (info), NOT green (status) */
+.row-time   { cursor: help; }                      /* hover for absolute timestamp */
+.row-time:hover { text-decoration: underline dotted; }
 
 /* ============================================================================
  *  Pending tool-approval block — appears after a "running" run row when

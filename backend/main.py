@@ -49,6 +49,42 @@ app = FastAPI(title="cc-workflow", version="0.1.0")
 @app.on_event("startup")
 def _on_startup() -> None:
     db.init()
+    _verify_agent_run_capabilities()
+
+
+def _verify_agent_run_capabilities() -> None:
+    """Sanity-check the agent-run binary at startup. The single most common
+    deployment trap is forgetting to reinstall /usr/local/bin/agent-run
+    after a `git pull` — the backend then passes flags the old binary
+    doesn't understand, every run dies with exit 64. Log a loud warning
+    so the journal makes the cause obvious instead of just the symptom.
+    """
+    import subprocess
+    import sys
+
+    try:
+        result = subprocess.run(
+            [str(config.AGENT_RUN), "--help"],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(
+            f"WARNING: could not invoke agent-run at {config.AGENT_RUN}: {e}. "
+            f"Runs will fail until this is fixed.",
+            file=sys.stderr, flush=True,
+        )
+        return
+
+    help_text = (result.stdout or "") + (result.stderr or "")
+    required = ("--provider", "--permission-mode")
+    missing = [flag for flag in required if flag not in help_text]
+    if missing:
+        print(
+            f"WARNING: agent-run at {config.AGENT_RUN} is missing flags "
+            f"{missing!r}. The binary is stale — pull the repo + re-run: "
+            f"sudo install -m 755 {config.REPO_ROOT}/agent-run.sh /usr/local/bin/agent-run",
+            file=sys.stderr, flush=True,
+        )
 
 
 class RunRequest(BaseModel):
