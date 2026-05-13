@@ -49,16 +49,113 @@ def _validate_name(name: str) -> str:
 
 
 def list_jobs() -> list[dict]:
-    """All jobs under ~/.cc-state/jobs/*.json, sorted by name."""
+    """All jobs under ~/.cc-state/jobs/*.json, sorted by name.
+
+    Each job dict is enriched with its `schedule`, `workspace`, `prompt`,
+    and `engine` parsed from /etc/cron.d/cc-loops — these aren't stored in
+    jobs.json (which is runtime state only) but the UI needs them to
+    answer "what does this cron actually do?". cron file is the single
+    source of truth; jobs.json holds only the timing/counter fields.
+    """
     if not config.JOBS_DIR.exists():
         return []
+    cron_meta = _parse_cc_loops()
     out: list[dict] = []
     for f in sorted(config.JOBS_DIR.glob("*.json")):
         try:
-            out.append(json.loads(f.read_text(encoding="utf-8")))
+            job = json.loads(f.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             # Tolerate mid-write: agent-run uses mktemp+mv, but be defensive.
             continue
+        meta = cron_meta.get(job.get("name", ""))
+        if meta:
+            # Cron file is authoritative — override any stale fields in jobs.json.
+            job.update(meta)
+        out.append(job)
+    return out
+
+
+# ---------- cron file parser (read-side enrichment for list_jobs) ----------
+
+# Match a single marker-bounded block in /etc/cron.d/cc-loops. The cron line
+# itself is the first non-# line after BEGIN; we keep capturing the comment
+# lines too just so the parser is tolerant of future "# created @ ..." style
+# annotations.
+_BLOCK_RE = re.compile(
+    r"# === BEGIN cc-job: (?P<name>[A-Za-z0-9._-]+) ===\n"
+    r"(?:#[^\n]*\n)*"                                   # zero or more # comment lines
+    r"(?P<line>[^#\n][^\n]*)\n"                         # the actual cron line
+    r"# === END cc-job: (?P=name) ===",
+    re.MULTILINE,
+)
+
+
+def _parse_cron_line(line: str) -> Optional[dict]:
+    """Pull schedule + workspace + prompt + engine out of a cc-loops cron line.
+
+    Expected shape (matches add_cron_loop()'s writer):
+      <m> <h> <dom> <mon> <dow> root <agent-run-path> --engine=<X> \
+      <ws> <prompt> <name> --source cron --job-name <name>
+
+    Where workspace, prompt, and name are shlex-quoted by the writer when
+    they contain shell metacharacters. We use shlex.split() to undo that.
+    """
+    parts = line.split(None, 5)                         # 5 sched fields + the rest
+    if len(parts) < 6:
+        return None
+    schedule = " ".join(parts[:5])
+    try:
+        tokens = shlex.split(parts[5])
+    except ValueError:
+        return None
+    if len(tokens) < 6 or tokens[0] != "root":
+        return None
+
+    # Walk tokens after the agent-run path. Collect positionals; pick out
+    # the engine value from either --engine=X or --engine X form.
+    engine = "claude"
+    positionals: list[str] = []
+    i = 2                                               # skip 'root' + agent-run path
+    while i < len(tokens):
+        t = tokens[i]
+        if t.startswith("--engine="):
+            engine = t[len("--engine="):]
+        elif t == "--engine":
+            i += 1
+            if i < len(tokens):
+                engine = tokens[i]
+        elif t.startswith("--"):
+            # Any other flag — assume `--flag value` and skip the value.
+            if "=" not in t:
+                i += 1
+        else:
+            positionals.append(t)
+        i += 1
+
+    if len(positionals) < 3:
+        return None
+    return {
+        "schedule": schedule,
+        "workspace": positionals[0],
+        "prompt": positionals[1],
+        "engine": engine,
+    }
+
+
+def _parse_cc_loops() -> dict:
+    """Return {name: {schedule, workspace, prompt, engine}} for every entry
+    in /etc/cron.d/cc-loops. {} when the file is missing."""
+    if not CC_LOOPS_PATH.exists():
+        return {}
+    try:
+        content = CC_LOOPS_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    out: dict = {}
+    for m in _BLOCK_RE.finditer(content):
+        parsed = _parse_cron_line(m.group("line"))
+        if parsed:
+            out[m.group("name")] = parsed
     return out
 
 

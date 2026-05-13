@@ -903,28 +903,52 @@ function renderTasksView() {
 
 function loopRowHtml(loop) {
   const enabled = !!loop.enabled;
-  const lastRun = loop.last_run_at
-    ? new Date(loop.last_run_at * 1000).toLocaleString()
-    : '—';
   const last_exit = loop.last_exit != null ? loop.last_exit : '—';
   const stale = (loop.consecutive_errors || 0) >= 3;
+
+  // Use relative time for "last" with absolute as a tooltip — fits the
+  // chat-bubble style of compact-first, click-for-details.
+  const lastRel = loop.last_run_at ? timeAgo(loop.last_run_at) : '—';
+  const lastAbs = loop.last_run_at
+    ? new Date(loop.last_run_at * 1000).toLocaleString()
+    : '';
+
   const enabledTag = enabled
     ? `<span class="tag tag-done">${ICONS.done}enabled</span>`
     : `<span class="tag tag-failed">${ICONS.paused}paused</span>`;
+
+  // Static fields parsed from /etc/cron.d/cc-loops by cron_state.list_jobs.
+  // For corrupt / missing entries, fall back to "—" rather than hiding the
+  // whole row (something is better than nothing for debugging).
+  const schedule = loop.schedule || '—';
+  const workspace = loop.workspace || '—';
+  const engine = loop.engine || '';
+  const prompt = loop.prompt || '';
+
   return `
-    <div class="row">
-      <span>
-        <code>${esc(loop.name)}</code>
+    <div class="row loop-row">
+      <div class="loop-head">
+        <code class="loop-name">${esc(loop.name)}</code>
         ${enabledTag}
         ${stale ? `<span class="tag tag-failed">${ICONS.warning}stale ${esc(loop.consecutive_errors)}</span>` : ''}
-        · last ${esc(lastRun)} · runs ${esc(loop.total_runs || 0)} · exit ${esc(last_exit)}
-      </span>
-      <span>
-        ${enabled
-          ? `<button class="secondary pause-btn" data-name="${esc(loop.name)}">Pause</button>`
-          : `<button class="secondary resume-btn" data-name="${esc(loop.name)}">Resume</button>`}
-        <button class="danger delete-btn" data-name="${esc(loop.name)}">Delete</button>
-      </span>
+        <span class="loop-actions">
+          ${enabled
+            ? `<button class="secondary pause-btn" data-name="${esc(loop.name)}">Pause</button>`
+            : `<button class="secondary resume-btn" data-name="${esc(loop.name)}">Resume</button>`}
+          <button class="danger delete-btn" data-name="${esc(loop.name)}">Delete</button>
+        </span>
+      </div>
+      <div class="loop-spec">
+        <code>${esc(schedule)}</code>
+        · <code>${esc(workspace)}</code>
+        ${engine ? ` · <span class="muted">${esc(engine)}</span>` : ''}
+      </div>
+      ${prompt ? `<div class="loop-prompt">▸ ${esc(prompt)}</div>` : ''}
+      <div class="loop-stats">
+        <span title="${esc(lastAbs)}">last ${esc(lastRel)}</span>
+        · runs ${esc(loop.total_runs || 0)}
+        · exit ${esc(last_exit)}
+      </div>
     </div>
   `;
 }

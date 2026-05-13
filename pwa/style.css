@@ -558,11 +558,60 @@ pre {
   color: var(--text-primary);
 }
 
-/* Tasks-tab loop rows — slightly different rhythm from chat-bubble timeline */
+/* Tasks-tab loop rows — multi-line "card" style so each cron is
+   self-explanatory at a glance (name + status + actions + schedule +
+   workspace + engine + prompt preview + stats). */
 .task-list { display: flex; flex-direction: column; gap: var(--space-2); }
-.task-list .row { font-size: var(--text-sm); }
-.task-list .row > span:last-child { display: flex; gap: var(--space-2); flex-shrink: 0; }
-.task-list .row code { color: var(--text-primary); }
+
+.loop-row {
+  flex-direction: column !important;     /* override .row's row-flex */
+  align-items: stretch !important;
+  gap: var(--space-2) !important;
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+}
+.loop-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.loop-name {
+  color: var(--text-primary) !important;  /* override .row code's accent-blue */
+  font-size: var(--text-md);
+}
+.loop-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.loop-actions button { min-height: auto; padding: var(--space-1) var(--space-3); font-size: var(--text-sm); }
+
+.loop-spec {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+.loop-spec code { color: var(--accent-blue); font-size: var(--text-sm); }
+
+.loop-prompt {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  line-height: var(--lh-normal);
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--border-strong);
+  background: var(--bg-canvas);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.loop-stats {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
 
 /* ============================================================================
  *  Workspace name link — clicking the h2 in PC overview drills into the
