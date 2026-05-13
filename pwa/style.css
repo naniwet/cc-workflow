@@ -694,4 +694,58 @@ pre {
 
   /* Detail page <pre>: stay readable on narrow viewport */
   pre { font-size: var(--text-sm); padding: var(--space-3); }
+
+  /* ---------------------------------------------------------------
+   *  Add-form on mobile: open state becomes a bottom-sheet overlay
+   *  rather than expanding inline. Inline expansion would push the
+   *  workspace carousel below the fold, defeating the carousel's
+   *  whole purpose. Sheet sits above bottom-nav, takes up to 70vh,
+   *  scrolls internally if the form (e.g. "New cron loop") is tall.
+   *  Summary doubles as the sheet header — its leading "+" swaps
+   *  to a "✕" close indicator when open. CSS-only, no JS needed
+   *  because <details> already handles the open/close click target.
+   * --------------------------------------------------------------- */
+  .add-form[open] {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    z-index: 50;
+    margin: 0;
+    max-height: 70vh;
+    overflow-y: auto;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-bottom: none;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    box-shadow: var(--shadow-3);
+  }
+  .add-form[open] > summary {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-elevated);
+    border: none;
+    border-radius: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: var(--text-md);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  /* Swap the "+ " prefix for a "✕" suffix to signal "tap to close" */
+  .add-form[open] > summary::before { content: ''; }
+  .add-form[open] > summary::after  { content: '✕'; color: var(--text-tertiary); font-size: var(--text-md); }
+
+  /* The inner <form> is now the sheet body — no double border/padding */
+  .add-form[open] form {
+    border: none;
+    background: transparent;
+    margin: 0;
+    padding: var(--space-4);
+    border-radius: 0;
+  }
 }
