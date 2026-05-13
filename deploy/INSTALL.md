@@ -46,14 +46,30 @@ provider = "deepseek"
 # when a run's reply exceeds Feishu's 4000-char text-message cap. Optional;
 # if unset, Feishu just gets "(truncated)" with no link.
 pwa_base_url = "http://<your-server-ip-or-domain>"
-
-# HTTP basic auth (browser pops the password prompt on first /workspaces call).
-[basic_auth]
-username = "you"
-password = "<long-random-string>"
 ```
 
-Create `/root/.cc-workflow/secrets.toml` (only if you use Feishu):
+Create `/root/.cc-workflow/secrets.toml`:
+
+```toml
+# Login credentials. POST /auth/login validates against these; on success
+# the backend sets an HMAC-signed 30-day session cookie (ccw_session).
+# Generate a long random password with: openssl rand -hex 24
+[ui]
+username = "you"
+password = "<long-random-string>"
+
+# (Feishu section — see step 2.5 below if you use the Feishu adapter.)
+```
+
+The session HMAC key is auto-generated on first startup as
+`~/.cc-workflow/.session-secret` (32 random bytes, chmod 600). You don't
+need to create it manually; it persists across backend restarts so signed
+cookies keep working. If you want to invalidate all existing sessions
+(e.g. you suspect the key leaked), delete that file — the next startup
+generates a fresh one and every browser falls back to the login page.
+
+If you use Feishu, **append** to the same `/root/.cc-workflow/secrets.toml`
+(keep the `[ui]` block above):
 
 ```toml
 [feishu]

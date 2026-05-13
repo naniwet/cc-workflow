@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0b0e">
+<link rel="icon" type="image/svg+xml" href="/pwa/icon.svg">
+<link rel="stylesheet" href="/pwa/style.css">
+<title>cc-workflow · sign in</title>
+<style>
+  /* Login screen sits centred on a stripped-down body — no topbar, no
+     bottom-nav. Reuse the design tokens from style.css. */
+  body { display: grid; place-items: center; min-height: 100vh; padding: var(--space-4); }
+  .login-card {
+    width: min(380px, 100%);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-2);
+    padding: var(--space-5);
+  }
+  .login-brand {
+    font-size: var(--text-h3);
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 var(--space-1);
+  }
+  .login-sub { color: var(--text-tertiary); font-size: var(--text-sm); margin: 0 0 var(--space-4); }
+  .login-card form { display: flex; flex-direction: column; gap: var(--space-3); }
+  .login-card label { display: block; }
+  .login-card label > span { display: block; font-size: var(--text-sm); color: var(--text-secondary); margin-bottom: var(--space-1); }
+  .login-card button[type="submit"] { width: 100%; margin-top: var(--space-2); padding: var(--space-3); }
+  .login-error {
+    margin-top: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: rgba(239, 68, 68, 0.10);
+    border: 1px solid rgba(239, 68, 68, 0.30);
+    border-radius: var(--radius-sm);
+    color: var(--accent-red);
+    font-size: var(--text-sm);
+  }
+</style>
+</head>
+<body>
+  <div class="login-card">
+    <h1 class="login-brand">cc-workflow</h1>
+    <p class="login-sub">Sign in to continue</p>
+    <form id="login-form" autocomplete="on">
+      <label>
+        <span>Username</span>
+        <input type="text" name="username" autocomplete="username" required autofocus
+               autocapitalize="off" autocorrect="off" spellcheck="false">
+      </label>
+      <label>
+        <span>Password</span>
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit">Sign in</button>
+      <div class="login-error hidden" id="login-error"></div>
+    </form>
+  </div>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const errBox = document.getElementById('login-error');
+    const submitBtn = form.querySelector('button[type="submit"]');
+
+    function showError(msg) {
+      errBox.textContent = msg;
+      errBox.classList.remove('hidden');
+    }
+    function clearError() {
+      errBox.classList.add('hidden');
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearError();
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in…';
+      try {
+        const fd = Object.fromEntries(new FormData(form).entries());
+        const r = await fetch('/auth/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: fd.username, password: fd.password }),
+        });
+        if (r.ok) {
+          // Honor ?next=… so the user lands back where they came from.
+          // Same-origin only — strip anything that looks external.
+          let next = new URLSearchParams(location.search).get('next') || '/pwa/';
+          if (!next.startsWith('/') || next.startsWith('//')) next = '/pwa/';
+          location.href = next;
+          return;
+        }
+        let msg = `Sign in failed (${r.status})`;
+        try {
+          const body = await r.json();
+          msg = body?.detail?.error || body?.detail || msg;
+        } catch {}
+        showError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      } catch (err) {
+        showError(`Network error: ${err.message}`);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign in';
+      }
+    });
+  </script>
+</body>
+</html>

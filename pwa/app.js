@@ -134,6 +134,14 @@ if ('serviceWorker' in navigator) {
 // ---------- API + error banner ----------
 async function api(path, opts = {}) {
   const r = await fetch(path, { credentials: 'same-origin', ...opts });
+  // Session expired or never logged in → jump to login. We preserve the
+  // current location in ?next= so the form sends the user back here on
+  // success.
+  if (r.status === 401 && !path.startsWith('/auth/')) {
+    const next = encodeURIComponent(location.pathname + location.search + location.hash);
+    location.href = `/pwa/login.html?next=${next}`;
+    throw new Error('not authenticated; redirecting to login');
+  }
   if (!r.ok) {
     // Pull the most informative bit out of the JSON detail so the banner
     // tells you WHY the call failed — prefer human-readable strings (raw

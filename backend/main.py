@@ -2,27 +2,32 @@
 
 Routes:
   GET    /healthz                              PUBLIC
-  GET    /                                     basic   (Phase 1 simple page)
-  POST   /run                                  basic
-  GET    /runs/{task_id}                       basic
-  GET    /sessions                             basic
-  GET    /workspaces                           basic   (P0-6b)
-  POST   /workspaces                           basic   (P0-6c — new)
-  GET    /loops                                basic
-  POST   /loops                                basic   (P0-6c — add cron)
-  DELETE /loops/{name}                         basic   (P0-6c — delete cron)
-  POST   /loops/{name}/pause                   basic
-  POST   /loops/{name}/resume                  basic
-  POST   /cron/parse-nl                        basic   (P0-6c — NL → cron via LLM)
-  GET    /approvals/pending                    basic   (PWA reads pending hook approvals)
-  POST   /approvals/{id}/decision              basic   (PWA approves/denies a tool call)
+  POST   /auth/login                           PUBLIC (sets session cookie)
+  POST   /auth/logout                          PUBLIC (clears session cookie)
+  GET    /auth/me                              session   (returns current username)
+  GET    /                                     session   (Phase 1 simple page)
+  POST   /run                                  session
+  GET    /runs/{task_id}                       session
+  GET    /sessions                             session
+  GET    /workspaces                           session
+  POST   /workspaces                           session
+  GET    /loops                                session
+  POST   /loops                                session
+  DELETE /loops/{name}                         session
+  POST   /loops/{name}/pause                   session
+  POST   /loops/{name}/resume                  session
+  POST   /cron/parse-nl                        session
+  GET    /approvals/pending                    session
+  POST   /approvals/{id}/decision              session
   POST   /approvals/internal/pending           localhost-only (claude hook creates entry)
   GET    /approvals/internal/{id}/wait         localhost-only (claude hook long-polls)
-  POST   /im/feishu/webhook                    Feishu signature (NOT basic)
-  POST   /im/feishu/card_callback              Feishu signature (NOT basic) — P0-5d
-  /pwa/*                                       static, unprotected layer
+  POST   /im/feishu/webhook                    Feishu signature (NOT session)
+  POST   /im/feishu/card_callback              Feishu signature (NOT session) — P0-5d
+  /pwa/*                                       static, unprotected layer (login.html lives here)
 
-basic auth via backend/auth.py. CSRF + /csrf endpoint stay Phase 3.
+Auth: HMAC-signed session cookie set by POST /auth/login. Replaced the
+Phase 1 HTTP Basic auth in May 2026 because in-app / mobile browsers
+(Quark, WeChat, etc.) handled the WWW-Authenticate dialog inconsistently.
 """
 from __future__ import annotations
 
@@ -34,14 +39,14 @@ import re
 import subprocess
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import approvals, auth, config, cron_state, db, im_feishu, llm, runner, ws_settings
 
-PROTECT = [Depends(auth.require_basic_auth)]
+PROTECT = [Depends(auth.require_user)]
 
 app = FastAPI(title="cc-workflow", version="0.1.0")
 
@@ -101,6 +106,46 @@ class RunRequest(BaseModel):
 @app.get("/healthz")  # intentionally NOT protected (monitoring / liveness)
 def healthz() -> dict:
     return {"ok": True}
+
+
+# ---------- Auth (session cookie) ----------
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+@app.post("/auth/login")
+def auth_login(req: LoginRequest, request: Request, response: Response) -> dict:
+    if not auth.credentials_configured():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "login credentials not configured — "
+                         "add [ui] username + password to ~/.cc-workflow/secrets.toml",
+            },
+        )
+    if not auth.credentials_valid(req.username, req.password):
+        raise HTTPException(
+            status_code=401, detail={"error": "invalid username or password"}
+        )
+    auth.set_session_cookie(response, req.username, secure=auth.request_is_https(request))
+    return {"ok": True, "username": req.username}
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response) -> dict:
+    auth.clear_session_cookie(response)
+    return {"ok": True}
+
+
+@app.get("/auth/me", dependencies=PROTECT)
+def auth_me(request: Request) -> dict:
+    """Return the username encoded in the current session cookie. Used by
+    the PWA to confirm "still logged in" without making a heavier API call."""
+    user = auth.verify_cookie(request.cookies.get(auth.COOKIE_NAME, ""))
+    return {"username": user}
 
 
 @app.post("/run", dependencies=PROTECT)
