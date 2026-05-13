@@ -200,6 +200,11 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
   color: var(--text-tertiary);
 }
 .ws-provider-label { color: var(--text-tertiary); user-select: none; }
+.ws-engine {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  margin-left: var(--space-1);
+}
 .provider-inline {
   width: auto;
   padding: 2px var(--space-2);

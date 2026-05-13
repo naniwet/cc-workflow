@@ -356,12 +356,21 @@ function renderDesktopOverview() {
       <form data-form-id="new-ws">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
           placeholder="repo-name (alphanum / . _ -)" required></label>
-        <label>provider <select name="provider">${newWsProviderOptions}</select></label>
+        <div class="form-row">
+          <label>provider <select name="provider">${newWsProviderOptions}</select></label>
+          <label>engine
+            <select name="engine">
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+            </select>
+          </label>
+        </div>
         <button type="submit">Create</button>
         <p class="muted" style="font-size:11px;margin:0">
           Creates <code>~/workspaces/&lt;name&gt;/</code> with <code>git init</code>
-          + empty README + first commit. Provider can be switched anytime via the
-          column header.
+          + empty README + first commit. <strong>Engine is locked once the
+          workspace is created</strong> (to change, delete and recreate).
+          Provider can be switched anytime via the column header.
         </p>
       </form>
     </details>
@@ -391,13 +400,14 @@ function renderMobileOverview() {
     const last = all[0];
     const wsProvider =
       lastData.wsSettings[name]?.provider || lastData.globalProvider || '';
+    const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
     const promptSnippet = last?.prompt ? last.prompt.slice(0, 50) : '';
     const promptOverflow = last?.prompt && last.prompt.length > 50 ? '…' : '';
     return `
       <a class="ws-card" href="#workspaces/${encodeURIComponent(name)}">
         <div class="ws-card-head">
           <h3>${esc(name)}</h3>
-          <span class="ws-card-provider">${esc(wsProvider) || '—'}</span>
+          <span class="ws-card-provider">${esc(wsProvider) || '—'} · ${esc(wsEngine)}</span>
         </div>
         ${last
           ? `<div class="ws-card-meta">
@@ -429,8 +439,19 @@ function renderMobileOverview() {
       <form data-form-id="new-ws">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
           placeholder="repo-name (alphanum / . _ -)" required></label>
-        <label>provider <select name="provider">${newWsProviderOptions}</select></label>
+        <div class="form-row">
+          <label>provider <select name="provider">${newWsProviderOptions}</select></label>
+          <label>engine
+            <select name="engine">
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+            </select>
+          </label>
+        </div>
         <button type="submit">Create</button>
+        <p class="muted" style="font-size:11px;margin:0">
+          Engine is locked once created. To switch, delete and recreate.
+        </p>
       </form>
     </details>
     ${cards
@@ -527,6 +548,10 @@ async function onAddWorkspace(e) {
   // Empty string from the "(use global default)" option → send null so the
   // backend skips writing a per-workspace override into workspaces.json.
   const provider = (form.elements.provider?.value || '').trim() || null;
+  // Engine is required at creation (locked thereafter). Backend defaults
+  // to "claude" if the field is omitted; we send the selected value to be
+  // explicit. The select always has a value (claude is the first option).
+  const engine = (form.elements.engine?.value || 'claude').trim();
   if (!name) return;
   const btn = form.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = 'Creating…';
@@ -534,7 +559,7 @@ async function onAddWorkspace(e) {
     await api('/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, provider }),
+      body: JSON.stringify({ name, provider, engine }),
     });
     form.reset();
     clearDraft('new-ws');
@@ -580,6 +605,7 @@ function workspaceColHtml(name, data, opts = {}) {
     : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
+  const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
   const providers = lastData.providers || [];
   const globalProvider = lastData.globalProvider || '';
   const effective = wsProvider || globalProvider;
@@ -602,6 +628,7 @@ function workspaceColHtml(name, data, opts = {}) {
           <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
             ${providerOptions}
           </select>
+          <span class="ws-engine" title="Engine (immutable)">· ${esc(wsEngine)}</span>
         </div>
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
@@ -648,15 +675,14 @@ async function onTriggerSubmit(e) {
   btn.textContent = 'Running…';
   try {
     // Provider comes from workspace settings (set via the inline header
-    // select). No per-trigger override here — keeps the form simple;
-    // switch the header dropdown if you want a different provider.
+    // select). Engine is also workspace-bound — backend derives it from
+    // workspaces.json so we deliberately don't send it from here.
     await api('/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         workspace: ws,
         prompt,
-        engine: 'claude',
         session_key: `pwa-${ws}`,
         source: 'pwa',
       }),
@@ -829,19 +855,14 @@ function renderTasksView() {
       <form data-form-id="new-loop">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
           placeholder="daily-digest" required></label>
-        <div class="form-row">
-          <label>workspace
-            <select name="workspace" required>
-              ${workspaces.map(w => `<option value="${esc(w)}">${esc(w)}</option>`).join('')}
-            </select>
-          </label>
-          <label>engine
-            <select name="engine">
-              <option value="claude">claude</option>
-              <option value="codex">codex</option>
-            </select>
-          </label>
-        </div>
+        <label>workspace
+          <select name="workspace" required>
+            ${workspaces.map(w => `<option value="${esc(w)}">${esc(w)}</option>`).join('')}
+          </select>
+        </label>
+        <p class="muted" style="font-size:11px;margin:0">
+          Engine is determined by the workspace's setting (see the column header).
+        </p>
         <label>自然语言(可选,LLM 同时填 cron 和 prompt)
           <div class="parse-row">
             <input name="nl" placeholder="每天早上 9 点 拉一下最新代码" autocomplete="off">
@@ -923,7 +944,7 @@ async function onAddLoop(e) {
         workspace: fd.workspace,
         schedule: fd.schedule,
         prompt: fd.prompt,
-        engine: fd.engine || 'claude',
+        // engine is bound to the workspace — backend reads from workspaces.json
         // Checkbox: FormData omits unchecked boxes entirely, so undefined → false.
         run_now: fd.run_now === 'on',
       }),

@@ -670,12 +670,13 @@ def _dispatch_action(action) -> dict:
         prompt = (action.params.get("prompt") or "").strip()
         if not workspace or not prompt:
             return _toast("error", "workspace and prompt are required")
+        from . import ws_settings    # lazy: avoid potential circular at module load
         run_id = db.new_run_id()
         runner.submit(
             run_id=run_id,
             workspace=workspace,
             prompt=prompt,
-            engine="claude",
+            engine=ws_settings.engine_for(workspace),   # workspace-bound
             session_key=f"feishu-{action.chat_id}" if action.chat_id else None,
             source="feishu",
             on_finish=reply_from_run,

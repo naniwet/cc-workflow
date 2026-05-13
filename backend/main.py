@@ -35,37 +35,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, config, cron_state, db, im_feishu, llm, runner
-
-# ---------- workspace settings (per-workspace LLM provider override) ----------
-# Stored at ~/.cc-workflow/workspaces.json. Schema:
-#   { "<workspace-name>": { "provider": "deepseek" }, ... }
-
-_WORKSPACES_SETTINGS_PATH = config.CCW_DIR / "workspaces.json"
-
-
-def _load_ws_settings() -> dict:
-    if not _WORKSPACES_SETTINGS_PATH.exists():
-        return {}
-    try:
-        return json.loads(_WORKSPACES_SETTINGS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _save_ws_settings(data: dict) -> None:
-    _WORKSPACES_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _WORKSPACES_SETTINGS_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, _WORKSPACES_SETTINGS_PATH)
-
-
-def _provider_for(workspace: str, override: Optional[str] = None) -> Optional[str]:
-    """Pick provider with override > workspace.provider > None (let agent-run
-    fall back to config.toml). Returning None means "don't pass --provider"."""
-    if override:
-        return override
-    return (_load_ws_settings().get(workspace) or {}).get("provider")
+from . import auth, config, cron_state, db, im_feishu, llm, runner, ws_settings
 
 PROTECT = [Depends(auth.require_basic_auth)]
 
@@ -80,7 +50,9 @@ def _on_startup() -> None:
 class RunRequest(BaseModel):
     workspace: str = Field(..., min_length=1, max_length=128)
     prompt: str = Field(..., min_length=1, max_length=8192)
-    engine: Literal["claude", "codex"]
+    # engine is no longer per-run — backend derives it from the workspace's
+    # immutable engine setting. Field accepted for backward compat but ignored.
+    engine: Optional[Literal["claude", "codex"]] = None
     session_key: Optional[str] = Field(default=None, max_length=128)
     source: Literal["pwa", "feishu", "cron", "manual"] = "manual"
     provider: Optional[str] = Field(default=None, max_length=64)   # one-shot LLM override
@@ -98,10 +70,10 @@ def post_run(req: RunRequest) -> dict:
         run_id=run_id,
         workspace=req.workspace,
         prompt=req.prompt,
-        engine=req.engine,
+        engine=ws_settings.engine_for(req.workspace),       # bound to workspace
         session_key=req.session_key,
         source=req.source,
-        provider=_provider_for(req.workspace, req.provider),
+        provider=ws_settings.provider_for(req.workspace, req.provider),
     )
     return {"task_id": run_id, "status": "queued"}
 
@@ -134,6 +106,11 @@ class NewWorkspaceRequest(BaseModel):
     # time. Same semantics as PUT /workspaces/{name}/settings — saved into
     # workspaces.json. Empty/None means "use global config.toml default".
     provider: Optional[str] = Field(default=None, max_length=64)
+    # Engine is set ONCE at creation time. No endpoint allows changing it
+    # later — to switch engines, delete + recreate. The field is always
+    # written to workspaces.json so ws_settings.engine_for() can read it
+    # without falling back to DEFAULT_ENGINE for fresh workspaces.
+    engine: Literal["claude", "codex"] = "claude"
 
 
 @app.get("/config", dependencies=PROTECT)
@@ -165,12 +142,14 @@ def list_providers() -> list[str]:
 
 @app.get("/workspaces/{name}/settings", dependencies=PROTECT)
 def get_workspace_settings(name: str) -> dict:
-    """Return per-workspace overrides ({} when none set)."""
-    return _load_ws_settings().get(name, {})
+    """Return per-workspace settings ({} when none set). Includes provider + engine."""
+    return ws_settings.load().get(name, {})
 
 
 class WorkspaceSettingsRequest(BaseModel):
     # provider=None or absent → clear the per-workspace override (use global).
+    # engine intentionally NOT a field here: it's immutable post-creation,
+    # so PUT can't touch it. Any "engine" key in the body is silently dropped.
     provider: Optional[str] = Field(default=None, max_length=64)
 
 
@@ -189,7 +168,8 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
                 400, {"error": "unknown provider", "got": body.provider, "valid": sorted(valid)}
             )
 
-    data = _load_ws_settings()
+    # Mutate provider only — engine field (if present) is preserved untouched.
+    data = ws_settings.load()
     current = data.get(name, {})
     if body.provider in (None, ""):
         current.pop("provider", None)
@@ -200,7 +180,7 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
         data[name] = current
     else:
         data.pop(name, None)
-    _save_ws_settings(data)
+    ws_settings.save(data)
     return current
 
 
@@ -208,8 +188,8 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
 def create_workspace(req: NewWorkspaceRequest) -> dict:
     """Create ~/workspaces/<name>/ as a fresh git repo (init + empty README + first commit).
 
-    Optionally pins the workspace to a specific provider — same effect as
-    calling PUT /workspaces/{name}/settings right after create.
+    Saves both provider (optional, mutable later) and engine (mandatory,
+    immutable) into workspaces.json.
     """
     target = config.WORKSPACES_DIR / req.name
     if target.exists():
@@ -240,13 +220,20 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
         # Leave the half-initialized dir for inspection; surface error.
         raise HTTPException(500, {"error": "git init failed", "detail": str(e)})
 
-    # Save the provider override (if any) — same shape as PUT settings writes.
+    # Save settings. Engine is always written so engine_for() doesn't have
+    # to fall back to DEFAULT_ENGINE for freshly-created workspaces.
+    data = ws_settings.load()
+    settings = data.get(req.name, {})
     if req.provider:
-        data = _load_ws_settings()
-        data[req.name] = {"provider": req.provider}
-        _save_ws_settings(data)
+        settings["provider"] = req.provider
+    settings["engine"] = req.engine
+    data[req.name] = settings
+    ws_settings.save(data)
 
-    return {"ok": True, "name": req.name, "path": str(target), "provider": req.provider}
+    return {
+        "ok": True, "name": req.name, "path": str(target),
+        "provider": req.provider, "engine": req.engine,
+    }
 
 
 # ---------- /loops (T+1d — P0-2 + P0-3 后半) ----------
@@ -264,7 +251,7 @@ class NewLoopRequest(BaseModel):
     schedule: str = Field(..., min_length=9, max_length=128)  # at least "* * * * *"
     workspace: str = Field(..., min_length=1, max_length=128)
     prompt: str = Field(..., min_length=1, max_length=4096)
-    engine: Literal["claude", "codex"] = "claude"
+    # engine intentionally absent — derived from workspace's immutable setting.
     # When true (the PWA's default), fire one immediate run right after the
     # cron entry is written — so the user gets a "first result" without
     # waiting for the next scheduled tick. Source is "pwa" (not "cron")
@@ -277,19 +264,23 @@ class NewLoopRequest(BaseModel):
 def create_loop(req: NewLoopRequest) -> dict:
     """Add a cron entry to /etc/cron.d/cc-loops + initialize jobs/<name>.json.
 
+    Engine is read from the workspace's settings — there's no per-loop
+    engine override. To use a different engine, create a separate workspace.
+
     If `run_now` is true, also fires one immediate run via runner.submit().
     The immediate run is tagged source="pwa", NOT source="cron", and is NOT
     counted in jobs/<name>.json's total_runs — that file tracks cron-fired
     runs only, this one's a PWA-initiated sanity check that happens to
     share the loop's session_key.
     """
+    engine = ws_settings.engine_for(req.workspace)
     try:
         result = cron_state.add_cron_loop(
             name=req.name,
             schedule=req.schedule,
             workspace=req.workspace,
             prompt=req.prompt,
-            engine=req.engine,
+            engine=engine,
         )
     except FileExistsError as e:
         raise HTTPException(409, {"error": str(e)})
@@ -304,10 +295,10 @@ def create_loop(req: NewLoopRequest) -> dict:
             run_id=first_run_id,
             workspace=req.workspace,
             prompt=req.prompt,
-            engine=req.engine,
+            engine=engine,
             session_key=req.name,        # align with cron-fired runs for this loop
             source="pwa",                # honest: PWA triggered this, not cron
-            provider=_provider_for(req.workspace),
+            provider=ws_settings.provider_for(req.workspace),
         )
         result["first_run_id"] = first_run_id
     return result
@@ -441,6 +432,9 @@ async def feishu_webhook(request: Request) -> dict:
     # Text message → submit a run; reply goes back via runner's on_finish.
     if "run_intent" in parsed:
         intent = parsed.pop("run_intent")
+        # _handle_message hardcodes engine="claude" since it has no access to
+        # workspaces.json; override here with the resolved per-workspace engine.
+        intent["engine"] = ws_settings.engine_for(intent["workspace"])
         run_id = db.new_run_id()
         runner.submit(run_id=run_id, on_finish=im_feishu.reply_from_run, **intent)
         parsed["task_id"] = run_id
