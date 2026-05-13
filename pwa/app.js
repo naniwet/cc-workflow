@@ -66,6 +66,63 @@ function timeAgo(unixSec) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+// Cron expression → human-readable Chinese (server timezone). Covers the
+// common shapes; unrecognized expressions fall through to the raw form so
+// power users still see what's actually scheduled. Caller is expected to
+// keep the raw expression as a hover title for verification.
+function humanizeCron(expr) {
+  if (!expr || typeof expr !== 'string') return '';
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length < 5) return expr;
+  const [m, h, dom, mon, dow] = parts.slice(0, 5);
+  const isNum = (s) => /^\d+$/.test(s);
+  const pad = (n) => String(n).padStart(2, '0');
+  const time = isNum(m) && isNum(h) ? `${pad(h)}:${pad(m)}` : null;
+
+  const dowName = {
+    '0': '周日', '1': '周一', '2': '周二', '3': '周三',
+    '4': '周四', '5': '周五', '6': '周六', '7': '周日',
+    sun: '周日', mon: '周一', tue: '周二', wed: '周三',
+    thu: '周四', fri: '周五', sat: '周六',
+  };
+  const dk = (dow || '').toLowerCase();
+
+  // every minute — explicit catchall before the M-only branch
+  if (m === '*' && h === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return '每分钟';
+  }
+  // M H * * *  → 每天 HH:MM
+  if (time && dom === '*' && mon === '*' && dow === '*') return `每天 ${time}`;
+
+  // M H * * <weekday>
+  if (time && dom === '*' && mon === '*') {
+    if (dow === '1-5') return `工作日 ${time}`;
+    if (dow === '0,6' || dow === '6,0' || dow === '6,7') return `周末 ${time}`;
+    if (dowName[dk]) return `每${dowName[dk]} ${time}`;
+  }
+  // M H D * *  → 每月 D 日 HH:MM
+  if (time && isNum(dom) && mon === '*' && dow === '*') {
+    return `每月 ${dom} 日 ${time}`;
+  }
+  // */N * * * *  → 每 N 分钟
+  const mEvery = m.match(/^\*\/(\d+)$/);
+  if (mEvery && h === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return `每 ${mEvery[1]} 分钟`;
+  }
+  // 0 */N * * *  → 每 N 小时
+  const hEvery = h.match(/^\*\/(\d+)$/);
+  if (m === '0' && hEvery && dom === '*' && mon === '*' && dow === '*') {
+    return `每 ${hEvery[1]} 小时`;
+  }
+  // M * * * *  → 每小时 M 分 (0 → 每小时整点)
+  if (isNum(m) && h === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return m === '0' ? '每小时整点' : `每小时 ${m} 分`;
+  }
+
+  // Anything else (multiple values, ranges in DOM/MON, etc.) — show raw.
+  return expr;
+}
+
 // ---------- service worker ----------
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/pwa/sw.js').catch(() => {});
@@ -1258,10 +1315,15 @@ function loopRowHtml(loop) {
   // Static fields parsed from /etc/cron.d/cc-loops by cron_state.list_jobs.
   // For corrupt / missing entries, fall back to "—" rather than hiding the
   // whole row (something is better than nothing for debugging).
-  const schedule = loop.schedule || '—';
+  const schedule = loop.schedule || '';
   const workspace = loop.workspace || '—';
   const engine = loop.engine || '';
   const prompt = loop.prompt || '';
+
+  // Show a human-readable version of the cron expression when possible;
+  // keep the raw form available on hover (and for power users / debugging).
+  const humanSched = schedule ? humanizeCron(schedule) : '—';
+  const schedTitle = schedule && humanSched !== schedule ? ` title="${esc(schedule)}"` : '';
 
   return `
     <div class="row loop-row">
@@ -1277,7 +1339,7 @@ function loopRowHtml(loop) {
         </span>
       </div>
       <div class="loop-spec">
-        <code>${esc(schedule)}</code>
+        <span class="loop-when"${schedTitle}>${esc(humanSched)}</span>
         · <code>${esc(workspace)}</code>
         ${engine ? ` · <span class="muted">${esc(engine)}</span>` : ''}
       </div>

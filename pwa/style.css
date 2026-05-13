@@ -744,9 +744,17 @@ pre {
 .loop-spec {
   font-size: var(--text-sm);
   color: var(--text-secondary);
-  font-family: var(--font-mono);
 }
-.loop-spec code { color: var(--accent-blue); font-size: var(--text-sm); }
+.loop-spec code { color: var(--accent-blue); font-size: var(--text-sm); font-family: var(--font-mono); }
+.loop-when {
+  color: var(--accent-blue);
+  font-weight: 500;
+  /* No mono — human-readable "每天 09:00" / "每 10 分钟" reads better in sans.
+     Cron-shaped fallback ("L 5 * * 2#3") will still show in this slot, in
+     sans too — acceptable since it's the exception, not the norm. */
+}
+.loop-when[title] { cursor: help; }
+.loop-when[title]:hover { text-decoration: underline dotted; }
 
 .loop-prompt {
   font-size: var(--text-sm);
