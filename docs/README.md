@@ -1,16 +1,20 @@
-# cc-workflow
+# cc-workflow — 设计文档目录
 
-> 个人 AI 工作流系统 — 项目设计文档目录。
+> ⚠ **这些是历史设计文档**。系统当前如何工作请看仓库根目录的 [`README.md`](../README.md)。
+>
+> 01-04 记录的是 Phase 1/2 开工前的规划 + T+0 brief,部分内容(尤其鉴权模型、
+> 工具审批路径、per-workspace 配置)已经在实施过程中演化。保留它们是为了
+> 让设计决策的演进可追溯——但**作为"现在系统怎么工作"的参考已过期**。
 
 ## 阅读顺序
 
-| # | 文件 | 内容 | 受众 |
+| # | 文件 | 内容 | 还有用吗? |
 |---|---|---|---|
-| 01 | `01-prd.md` | PRD: 问题、目标、需求(P0-1 到 P0-8)、成功指标 | 设计 review / 决策回溯 |
-| 02 | `02-dev-plan.md` | 实施计划: 文件清单 / 接口契约 / T+ 顺序 | 服务器 Claude Code 实现跟着干 |
-| 03 | `03-test-plan.md` | 测试计划: 每个 P0 acceptance → 具体命令 | 验证每阶段 |
-| 04 | `04-handoff.md` | 给服务器 Claude Code 的初始 brief | 复制到 Claude Code 启动 |
-| -- | `future/multi-agent-design.md` | **P1 才看,P0 期间不要读** | P0 验收后讨论入口 |
+| 01 | `01-prd.md` | PRD: 问题、目标、需求(P0-1 到 P0-8)、决策附录 | ✓ why & 决策回溯仍准确 |
+| 02 | `02-dev-plan.md` | 实施计划: 文件清单 / 接口契约 / T+ 顺序 | ⚠ 接口契约部分已演化,看代码为准 |
+| 03 | `03-test-plan.md` | 测试计划: 每个 P0 acceptance → 具体命令 | ✓ 多数测试仍可跑 |
+| 04 | `04-handoff.md` | 给实现方(服务器 Claude Code)的 T+0 brief | 历史价值 — 新人不必读 |
+| -- | `future/multi-agent-design.md` | **P1 设计稿,尚未实施** | 准备做多 agent 协同时再读 |
 
 ## 项目身份
 
