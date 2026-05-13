@@ -130,6 +130,16 @@ else
       "wire_api": "chat",
       "model": "deepseek-chat"
     }
+  },
+  "roundtable_endpoints": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "<api-key>"
+    },
+    "moonshot": {
+      "base_url": "https://api.moonshot.cn/v1",
+      "api_key": "<api-key>"
+    }
   }
 }
 JSON

@@ -32,6 +32,11 @@ SESSIONS_FILE = STATE_DIR / "sessions.json"
 # clears both this and the claude session_id.
 CODEX_SESSIONS_DIR = STATE_DIR / "codex-sessions"
 
+# Roundtable (multi-agent debate) jsonl storage. Each session is one
+# <slug>.jsonl with a meta header + 9 turn lines. Static — backend
+# scans this dir for the list view, reads one file for the detail view.
+ROUNDTABLES_DIR = STATE_DIR / "roundtables"
+
 # Where agent-run.sh resolves <workspace> names — must match agent-run.sh's
 # WORKSPACES_DIR constant. Used by ui_cards.run_form_card() to populate the
 # workspace dropdown.

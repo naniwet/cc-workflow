@@ -20,6 +20,10 @@ Routes:
   POST   /loops/{name}/pause                   session
   POST   /loops/{name}/resume                  session
   POST   /loops/{name}/run                     session   (fire one immediate run)
+  GET    /roundtables                           session   (list multi-agent debates)
+  POST   /roundtables                           session   (start new one)
+  GET    /roundtables/{id}                      session   (full session content)
+  DELETE /roundtables/{id}                      session
   POST   /cron/parse-nl                        session
   GET    /approvals/pending                    session
   POST   /approvals/{id}/decision              session
@@ -41,6 +45,7 @@ import json
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -49,6 +54,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import approvals, auth, config, cron_state, db, im_feishu, llm, runner, skills, ws_settings
+from .roundtable import io as roundtable_io
+from .roundtable import runner as roundtable_runner
+from .roundtable.synth import parse_synthesis
 
 PROTECT = [Depends(auth.require_user)]
 
@@ -607,6 +615,126 @@ def resume_loop(name: str) -> dict:
             status_code=404, detail={"error": "loop not found", "code": 404}
         )
     return {"status": "resumed", "name": name, "enabled": True}
+
+
+# ---------- /roundtables (multi-agent debate) ----------
+# 4 personas + 1 synthesizer × 3 rounds = 9 sequential LLM calls in a
+# background thread. PWA polls the detail endpoint every ~2s to render
+# progress. See backend/roundtable/__init__.py for the port story.
+
+
+class NewRoundtableRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=4096)
+
+
+def _roundtable_session_summary(path: Path) -> dict:
+    """Lightweight row for the list view — reads meta + counts turns
+    without parsing each content field."""
+    try:
+        # Cheap: only the first line + a count of remaining lines.
+        with path.open(encoding="utf-8") as f:
+            head_line = f.readline()
+            rest_count = sum(1 for line in f if line.strip())
+        head = json.loads(head_line)
+    except (OSError, json.JSONDecodeError):
+        return {
+            "id": path.stem, "question": "(unreadable)",
+            "started_at": 0, "turns_done": 0, "status": "error",
+        }
+    # Status inference: 9 turns expected; if __error__ line is present
+    # we'd need to read the body to detect — keep summary cheap and let
+    # the detail endpoint expose the precise error.
+    turns_done = rest_count
+    status = "done" if turns_done >= 9 else ("running" if turns_done > 0 else "queued")
+    return {
+        "id": path.stem,
+        "question": head.get("question", ""),
+        "started_at": head.get("started_at", 0),
+        "turns_done": turns_done,
+        "status": status,
+    }
+
+
+@app.get("/roundtables", dependencies=PROTECT)
+def list_roundtables() -> list[dict]:
+    """All roundtable sessions, newest first (by filename prefix which is
+    a UTC timestamp). Cheap rows — only enough for the list view."""
+    d = config.ROUNDTABLES_DIR
+    if not d.is_dir():
+        return []
+    paths = sorted(d.glob("*.jsonl"), reverse=True)
+    return [_roundtable_session_summary(p) for p in paths]
+
+
+@app.post("/roundtables", dependencies=PROTECT, status_code=202)
+def create_roundtable(req: NewRoundtableRequest) -> dict:
+    """Kick off a new roundtable session. Returns immediately with the
+    session id; the 9 LLM calls run in a background thread."""
+    path = roundtable_runner.submit(req.question.strip())
+    return {"id": path.stem, "status": "queued", "question": req.question}
+
+
+@app.get("/roundtables/{session_id}", dependencies=PROTECT)
+def get_roundtable(session_id: str) -> dict:
+    """Full session content for the detail view.
+
+    Returns:
+      {
+        id, question, started_at, status,
+        turns: [{round, role, type, content, ts}, ...],
+        r3:    {raw: str, parsed: {共识点, 分歧轴, 判断题}} | null,
+        error: str | null,
+      }
+    """
+    # Validate id shape against our slug regex to avoid path traversal.
+    if not re.match(r"^[A-Za-z0-9._\-]+$", session_id):
+        raise HTTPException(400, {"error": "bad session id"})
+    path = config.ROUNDTABLES_DIR / f"{session_id}.jsonl"
+    if not path.is_file():
+        raise HTTPException(404, {"error": "session not found", "id": session_id})
+    try:
+        session = roundtable_io.read_session(path)
+    except (ValueError, OSError) as e:
+        raise HTTPException(500, {"error": f"session unreadable: {e}"})
+    # Pull synthesis + any error marker out separately for convenience.
+    r3_turns = [t for t in session.turns if t.type == "synth"]
+    error_turns = [t for t in session.turns if t.role == "__error__"]
+    normal_turns = [t for t in session.turns if t.role != "__error__"]
+    r3 = None
+    if r3_turns:
+        raw = r3_turns[-1].content
+        r3 = {"raw": raw, "parsed": parse_synthesis(raw)}
+    status = "done" if r3_turns else ("error" if error_turns else
+              ("running" if normal_turns else "queued"))
+    return {
+        "id": session_id,
+        "question": session.question,
+        "started_at": session.started_at,
+        "status": status,
+        "turns": [
+            {"round": t.round, "role": t.role, "type": t.type, "content": t.content, "ts": t.ts}
+            for t in normal_turns
+        ],
+        "r3": r3,
+        "error": error_turns[-1].content if error_turns else None,
+    }
+
+
+@app.delete("/roundtables/{session_id}", dependencies=PROTECT)
+def delete_roundtable(session_id: str) -> dict:
+    """Remove a session file. No running-thread tracking — if you delete
+    while a session is in flight, the worker's next append_turn will
+    silently re-create the file (acceptable for single-user)."""
+    if not re.match(r"^[A-Za-z0-9._\-]+$", session_id):
+        raise HTTPException(400, {"error": "bad session id"})
+    path = config.ROUNDTABLES_DIR / f"{session_id}.jsonl"
+    if not path.is_file():
+        raise HTTPException(404, {"error": "session not found", "id": session_id})
+    try:
+        path.unlink()
+    except OSError as e:
+        raise HTTPException(500, {"error": f"delete failed: {e}"})
+    return {"ok": True, "id": session_id}
 
 
 # ---------- /cron/parse-nl ----------
