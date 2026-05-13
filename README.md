@@ -133,20 +133,38 @@ PWA → Tasks → `New cron loop`。两种填法:
 
 ### 5. 多 provider
 
-`~/.cc-workflow/providers.json` 是 ccswitch 风格:
+`~/.cc-workflow/providers.json` 两段并列:`profiles`(claude)+ `codex_profiles`(codex):
 
 ```json
 {
-  "active": "deepseek",
   "profiles": {
     "claude":   { "env": {} },
     "deepseek": { "env": { "ANTHROPIC_BASE_URL": "...", "ANTHROPIC_AUTH_TOKEN": "sk-..." } },
-    "kimi":     { "env": { "ANTHROPIC_BASE_URL": "...", "ANTHROPIC_AUTH_TOKEN": "sk-..." } }
+    "kimi":     { "env": { "ANTHROPIC_BASE_URL": "...", "ANTHROPIC_API_KEY":  "sk-..." } }
+  },
+  "codex_profiles": {
+    "openai":         { "env": { "OPENAI_API_KEY": "sk-..." } },
+    "deepseek-codex": {
+      "env": { "DEEPSEEK_API_KEY": "sk-..." },
+      "base_url": "https://api.deepseek.com/v1",
+      "env_key":  "DEEPSEEK_API_KEY",
+      "wire_api": "chat",
+      "model":    "deepseek-chat"
+    }
   }
 }
 ```
 
-每 workspace 可以在列头的下拉里独立选 provider。`claude` profile 因为不带 token(用 Anthropic 原生 OAuth),只能本地 `claude login` 后被 agent-run 使用,不能从后端被驱动——所以不出现在 PWA dropdown 里。
+每 workspace 可以在列头的下拉里独立选 provider —— PWA 会根据这个 ws 的 engine 显示对应那段的 keys。
+
+**关于 claude 段**:
+- `claude` profile 不带 token(用 Anthropic 原生 OAuth),只能本地 `claude login` 后被 agent-run 使用,不能从后端驱动——所以不出现在 PWA dropdown 里。
+
+**关于 codex 段**:
+- 只有 `env` 的 profile(如 `openai`):agent-run 只 export 那些 env vars,codex CLI 用自己的内置默认
+- 同时带 `base_url + env_key + wire_api + model` 的 profile(如 `deepseek-codex`):agent-run 在每次 run 前生成临时 `~/.cc-state/codex-home/config.toml`,把 `$CODEX_HOME` 指过去,然后给 `codex exec` 加 `--profile <name>` 标志
+- 你自己交互式用的 `~/.codex/` 完全不动
+- **兼容性提醒**:非 OpenAI 端点对 codex 的 function calling / tool use 协议支持参差不齐。简单文本 prompt 多半能跑;agent-style 操作(改文件、跑 shell)可能在 wire-api 层卡住。先用 OpenAI 直连跑通,再考虑切便宜端点。
 
 ---
 
@@ -201,7 +219,7 @@ cc-workflow/
 | 工具审批(PWA `[Approve][Deny]`) | ✅ PreToolUse hook | ❌ 上游无 hook API([#8923](https://github.com/openai/codex/issues/8923) / [#3817](https://github.com/openai/codex/issues/3817)) | codex workspace 自动 `trust=true`、PWA trust 锁定为 🔓 不可改 |
 | 多轮对话(session 连续) | ✅ `--resume <sid>` | ⚠ `codex exec resume --last`(per-cwd) | 我们用 marker 文件管理"这个 ws/session 是否跑过 codex" |
 | 沙盒 | claude 自己的 permission-mode | codex `--sandbox workspace-write` | 都允许写 WORKDIR,网络默认禁(claude permission-mode 视情况) |
-| 通过 `providers.json` 切端点 | ✅ Anthropic 兼容端点(DeepSeek / Kimi) | ⚠ codex 用自己的 `~/.codex/config.toml`,不读 `providers.json` | 想给 codex 配 Azure / 自定义 endpoint,手动写 `[model_providers.X]` 块 |
+| 通过 `providers.json` 切端点 | ✅ Anthropic 兼容端点(DeepSeek / Kimi) | ✅ 走 `codex_profiles` 段(并列于 `profiles`) | agent-run 自动生成临时 `~/.cc-state/codex-home/config.toml`,你自己的 `~/.codex/` 不动 |
 | install | `npm i -g @anthropic-ai/claude-code` | `npm i -g @openai/codex` | 两个都 npm 全局装 |
 
 **实际意义**:

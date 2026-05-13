@@ -54,9 +54,11 @@ Usage: agent-run --engine=<claude|codex> <workspace> "<prompt>" [session_key]
                  [--source <pwa|feishu|cron|manual>] [--job-name <name>]
                  [--provider <name>] [--permission-mode <mode>]
 
-  --provider <name>         Override config.toml's provider (must match a profile
-                            key in ~/.cc-workflow/providers.json). For per-workspace
-                            LLM backend; falls back to config.toml then "claude".
+  --provider <name>         Override config.toml's provider. For claude engine,
+                            <name> must be a key in providers.json#profiles; for
+                            codex engine, a key in providers.json#codex_profiles.
+                            Falls back to config.toml then engine's default
+                            ("claude" anthropic OAuth / "openai" built-in).
   --permission-mode <mode>  Claude tool-permission mode. One of:
                               acceptEdits        — default; Edit/Write auto-allowed
                               bypassPermissions  — all tools auto-allowed (use when
@@ -152,7 +154,8 @@ ccw_provider_name() {
     ' "$CCW_CONFIG"
 }
 
-# Export the env vars for the configured profile. No-op for engine != claude.
+# Export env vars from providers.json's claude `profiles` section.
+# No-op for engine != claude (codex has its own peer setup_codex_provider).
 setup_provider() {
     [[ "$ENGINE" == "claude" ]] || return 0
     local profile key val
@@ -174,6 +177,83 @@ setup_provider() {
         export "$key=$val"
     done < <(jq -r --arg p "$profile" \
         '.profiles[$p].env | to_entries[] | "\(.key)\t\(.value)"' "$PROVIDERS_FILE")
+}
+
+# codex peer of setup_provider. Reads providers.json's codex_profiles section
+# and prepares a managed CODEX_HOME at ~/.cc-state/codex-home/ so we don't
+# clobber the user's interactive ~/.codex/. Two shapes supported:
+#
+#   1. env-only profile (e.g. "openai"):
+#        { "env": { "OPENAI_API_KEY": "sk-..." } }
+#      → just export env, codex uses its built-in defaults.
+#
+#   2. custom-endpoint profile (e.g. "deepseek-codex"):
+#        { "env": { "DEEPSEEK_API_KEY": "..." },
+#          "base_url": "...", "env_key": "DEEPSEEK_API_KEY",
+#          "wire_api": "chat", "model": "deepseek-chat" }
+#      → write a [model_providers.<name>] + [profiles.<name>] block into
+#        $CODEX_HOME/config.toml and set CODEX_PROFILE=<name> so run_codex
+#        passes `--profile <name>` to codex exec.
+#
+# Caveat: non-OpenAI codex endpoints support tool-use to varying degrees.
+# Simple prompts probably work; complex agent flows may fail at the wire-api
+# level. We bridge the config plumbing — making the model itself behave is
+# upstream's problem.
+CODEX_HOME_DIR="${STATE_DIR}/codex-home"
+CODEX_PROFILE=""
+setup_codex_provider() {
+    [[ "$ENGINE" == "codex" ]] || return 0
+    [[ -f "$PROVIDERS_FILE" ]] || return 0           # no providers file → codex defaults
+    local profile
+    profile="$(ccw_provider_name)"
+    [[ -z "$profile" ]] && profile="openai"
+
+    # If the profile name doesn't exist under codex_profiles, fall back to
+    # codex defaults silently — the user may have picked a name only valid
+    # for claude (e.g. "deepseek" without the "-codex" suffix).
+    jq -e --arg p "$profile" '.codex_profiles[$p]' "$PROVIDERS_FILE" >/dev/null 2>&1 || return 0
+
+    # Export env vars (typically just the API key). Same placeholder check
+    # as setup_provider — refuse to run with <api-key> literals.
+    local key val
+    while IFS=$'\t' read -r key val; do
+        [[ -z "$key" ]] && continue
+        if [[ "$val" =~ ^\<.*\>$ ]]; then
+            die "$EX_USAGE" "codex_profile '$profile' has placeholder for $key — edit $PROVIDERS_FILE"
+        fi
+        export "$key=$val"
+    done < <(jq -r --arg p "$profile" \
+        '.codex_profiles[$p].env // {} | to_entries[] | "\(.key)\t\(.value)"' "$PROVIDERS_FILE")
+
+    # If base_url is set, generate $CODEX_HOME/config.toml + remember profile
+    # name for the --profile flag in run_codex.
+    local has_base
+    has_base="$(jq -r --arg p "$profile" '.codex_profiles[$p] | has("base_url")' "$PROVIDERS_FILE")"
+    if [[ "$has_base" == "true" ]]; then
+        mkdir -p "$CODEX_HOME_DIR"
+        local base_url wire_api env_key model
+        base_url="$(jq -r --arg p "$profile" '.codex_profiles[$p].base_url' "$PROVIDERS_FILE")"
+        wire_api="$(jq -r --arg p "$profile" '.codex_profiles[$p].wire_api // "chat"' "$PROVIDERS_FILE")"
+        env_key="$( jq -r --arg p "$profile" '.codex_profiles[$p].env_key  // "OPENAI_API_KEY"' "$PROVIDERS_FILE")"
+        model="$(   jq -r --arg p "$profile" '.codex_profiles[$p].model    // "gpt-5-codex"' "$PROVIDERS_FILE")"
+        # Overwrite (not append) so stale entries from a prior profile don't
+        # accumulate. Single source of truth = providers.json + the active
+        # profile, regenerated each run.
+        cat > "$CODEX_HOME_DIR/config.toml" <<EOF
+# Auto-generated by agent-run.sh from ~/.cc-workflow/providers.json — do not edit.
+# Regenerated on every run. To customize, edit codex_profiles in providers.json.
+[model_providers.$profile]
+base_url = "$base_url"
+env_key  = "$env_key"
+wire_api = "$wire_api"
+
+[profiles.$profile]
+model           = "$model"
+model_provider  = "$profile"
+EOF
+        export CODEX_HOME="$CODEX_HOME_DIR"
+        CODEX_PROFILE="$profile"
+    fi
 }
 
 # ---------- sessions.json helpers ----------
@@ -363,11 +443,13 @@ run_codex() {
     marker_safe="$(printf '%s' "${WORKSPACE}__${SESSION_KEY}" | tr -c 'A-Za-z0-9._-' '_')"
     local marker="${marker_dir}/${marker_safe}"
     # Build the codex command. `exec resume --last` continues the most
-    # recent session in cwd; `exec` starts a fresh one.
+    # recent session in cwd; `exec` starts a fresh one. CODEX_PROFILE is set
+    # by setup_codex_provider iff a custom-endpoint profile was active.
     local cmd=(codex exec)
     if [[ -f "$marker" ]]; then
         cmd+=(resume --last)
     fi
+    [[ -n "$CODEX_PROFILE" ]] && cmd+=(--profile "$CODEX_PROFILE")
     cmd+=(--json --output-last-message "$out" -a never -s workspace-write --skip-git-repo-check "$PROMPT")
     (
         cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" "${cmd[@]}"
@@ -391,6 +473,7 @@ run_codex() {
 
 job_start
 setup_provider
+setup_codex_provider
 
 if [[ "$ENGINE" == "claude" ]]; then
     OUTPUT="$(run_claude)" || RC=$?

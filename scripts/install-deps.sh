@@ -111,6 +111,18 @@ else
         "ANTHROPIC_API_KEY": "<api-key>"
       }
     }
+  },
+  "codex_profiles": {
+    "openai": {
+      "env": { "OPENAI_API_KEY": "<api-key>" }
+    },
+    "deepseek-codex": {
+      "env": { "DEEPSEEK_API_KEY": "<api-key>" },
+      "base_url": "https://api.deepseek.com/v1",
+      "env_key": "DEEPSEEK_API_KEY",
+      "wire_api": "chat",
+      "model": "deepseek-chat"
+    }
   }
 }
 JSON

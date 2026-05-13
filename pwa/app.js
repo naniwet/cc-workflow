@@ -213,18 +213,24 @@ let lastData = {
   workspaces: [],
   sessions: { active: [], queued: [], recent: [] },
   loops: [],
-  providers: [],
-  wsSettings: {},                       // name → {provider?}
+  providers: [],                        // claude profiles (providers.json#profiles)
+  codexProviders: [],                   // codex profiles (providers.json#codex_profiles)
+  wsSettings: {},                       // name → {provider?, engine?, trust?}
   globalProvider: '',                   // config.toml's provider field
 };
 
 async function refreshAll() {
   try {
-    const [ws, sess, lp, providers, cfg, approvals] = await Promise.all([
+    const [ws, sess, lp, providers, codexProviders, cfg, approvals] = await Promise.all([
       api('/workspaces'),
       api('/sessions'),
       api('/loops'),
       api('/providers'),
+      // /providers/codex is a separate fetch on purpose — the dropdown shown
+      // for a codex workspace consumes a different list (codex_profiles)
+      // than the claude one. .catch returns [] so older backends that don't
+      // expose it still render claude dropdowns correctly.
+      api('/providers/codex').catch(() => []),
       api('/config'),
       api('/approvals/pending').catch(() => []),   // graceful: backend may not have it yet
     ]);
@@ -242,6 +248,7 @@ async function refreshAll() {
       sessions: sess,
       loops: lp,
       providers,
+      codexProviders: Array.isArray(codexProviders) ? codexProviders : [],
       wsSettings: Object.fromEntries(settingsList),
       globalProvider: cfg?.provider || '',
       globalDefaultTrust: !!cfg?.default_trust,
@@ -538,11 +545,9 @@ function renderDesktopOverview() {
   const allNames = Object.keys(groups);
   const layout = effectiveLayout(allNames);
 
-  const globalProvider = lastData.globalProvider || '';
-  const newWsProviderOptions = [
-    `<option value="">(use global default${globalProvider ? `: ${esc(globalProvider)}` : ''})</option>`,
-    ...(lastData.providers || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`),
-  ].join('');
+  // Initial provider list assumes engine=claude (the form's default selection).
+  // _wireCodexNewWsLock re-renders this dropdown when the user flips engine.
+  const newWsProviderOptions = _providerOptionsHtml('claude', '', true);
 
   // Render: alternating row-gap + row. The trailing gap (after the last
   // row) is a drop target for "create new row at the bottom".
@@ -701,11 +706,9 @@ function renderMobileOverview() {
     `;
   }).join('');
 
-  const globalProvider = lastData.globalProvider || '';
-  const newWsProviderOptions = [
-    `<option value="">(use global default${globalProvider ? `: ${esc(globalProvider)}` : ''})</option>`,
-    ...(lastData.providers || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`),
-  ].join('');
+  // Initial dropdown assumes engine=claude; _wireCodexNewWsLock swaps it
+  // when the user changes engine.
+  const newWsProviderOptions = _providerOptionsHtml('claude', '', true);
 
   $('view').innerHTML = `
     <h1>Workspaces</h1>
@@ -740,7 +743,7 @@ function renderMobileOverview() {
 
   const newWsForm = $('view').querySelector('form[data-form-id="new-ws"]');
   newWsForm?.addEventListener('submit', onAddWorkspace);
-  _wireCodexTrustLock(newWsForm);
+  _wireCodexNewWsLock(newWsForm);
 }
 
 // Bind handlers that exist on every .ws-col-rendering view (PC overview,
@@ -813,40 +816,74 @@ function _addTapFallback(el, handler) {
 function bindOverviewHandlers() {
   const newWsForm = $('view').querySelector('form[data-form-id="new-ws"]');
   newWsForm?.addEventListener('submit', onAddWorkspace);
-  _wireCodexTrustLock(newWsForm);
+  _wireCodexNewWsLock(newWsForm);
   bindWorkspaceColHandlers($('view'));
   setupCarousel();
   setupDragReorder();
 }
 
-// engine=codex implies trust=true (codex has no fine-grained approval API —
-// see ws_settings.trust_for). Make this visible at form-fill time so users
-// don't fill the form expecting they can opt out and then get surprised
-// when the backend overrides. The hint text below the form line also
-// switches to a codex-specific message.
-function _wireCodexTrustLock(form) {
+// Pick the right provider list for an engine: claude → providers.json#profiles,
+// codex → providers.json#codex_profiles. agent-run.sh consumes each via a
+// different code path (setup_provider vs setup_codex_provider), so we keep
+// them visually separate in the UI too.
+function _providersFor(engine) {
+  return engine === 'codex' ? (lastData.codexProviders || []) : (lastData.providers || []);
+}
+
+function _providerOptionsHtml(engine, selected, includeDefault) {
+  const list = _providersFor(engine);
+  const opts = [];
+  if (includeDefault) {
+    const label = engine === 'codex'
+      ? '(codex 默认:openai 内置)'
+      : `(use global default${lastData.globalProvider ? `: ${esc(lastData.globalProvider)}` : ''})`;
+    opts.push(`<option value=""${selected ? '' : ' selected'}>${label}</option>`);
+  }
+  for (const p of list) {
+    opts.push(`<option value="${esc(p)}"${p === selected ? ' selected' : ''}>${esc(p)}</option>`);
+  }
+  return opts.join('');
+}
+
+// engine=codex implies trust=true AND swaps the provider dropdown to the
+// codex_profiles list. Both visible at form-fill time so the user doesn't
+// pick a claude-profile name expecting it to apply to codex.
+//
+// (was _wireCodexTrustLock; renamed because it now does two things.)
+function _wireCodexNewWsLock(form) {
   if (!form) return;
   const engineSel = form.querySelector('select[name="engine"]');
   const trustChk = form.querySelector('input[name="trust"]');
-  if (!engineSel || !trustChk) return;
+  const providerSel = form.querySelector('select[name="provider"]');
+  if (!engineSel) return;
   // Remember the user's pre-codex trust choice so flipping engine back to
-  // claude restores it (avoids "I unchecked trust earlier and now it's
-  // permanently stuck on" surprise).
-  let prevTrustValue = trustChk.checked;
+  // claude restores it.
+  let prevTrustValue = trustChk ? trustChk.checked : false;
   const apply = () => {
-    if (engineSel.value === 'codex') {
-      if (!trustChk.disabled) prevTrustValue = trustChk.checked;
-      trustChk.checked = true;
-      trustChk.disabled = true;
-      trustChk.title = 'codex 不支持精细审批,trust 锁定为 true';
-    } else {
-      trustChk.disabled = false;
-      trustChk.checked = prevTrustValue;
-      trustChk.title = '';
+    const eng = engineSel.value;
+    if (trustChk) {
+      if (eng === 'codex') {
+        if (!trustChk.disabled) prevTrustValue = trustChk.checked;
+        trustChk.checked = true;
+        trustChk.disabled = true;
+        trustChk.title = 'codex 不支持精细审批,trust 锁定为 true';
+      } else {
+        trustChk.disabled = false;
+        trustChk.checked = prevTrustValue;
+        trustChk.title = '';
+      }
+    }
+    if (providerSel) {
+      const wasSelected = providerSel.value;
+      providerSel.innerHTML = _providerOptionsHtml(eng, '', true);
+      // Preserve the prior selection if it's valid for the new engine,
+      // otherwise fall to the "(default)" empty option.
+      const valid = new Set(Array.from(providerSel.options).map((o) => o.value));
+      providerSel.value = valid.has(wasSelected) ? wasSelected : '';
     }
   };
   engineSel.addEventListener('change', apply);
-  apply();    // run once for initial state (also covers reopening a draft)
+  apply();
 }
 
 // ---------- PC drag-to-reorder ----------
@@ -1214,12 +1251,10 @@ function workspaceColHtml(name, data, opts = {}) {
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
-  const providers = lastData.providers || [];
-  const globalProvider = lastData.globalProvider || '';
-  const effective = wsProvider || globalProvider;
-  const providerOptions = providers
-    .map((p) => `<option value="${esc(p)}"${p === effective ? ' selected' : ''}>${esc(p)}</option>`)
-    .join('');
+  // Per-workspace dropdown shows the provider list matching THIS workspace's
+  // engine (claude → profiles, codex → codex_profiles). Include the empty
+  // "default" option so users can clear the per-ws override.
+  const providerOptions = _providerOptionsHtml(wsEngine, wsProvider, true);
 
   // Overview: h2 wraps in a link so clicking it drills into detail; also
   // gets a drag handle for PC drag-to-reorder.

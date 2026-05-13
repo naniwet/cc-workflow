@@ -11,6 +11,7 @@ Routes:
   GET    /sessions                             session
   GET    /workspaces                           session
   POST   /workspaces                           session
+  GET    /providers/codex                       session   (codex_profiles list)
   GET    /loops                                session
   POST   /loops                                session
   DELETE /loops/{name}                         session
@@ -212,6 +213,14 @@ def get_global_config() -> dict:
     return config.load_config() or {}
 
 
+def _load_providers_json() -> dict:
+    """Shared loader. Returns {} on any error so callers can keep going."""
+    try:
+        return json.loads(config.PROVIDERS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 @app.get("/providers", dependencies=PROTECT)
 def list_providers() -> list[str]:
     """Provider names that the backend can actually drive — i.e. with non-empty env.
@@ -222,14 +231,31 @@ def list_providers() -> list[str]:
     Users who want anthropic-OAuth still get it as the global config.toml
     fallback when no per-workspace override is set.
     """
-    try:
-        data = json.loads(config.PROVIDERS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    profiles = data.get("profiles") or {}
+    profiles = _load_providers_json().get("profiles") or {}
+    return sorted(name for name, p in profiles.items() if (p.get("env") or {}))
+
+
+@app.get("/providers/codex", dependencies=PROTECT)
+def list_codex_providers() -> list[str]:
+    """codex_profiles keys. Returned in a separate endpoint (not merged with
+    /providers) because the dropdown shown for a codex workspace must be
+    different from the one shown for a claude workspace — the keys here are
+    consumed by agent-run.sh's setup_codex_provider, not setup_provider.
+
+    Filter: include only profiles with non-empty `env` OR a `base_url` —
+    everything else is a placeholder that can't actually run.
+    """
+    cprofiles = _load_providers_json().get("codex_profiles") or {}
     return sorted(
-        name for name, p in profiles.items() if (p.get("env") or {})
+        name for name, p in cprofiles.items()
+        if (p.get("env") or {}) or p.get("base_url")
     )
+
+
+def _valid_providers_for_engine(engine: str) -> set[str]:
+    """Used to validate the `provider` field of create/put-settings against
+    the right list — claude profiles vs codex_profiles, by engine."""
+    return set(list_codex_providers() if engine == "codex" else list_providers())
 
 
 @app.get("/workspaces/{name}/settings", dependencies=PROTECT)
@@ -256,12 +282,17 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
     if not (target / ".git").exists():
         raise HTTPException(404, {"error": "workspace not found", "name": name})
 
-    # Validate provider name against providers.json keys.
+    # Validate provider name against the right list based on this workspace's
+    # engine (claude → profiles, codex → codex_profiles). Look up engine
+    # from existing settings since put_settings can't change it.
     if body.provider is not None and body.provider != "":
-        valid = set(list_providers())
+        existing_engine = (ws_settings.load().get(name) or {}).get("engine") or ws_settings.DEFAULT_ENGINE
+        valid = _valid_providers_for_engine(existing_engine)
         if body.provider not in valid:
             raise HTTPException(
-                400, {"error": "unknown provider", "got": body.provider, "valid": sorted(valid)}
+                400,
+                {"error": "unknown provider for engine",
+                 "got": body.provider, "engine": existing_engine, "valid": sorted(valid)},
             )
 
     # Mutate ONLY fields the client explicitly sent. Pydantic v2's
@@ -314,13 +345,15 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
         raise HTTPException(409, {"error": "workspace already exists", "name": req.name})
 
     # Validate the optional provider FIRST so we don't leave a half-created
-    # repo behind if the provider name is bad.
+    # repo behind if the provider name is bad. Engine determines which list
+    # to validate against.
     if req.provider:
-        valid = set(list_providers())
+        valid = _valid_providers_for_engine(req.engine)
         if req.provider not in valid:
             raise HTTPException(
                 400,
-                {"error": "unknown provider", "got": req.provider, "valid": sorted(valid)},
+                {"error": "unknown provider for engine",
+                 "got": req.provider, "engine": req.engine, "valid": sorted(valid)},
             )
 
     target.mkdir(parents=True, exist_ok=False)
