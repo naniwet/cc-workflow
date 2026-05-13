@@ -560,6 +560,89 @@ pre {
 .task-list .row code { color: var(--text-primary); }
 
 /* ============================================================================
+ *  Workspace name link — clicking the h2 in PC overview drills into the
+ *  workspace's detail view (#workspaces/<name>). Subtle so it doesn't
+ *  shout "this is a link" but reveals on hover.
+ * ============================================================================ */
+.ws-name-link, .ws-name-link:visited {
+  color: inherit;
+  text-decoration: none;
+  transition: color var(--t-base);
+}
+.ws-name-link:hover { color: var(--accent-blue); }
+
+/* ============================================================================
+ *  Mobile overview list (#workspaces on phone) — compact cards, no inputs.
+ *  Each card is an <a> drilling into #workspaces/<name>.
+ * ============================================================================ */
+.ws-list { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.ws-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  color: inherit;
+  text-decoration: none;
+  transition: background var(--t-base), border-color var(--t-base);
+}
+.ws-card:hover,
+.ws-card:active {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+}
+.ws-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.ws-card-head h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ws-card-provider {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.ws-card-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+.ws-card-prompt {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================================================
+ *  PC detail view (#workspaces/<name> on desktop) — single .ws-col centered,
+ *  wider, more history rows visible.
+ * ============================================================================ */
+.ws-col-detail {
+  max-width: 900px;
+  margin: 0 auto;
+}
+.ws-col-detail .ws-timeline {
+  max-height: 70vh;                                /* much taller than overview's 360px */
+}
+.ws-col-detail .ws-col {
+  min-height: 60vh;
+}
+
+/* ============================================================================
  *  Bottom nav + dot indicator — desktop hides both
  * ============================================================================ */
 .bottom-nav { display: none; }

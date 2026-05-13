@@ -46,6 +46,19 @@ function statusTag(status) {
   return `<span class="tag tag-${esc(status)}">${ICONS[status] || ''}${esc(status)}</span>`;
 }
 
+// Compact relative-time formatter — "2m ago", "3h ago", "5d ago". Used in
+// the mobile overview cards to indicate when each workspace last ran.
+function timeAgo(unixSec) {
+  if (!unixSec) return '';
+  const sec = Math.max(0, Math.floor(Date.now() / 1000 - unixSec));
+  if (sec < 60) return `${sec}s ago`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 // ---------- service worker ----------
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/pwa/sw.js').catch(() => {});
@@ -165,16 +178,27 @@ async function refreshAll() {
 }
 
 // ---------- router ----------
-// Two flavours:
+// Three flavours:
 //   #workspaces / #tasks       → tab views, handler in ROUTES
+//   #workspaces/<name>         → single-workspace detail (carousel on mobile,
+//                                wide single-column on PC). overview→detail
+//                                pattern: tap card on mobile, click h2 link
+//                                on PC.
 //   #runs/<id>                 → single-run detail (full output, link target
 //                                 from Feishu when output is truncated)
 const ROUTES = { workspaces: renderWorkspacesView, tasks: renderTasksView };
 function parseRoute() {
   const h = location.hash.replace('#', '');
   if (h.startsWith('runs/')) return { name: 'runs', id: h.slice(5) };
+  if (h.startsWith('workspaces/')) return { name: 'workspace-detail', id: decodeURIComponent(h.slice(11)) };
   return { name: h || 'workspaces', id: null };
 }
+
+// Tracks the hash we last rendered. When parseRoute() returns a different
+// hash than this, it's a "fresh navigation" — detail-mode initial scroll
+// fires only on fresh nav so polling re-renders don't keep yanking the
+// carousel back to its entry point after the user has swiped sideways.
+let _lastRenderedHash = '__init__';
 function setActiveTab(name) {
   // [data-tab] covers BOTH the topbar tabs (.tab) and the mobile bottom-nav
   // tabs (.bottom-tab) — same active class, same router target.
@@ -277,9 +301,15 @@ function render() {
 
   snapshotDrafts();
   const route = parseRoute();
+  const isFreshNav = location.hash !== _lastRenderedHash;
+  _lastRenderedHash = location.hash;
+
   if (route.name === 'runs' && route.id) {
     setActiveTab(null);                            // no tab is active for detail page
     renderRunDetailView(route.id);
+  } else if (route.name === 'workspace-detail' && route.id) {
+    setActiveTab('workspaces');                    // Workspaces tab stays highlighted
+    renderWorkspaceDetailView(route.id, { isFreshNav });
   } else {
     const handler = ROUTES[route.name] || ROUTES.workspaces;
     setActiveTab(route.name in ROUTES ? route.name : 'workspaces');
@@ -289,20 +319,30 @@ function render() {
 }
 window.addEventListener('hashchange', render);
 
-// ---------- Workspaces view ----------
+// ---------- Workspaces view (#workspaces) ----------
+// Overview level — different shape on PC vs mobile:
+//   PC      : current 4-col grid, every column has timeline + chat input.
+//             Clicking a column's name navigates to #workspaces/<name> for
+//             a focused single-workspace detail view (PC's "zoom in" mode).
+//   Mobile  : compact card list, one card per workspace, NO trigger input.
+//             Tapping a card navigates to #workspaces/<name> which renders
+//             the carousel detail view (the previous mobile default).
 function renderWorkspacesView() {
+  if (window.matchMedia('(max-width: 768px)').matches) {
+    renderMobileOverview();
+  } else {
+    renderDesktopOverview();
+  }
+}
+
+// PC overview = the prior renderWorkspacesView body. Each .ws-col is now
+// hyperlink-aware (the name h2 is an <a> to #workspaces/<name>) so users
+// can opt into focus mode without losing the at-a-glance grid.
+function renderDesktopOverview() {
   const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
   const sortedNames = Object.keys(groups).sort();
   const cols = sortedNames.map((w) => workspaceColHtml(w, groups[w])).join('');
-  const dots = sortedNames.length > 1
-    ? sortedNames.map((n, i) =>
-        `<button class="ws-dot${i === 0 ? ' active' : ''}" data-ws="${esc(n)}" aria-label="${esc(n)}"></button>`
-      ).join('')
-    : '';
 
-  // Provider options for the create form — first option is "(use global
-  // default)" which sends provider=null so workspaces.json stays clean for
-  // this workspace (no per-workspace override, falls through to config.toml).
   const globalProvider = lastData.globalProvider || '';
   const newWsProviderOptions = [
     `<option value="">(use global default${globalProvider ? `: ${esc(globalProvider)}` : ''})</option>`,
@@ -326,10 +366,86 @@ function renderWorkspacesView() {
       </form>
     </details>
     ${cols
-      ? `<div class="ws-grid">${cols}</div>${dots ? `<div class="ws-dots">${dots}</div>` : ''}`
+      ? `<div class="ws-grid">${cols}</div>`
       : `<p class="muted">No workspaces yet. Use the form above or create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
   `;
 
+  bindOverviewHandlers();
+}
+
+// Mobile overview = compact card list. Each card is a hyperlink that
+// drills into the carousel detail view via #workspaces/<name>. The "+ New
+// workspace" form stays available at the top of the list, same form as PC.
+function renderMobileOverview() {
+  const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
+  const sortedNames = Object.keys(groups).sort();
+
+  const cards = sortedNames.map((name) => {
+    const data = groups[name] || { active: [], queued: [], recent: [] };
+    const all = [
+      ...(data.active || []),
+      ...(data.queued || []),
+      ...(data.recent || []),
+    ];
+    all.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));     // newest first
+    const last = all[0];
+    const wsProvider =
+      lastData.wsSettings[name]?.provider || lastData.globalProvider || '';
+    const promptSnippet = last?.prompt ? last.prompt.slice(0, 50) : '';
+    const promptOverflow = last?.prompt && last.prompt.length > 50 ? '…' : '';
+    return `
+      <a class="ws-card" href="#workspaces/${encodeURIComponent(name)}">
+        <div class="ws-card-head">
+          <h3>${esc(name)}</h3>
+          <span class="ws-card-provider">${esc(wsProvider) || '—'}</span>
+        </div>
+        ${last
+          ? `<div class="ws-card-meta">
+               ${statusTag(last.status || '?')}
+               <span class="muted">
+                 ${last.elapsed_s != null ? `· ${esc(last.elapsed_s)}s` : ''}
+                 ${last.source ? `· ${esc(last.source)}` : ''}
+                 ${last.started_at ? `· ${esc(timeAgo(last.started_at))}` : ''}
+               </span>
+             </div>`
+          : '<div class="ws-card-meta muted">(no runs yet)</div>'}
+        ${promptSnippet
+          ? `<div class="ws-card-prompt">▸ ${esc(promptSnippet)}${promptOverflow}</div>`
+          : ''}
+      </a>
+    `;
+  }).join('');
+
+  const globalProvider = lastData.globalProvider || '';
+  const newWsProviderOptions = [
+    `<option value="">(use global default${globalProvider ? `: ${esc(globalProvider)}` : ''})</option>`,
+    ...(lastData.providers || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`),
+  ].join('');
+
+  $('view').innerHTML = `
+    <h1>Workspaces</h1>
+    <details class="add-form" data-details-id="add-ws">
+      <summary>New workspace</summary>
+      <form data-form-id="new-ws">
+        <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
+          placeholder="repo-name (alphanum / . _ -)" required></label>
+        <label>provider <select name="provider">${newWsProviderOptions}</select></label>
+        <button type="submit">Create</button>
+      </form>
+    </details>
+    ${cards
+      ? `<div class="ws-list">${cards}</div>`
+      : `<p class="muted">No workspaces yet. Use the form above.</p>`}
+  `;
+
+  $('view').querySelector('form[data-form-id="new-ws"]')
+    ?.addEventListener('submit', onAddWorkspace);
+}
+
+// Shared handler binding for renderDesktopOverview (PC) and
+// renderMobileWorkspaceDetail (mobile carousel). Both render full .ws-col
+// instances with trigger forms + provider selects.
+function bindOverviewHandlers() {
   $('view').querySelector('form[data-form-id="new-ws"]')
     ?.addEventListener('submit', onAddWorkspace);
   for (const f of $('view').querySelectorAll('.trigger-form')) {
@@ -443,18 +559,22 @@ function groupByWorkspace(workspaces, sessions) {
   return g;
 }
 
-function workspaceColHtml(name, data) {
+function workspaceColHtml(name, data, opts = {}) {
   // ONE chat-like timeline: active + queued + recent merged, sorted by
   // started_at ascending so oldest is on top and newest at the bottom
-  // (matches how you read a chat / git log / timeline). Cap at 10 rows
-  // to keep the column compact; scroll-overflow for the rest.
+  // (matches how you read a chat / git log / timeline). Default cap 10,
+  // detail mode shows 30 (PC zoom-in wants more history).
+  const maxRows = opts.maxRows ?? 10;
+  const detail = !!opts.detail;
+  const extraClass = opts.extraClass ?? '';
+
   const all = [
     ...(data.active || []),
     ...(data.queued || []),
     ...(data.recent || []),
   ];
   all.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
-  const timeline = all.slice(-10);
+  const timeline = all.slice(-maxRows);
   const timelineHtml = timeline.length
     ? timeline.map(runRowHtml).join('')
     : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
@@ -462,18 +582,21 @@ function workspaceColHtml(name, data) {
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const providers = lastData.providers || [];
   const globalProvider = lastData.globalProvider || '';
-  // Select shows the actual effective provider — workspace override if
-  // set, else global default. No separate "(default)" option to avoid
-  // the duplicate label. Picking any provider writes an override.
   const effective = wsProvider || globalProvider;
   const providerOptions = providers
     .map((p) => `<option value="${esc(p)}"${p === effective ? ' selected' : ''}>${esc(p)}</option>`)
     .join('');
 
+  // Overview: h2 wraps in a link so clicking it drills into detail.
+  // Detail: plain h2 (we're already in detail; the back-link handles exit).
+  const headerTitle = detail
+    ? `<h2>${esc(name)}</h2>`
+    : `<h2><a class="ws-name-link" href="#workspaces/${encodeURIComponent(name)}">${esc(name)}</a></h2>`;
+
   return `
-    <div class="ws-col">
+    <div class="ws-col ${extraClass}" data-ws="${esc(name)}">
       <div class="ws-head">
-        <h2>${esc(name)}</h2>
+        ${headerTitle}
         <div class="ws-provider">
           <span class="ws-provider-label">as</span>
           <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
@@ -546,6 +669,87 @@ async function onTriggerSubmit(e) {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Run';
+  }
+}
+
+// ---------- Workspace detail view (#workspaces/<name>) ----------
+// Drilled-into-one-workspace mode. Renders differently on PC vs mobile:
+//   PC      : single .ws-col centered, wider, more history rows (30 vs 10).
+//             Trigger form is still at the bottom of the column.
+//   Mobile  : the full carousel (all workspaces), scrolled to <name> on
+//             fresh navigation. Swipe between siblings. Pre-existing
+//             setupCarousel / dot-indicator wiring all applies.
+function renderWorkspaceDetailView(startName, opts = {}) {
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  if (isMobile) {
+    renderMobileWorkspaceDetail(startName, opts);
+  } else {
+    renderDesktopWorkspaceDetail(startName);
+  }
+}
+
+function renderMobileWorkspaceDetail(startName, opts = {}) {
+  const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
+  const sortedNames = Object.keys(groups).sort();
+  const cols = sortedNames.map((w) => workspaceColHtml(w, groups[w], { detail: true })).join('');
+  const dots = sortedNames.length > 1
+    ? sortedNames.map((n) =>
+        `<button class="ws-dot${n === startName ? ' active' : ''}" data-ws="${esc(n)}" aria-label="${esc(n)}"></button>`
+      ).join('')
+    : '';
+
+  $('view').innerHTML = `
+    <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
+    ${cols
+      ? `<div class="ws-grid">${cols}</div>${dots ? `<div class="ws-dots">${dots}</div>` : ''}`
+      : `<p class="muted">No workspaces.</p>`}
+  `;
+
+  for (const f of $('view').querySelectorAll('.trigger-form')) {
+    f.addEventListener('submit', onTriggerSubmit);
+  }
+  for (const sel of $('view').querySelectorAll('.provider-inline')) {
+    sel.addEventListener('change', onProviderInlineChange);
+  }
+  setupCarousel();
+
+  // Jump to the requested workspace only on fresh navigation. Polling re-
+  // renders within the same detail view should NOT yank the user back —
+  // they may have swiped sideways since entering.
+  if (opts.isFreshNav) {
+    carouselScroll.left = 0;                       // forget previous detail's scroll
+    const idx = sortedNames.indexOf(startName);
+    if (idx >= 0) {
+      requestAnimationFrame(() => {
+        const grid = $('view').querySelector('.ws-grid');
+        const target = grid?.children[idx];
+        if (target) target.scrollIntoView({ inline: 'center', block: 'nearest' });
+      });
+    }
+  }
+}
+
+function renderDesktopWorkspaceDetail(name) {
+  const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
+  if (!Object.prototype.hasOwnProperty.call(groups, name)) {
+    $('view').innerHTML = `
+      <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
+      <p class="muted">Workspace <code>${esc(name)}</code> not found.</p>
+    `;
+    return;
+  }
+  const data = groups[name];
+
+  $('view').innerHTML = `
+    <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
+    ${workspaceColHtml(name, data, { maxRows: 30, detail: true, extraClass: 'ws-col-detail' })}
+  `;
+
+  for (const f of $('view').querySelectorAll('.trigger-form')) {
+    f.addEventListener('submit', onTriggerSubmit);
+  }
+  for (const sel of $('view').querySelectorAll('.provider-inline')) {
+    sel.addEventListener('change', onProviderInlineChange);
   }
 }
 
