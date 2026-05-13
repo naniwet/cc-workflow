@@ -751,9 +751,42 @@ function renderMobileOverview() {
 // particular live INSIDE the timeline so they're re-emitted whenever
 // workspaceColHtml runs — without this binder, they were dead on the
 // mobile carousel + PC detail views (only PC overview was wired up).
+// Detect mobile once at module load — viewport width never changes mid-session
+// for a chat-style PWA (no responsive flip mid-typing). Used by Enter-to-send.
+const _isMobileViewport = window.matchMedia('(max-width: 768px)').matches;
+
+function _onPromptKeydown(e) {
+  // IME composing (Chinese pinyin / Japanese / Korean): the user is mid-
+  // composition, Enter belongs to the IME for candidate selection.
+  // isComposing is the canonical signal; keyCode 229 is the legacy fallback
+  // some IMEs send instead of setting isComposing properly.
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key !== 'Enter') return;
+  // Cmd/Ctrl+Enter: universal "send" shortcut, works on PC + mobile.
+  // Plain Enter: send on PC only (mobile keyboards have no Shift+Enter,
+  // so plain-Enter-as-send would lock users out of multi-line prompts).
+  const modSend = e.metaKey || e.ctrlKey;
+  const plainSend = !_isMobileViewport && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey;
+  if (!modSend && !plainSend) return;
+  e.preventDefault();
+  // Find the enclosing form and ask it to submit through the normal
+  // event path (so onTriggerSubmit runs with e.preventDefault + validity
+  // checks). requestSubmit triggers the submit handler + native validation.
+  const form = e.currentTarget.closest('form');
+  if (form && form.checkValidity()) form.requestSubmit();
+  else if (form) form.reportValidity();
+}
+
 function bindWorkspaceColHandlers(root) {
   for (const f of root.querySelectorAll('.trigger-form')) {
     f.addEventListener('submit', onTriggerSubmit);
+    // Enter-to-send on PC. Plain Enter submits, Shift+Enter inserts a
+    // newline (default <textarea> behavior). On mobile we leave Enter
+    // alone — the virtual keyboard's Enter key doubles as newline and
+    // there's no Shift modifier on most IMEs. Cmd/Ctrl+Enter works
+    // everywhere as a universal "send" shortcut.
+    const ta = f.querySelector('textarea[name="prompt"]');
+    if (ta) ta.addEventListener('keydown', _onPromptKeydown);
   }
   for (const sel of root.querySelectorAll('.provider-inline')) {
     sel.addEventListener('change', onProviderInlineChange);
@@ -1292,7 +1325,7 @@ function workspaceColHtml(name, data, opts = {}) {
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
-        <textarea name="prompt" placeholder="reply with only OK" required></textarea>
+        <textarea name="prompt" placeholder="reply with only OK · Enter to send, Shift+Enter for newline" required></textarea>
         <button type="submit">Run</button>
       </form>
     </div>
