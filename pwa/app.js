@@ -754,16 +754,11 @@ function bindWorkspaceColHandlers(root) {
   for (const b of root.querySelectorAll('.ws-trust-toggle')) {
     b.addEventListener('click', onTrustToggleClick);
   }
-  for (const b of root.querySelectorAll('.approval-approve, .approval-deny')) {
+  const approvalBtns = root.querySelectorAll('.approval-approve, .approval-deny');
+  console.log('[cc-debug] bindWorkspaceColHandlers: approval buttons found =', approvalBtns.length);
+  for (const b of approvalBtns) {
     b.addEventListener('click', onApprovalClick);
-    // Mobile fallback. Approval buttons live inside .ws-timeline which has
-    // overflow-y: auto AND is itself inside .ws-grid with scroll-snap-type:
-    // x mandatory (mobile carousel). Some Android browsers (Quark, the
-    // Vivo/Mi/Huawei stock browsers, sometimes even Chrome) decide that a
-    // tap which touches anywhere inside a nested-scroll container is
-    // "ambiguous" and silently swallow the click event. `touchend` still
-    // fires reliably, so we synthesize a click from it when the touch
-    // didn't drift far enough to count as a swipe.
+    // Mobile fallback. See _addTapFallback comment.
     _addTapFallback(b, onApprovalClick);
   }
 }
@@ -1522,13 +1517,7 @@ function renderTasksView() {
         <label>prompt
           <textarea name="prompt" placeholder="summarize yesterday's commits" required></textarea>
         </label>
-        <div class="add-loop-foot">
-          <label class="inline-check">
-            <input type="checkbox" name="run_now" checked>
-            Run once now
-          </label>
-          <button type="submit">Add</button>
-        </div>
+        <button type="submit">Add</button>
       </form>
     </details>
     <p class="muted">
@@ -1543,7 +1532,7 @@ function renderTasksView() {
     ?.addEventListener('submit', onAddLoop);
   $('view').querySelector('.parse-btn')
     ?.addEventListener('click', onParseNl);
-  for (const b of $('view').querySelectorAll('.pause-btn, .resume-btn, .delete-btn')) {
+  for (const b of $('view').querySelectorAll('.run-now-btn, .pause-btn, .resume-btn, .delete-btn')) {
     b.addEventListener('click', onLoopAction);
   }
 }
@@ -1584,6 +1573,7 @@ function loopRowHtml(loop) {
         ${enabledTag}
         ${stale ? `<span class="tag tag-failed">${ICONS.warning}stale ${esc(loop.consecutive_errors)}</span>` : ''}
         <span class="loop-actions">
+          <button class="primary run-now-btn" data-name="${esc(loop.name)}" title="Fire one run now (out of band; doesn't change the schedule)">Run now</button>
           ${enabled
             ? `<button class="secondary pause-btn" data-name="${esc(loop.name)}">Pause</button>`
             : `<button class="secondary resume-btn" data-name="${esc(loop.name)}">Resume</button>`}
@@ -1621,8 +1611,6 @@ async function onAddLoop(e) {
         schedule: fd.schedule,
         prompt: fd.prompt,
         // engine is bound to the workspace — backend reads from workspaces.json
-        // Checkbox: FormData omits unchecked boxes entirely, so undefined → false.
-        run_now: fd.run_now === 'on',
       }),
     });
     form.reset();
@@ -1677,18 +1665,25 @@ async function onParseNl(e) {
 async function onLoopAction(e) {
   const btn = e.target;
   const name = btn.dataset.name;
-  let endpoint, method;
-  if (btn.classList.contains('pause-btn')) {
-    endpoint = `/loops/${encodeURIComponent(name)}/pause`; method = 'POST';
+  let endpoint, method, kind;
+  if (btn.classList.contains('run-now-btn')) {
+    endpoint = `/loops/${encodeURIComponent(name)}/run`; method = 'POST'; kind = 'run';
+  } else if (btn.classList.contains('pause-btn')) {
+    endpoint = `/loops/${encodeURIComponent(name)}/pause`; method = 'POST'; kind = 'pause';
   } else if (btn.classList.contains('resume-btn')) {
-    endpoint = `/loops/${encodeURIComponent(name)}/resume`; method = 'POST';
+    endpoint = `/loops/${encodeURIComponent(name)}/resume`; method = 'POST'; kind = 'resume';
   } else if (btn.classList.contains('delete-btn')) {
     if (!confirm(`Delete cron loop "${name}"?\nRemoves /etc/cron.d/cc-loops entry + jobs/${name}.json.`)) return;
-    endpoint = `/loops/${encodeURIComponent(name)}`; method = 'DELETE';
+    endpoint = `/loops/${encodeURIComponent(name)}`; method = 'DELETE'; kind = 'delete';
   } else return;
   btn.disabled = true;
   try {
-    await api(endpoint, { method });
+    const resp = await api(endpoint, { method });
+    if (kind === 'run') {
+      // Run-now is fire-and-forget — output lands in the Workspaces timeline
+      // for `name`'s workspace; no synchronous update to this card.
+      showToast('success', `${name}: run queued`, { ttl: 2000 });
+    }
     refreshAll();
   } catch (err) {
     showError(`${method} ${name} failed: ${err.message}`);

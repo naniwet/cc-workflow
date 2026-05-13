@@ -16,6 +16,7 @@ Routes:
   DELETE /loops/{name}                         session
   POST   /loops/{name}/pause                   session
   POST   /loops/{name}/resume                  session
+  POST   /loops/{name}/run                     session   (fire one immediate run)
   POST   /cron/parse-nl                        session
   GET    /approvals/pending                    session
   POST   /approvals/{id}/decision              session
@@ -364,12 +365,10 @@ class NewLoopRequest(BaseModel):
     workspace: str = Field(..., min_length=1, max_length=128)
     prompt: str = Field(..., min_length=1, max_length=4096)
     # engine intentionally absent — derived from workspace's immutable setting.
-    # When true (the PWA's default), fire one immediate run right after the
-    # cron entry is written — so the user gets a "first result" without
-    # waiting for the next scheduled tick. Source is "pwa" (not "cron")
-    # because cron didn't fire it, the Add button did; session_key matches
-    # what future cron-fired runs use so the agent sees a contiguous chat.
-    run_now: bool = True
+    # No `run_now` field: on-demand triggering is its own endpoint
+    # (POST /loops/{name}/run) so Add is purely "register the schedule" and
+    # users can fire any loop on demand from the list without re-entering
+    # name/schedule/prompt.
 
 
 @app.post("/loops", dependencies=PROTECT, status_code=201)
@@ -379,11 +378,7 @@ def create_loop(req: NewLoopRequest) -> dict:
     Engine is read from the workspace's settings — there's no per-loop
     engine override. To use a different engine, create a separate workspace.
 
-    If `run_now` is true, also fires one immediate run via runner.submit().
-    The immediate run is tagged source="pwa", NOT source="cron", and is NOT
-    counted in jobs/<name>.json's total_runs — that file tracks cron-fired
-    runs only, this one's a PWA-initiated sanity check that happens to
-    share the loop's session_key.
+    Does NOT fire an immediate run. Use POST /loops/{name}/run for that.
     """
     engine = ws_settings.engine_for(req.workspace)
     try:
@@ -400,21 +395,47 @@ def create_loop(req: NewLoopRequest) -> dict:
         raise HTTPException(400, {"error": str(e)})
     except OSError as e:
         raise HTTPException(500, {"error": f"cron file write failed: {e}"})
-
-    if req.run_now:
-        first_run_id = db.new_run_id()
-        runner.submit(
-            run_id=first_run_id,
-            workspace=req.workspace,
-            prompt=req.prompt,
-            engine=engine,
-            session_key=req.name,        # align with cron-fired runs for this loop
-            source="pwa",                # honest: PWA triggered this, not cron
-            provider=ws_settings.provider_for(req.workspace),
-            permission_mode=ws_settings.permission_mode_for(req.workspace),
-        )
-        result["first_run_id"] = first_run_id
     return result
+
+
+@app.post("/loops/{name}/run", dependencies=PROTECT, status_code=202)
+def run_loop_now(name: str) -> dict:
+    """Fire one immediate run of an existing cron loop on demand.
+
+    Looks up the loop's prompt/workspace/engine from /etc/cron.d/cc-loops
+    (parsed by cron_state.list_jobs — the cron file is the source of
+    truth, jobs.json holds only runtime counters). Submits via
+    runner.submit() tagged source="pwa" so it's distinguishable from
+    cron-fired runs, but reuses the loop name as session_key so the
+    agent sees one contiguous chat across cron-fired + manually-fired
+    invocations.
+    """
+    jobs = cron_state.list_jobs()
+    job = next((j for j in jobs if j.get("name") == name), None)
+    if job is None:
+        raise HTTPException(404, {"error": "loop not found", "name": name})
+    workspace = job.get("workspace")
+    prompt = job.get("prompt")
+    engine = job.get("engine") or ws_settings.engine_for(workspace or "")
+    if not workspace or not prompt:
+        # cron file is corrupt or the entry was deleted out-of-band;
+        # jobs.json on its own doesn't know the prompt.
+        raise HTTPException(
+            500,
+            {"error": "loop spec missing in cron file — try Delete + re-Add", "name": name},
+        )
+    run_id = db.new_run_id()
+    runner.submit(
+        run_id=run_id,
+        workspace=workspace,
+        prompt=prompt,
+        engine=engine,
+        session_key=name,            # align with cron-fired runs for this loop
+        source="pwa",                # honest: PWA triggered this, not cron
+        provider=ws_settings.provider_for(workspace),
+        permission_mode=ws_settings.permission_mode_for(workspace),
+    )
+    return {"task_id": run_id, "status": "queued", "name": name}
 
 
 @app.delete("/loops/{name}", dependencies=PROTECT)
