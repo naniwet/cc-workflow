@@ -320,12 +320,51 @@ run_claude() {
 }
 
 run_codex() {
-    # Codex is best-effort in P0. Day-0 reality check verifies `codex exec` syntax.
+    # codex CLI (https://github.com/openai/codex) has a different surface from
+    # Claude Code — translate Claude's semantics where possible, fail loudly
+    # where there's no equivalent:
+    #
+    #   --json                       JSONL event stream → log only; we
+    #                                 don't parse it (final-text path below).
+    #   --output-last-message <path> Clean final assistant text to a file
+    #                                 (avoids parsing JSON for the reply).
+    #   -a never                     Never TTY-prompt for approval — we run
+    #                                 headless, a prompt would hang.
+    #   -s workspace-write           Sandbox: read all + write only inside
+    #                                 WORKDIR; no network egress. (codex's
+    #                                 only granularity. PreToolUse-style
+    #                                 hooks don't exist upstream — see
+    #                                 issue #8923 / #3817.)
+    #   --skip-git-repo-check        We've already validated WORKDIR is a
+    #                                 git repo at arg-parse time.
+    #
+    # PERMISSION_MODE is intentionally ignored here — claude's
+    # acceptEdits/bypassPermissions vocabulary doesn't map. Backend enforces
+    # engine=codex → trust=true at workspace-create time, so the user has
+    # already opted into "auto-approve everything" by picking this engine.
+    #
+    # Session resume is NOT yet wired up — codex's session_id isn't exposed
+    # in --json output (upstream bug #8923) and `codex resume --last` works
+    # per-cwd which interacts oddly with our worktree-per-session_key model.
+    # Each codex run is currently standalone. C2 will revisit.
     local log="${LOGS_DIR}/$(date +%Y-%m-%d).jsonl"
-    local rc=0
-    ( cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" codex exec "$PROMPT" ) 2>>"$log" || rc=$?
-    if [[ $rc -eq 124 ]]; then die "$EX_TIMEOUT" "codex timeout"; fi
-    if [[ $rc -ne 0 ]]; then die "$EX_ENGINE_FAIL" "codex exit=$rc (log: $log)"; fi
+    local out rc=0
+    out="$(mktemp)"
+    (
+        cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" codex exec \
+            --json \
+            --output-last-message "$out" \
+            -a never \
+            -s workspace-write \
+            --skip-git-repo-check \
+            "$PROMPT"
+    ) >>"$log" 2>&1 || rc=$?
+    if [[ $rc -eq 124 ]]; then rm -f "$out"; die "$EX_TIMEOUT" "codex timeout (${TIMEOUT_SECONDS}s)"; fi
+    if [[ $rc -ne 0 ]]; then  rm -f "$out"; die "$EX_ENGINE_FAIL" "codex exit=$rc (log: $log)"; fi
+    # Emit the final assistant text so the outer OUTPUT="$(run_codex)" captures
+    # it. codex writes plain text (no JSON wrapping) to --output-last-message.
+    cat "$out" 2>/dev/null || true
+    rm -f "$out"
 }
 
 # ---------- main ----------

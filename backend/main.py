@@ -279,6 +279,16 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
             current["provider"] = body.provider
 
     if "trust" in sent:
+        # engine=codex always forces trust=true (see ws_settings.trust_for).
+        # Reject attempts to flip it off — silently coercing would leave the
+        # client thinking it succeeded; better to 400 so the UI knows to
+        # show its own explanation.
+        if current.get("engine") == "codex" and body.trust is False:
+            raise HTTPException(
+                400,
+                {"error": "engine=codex requires trust=true (codex has no fine-grained approval API)",
+                 "name": name},
+            )
         if body.trust is None:
             current.pop("trust", None)              # null → revert to default
         else:
@@ -335,17 +345,27 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
     if req.provider:
         settings["provider"] = req.provider
     settings["engine"] = req.engine
-    if req.trust is not None:
+    # engine=codex implies trust=true (codex doesn't support fine-grained
+    # approval — see ws_settings.trust_for docstring). Persist that explicitly
+    # so the PWA shows the trust state correctly without having to special-
+    # case codex everywhere. User-supplied req.trust is overridden.
+    if req.engine == "codex":
+        settings["trust"] = True
+        effective_trust: Optional[bool] = True
+    elif req.trust is not None:
         settings["trust"] = bool(req.trust)
-    # If req.trust is None we DON'T write anything — trust_for() will fall
-    # back to config.toml default_trust at runtime. Avoids freezing the
-    # current global default into the workspace.
+        effective_trust = bool(req.trust)
+    else:
+        # If req.trust is None we DON'T write anything — trust_for() will
+        # fall back to config.toml default_trust at runtime. Avoids freezing
+        # the current global default into the workspace.
+        effective_trust = None
     data[req.name] = settings
     ws_settings.save(data)
 
     return {
         "ok": True, "name": req.name, "path": str(target),
-        "provider": req.provider, "engine": req.engine, "trust": req.trust,
+        "provider": req.provider, "engine": req.engine, "trust": effective_trust,
     }
 
 

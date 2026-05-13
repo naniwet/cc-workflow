@@ -294,6 +294,16 @@ main {
   background: rgba(245, 158, 11, 0.10);
 }
 .ws-trust-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
+/* Locked: engine=codex forces trust=true (no PreToolUse hook available
+   upstream). Visual cue = dashed border + no hover background change; the
+   click handler still surfaces a toast explanation rather than firing a
+   pointless PUT. */
+.ws-trust-toggle.is-locked {
+  border-style: dashed;
+  cursor: help;
+  opacity: 0.85;
+}
+.ws-trust-toggle.is-locked:hover { background: transparent; border-color: rgba(245, 158, 11, 0.30); }
 
 /* Read-only trust badge in mobile overview cards. Same amber color cue as
    the PC toggle's trusted state. */

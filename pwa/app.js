@@ -738,8 +738,9 @@ function renderMobileOverview() {
       : `<p class="muted">No workspaces yet. Use the form above.</p>`}
   `;
 
-  $('view').querySelector('form[data-form-id="new-ws"]')
-    ?.addEventListener('submit', onAddWorkspace);
+  const newWsForm = $('view').querySelector('form[data-form-id="new-ws"]');
+  newWsForm?.addEventListener('submit', onAddWorkspace);
+  _wireCodexTrustLock(newWsForm);
 }
 
 // Bind handlers that exist on every .ws-col-rendering view (PC overview,
@@ -810,11 +811,42 @@ function _addTapFallback(el, handler) {
 // also runs the shared bindWorkspaceColHandlers so every card has its
 // trigger / provider / trust / approval handlers wired.
 function bindOverviewHandlers() {
-  $('view').querySelector('form[data-form-id="new-ws"]')
-    ?.addEventListener('submit', onAddWorkspace);
+  const newWsForm = $('view').querySelector('form[data-form-id="new-ws"]');
+  newWsForm?.addEventListener('submit', onAddWorkspace);
+  _wireCodexTrustLock(newWsForm);
   bindWorkspaceColHandlers($('view'));
   setupCarousel();
   setupDragReorder();
+}
+
+// engine=codex implies trust=true (codex has no fine-grained approval API —
+// see ws_settings.trust_for). Make this visible at form-fill time so users
+// don't fill the form expecting they can opt out and then get surprised
+// when the backend overrides. The hint text below the form line also
+// switches to a codex-specific message.
+function _wireCodexTrustLock(form) {
+  if (!form) return;
+  const engineSel = form.querySelector('select[name="engine"]');
+  const trustChk = form.querySelector('input[name="trust"]');
+  if (!engineSel || !trustChk) return;
+  // Remember the user's pre-codex trust choice so flipping engine back to
+  // claude restores it (avoids "I unchecked trust earlier and now it's
+  // permanently stuck on" surprise).
+  let prevTrustValue = trustChk.checked;
+  const apply = () => {
+    if (engineSel.value === 'codex') {
+      if (!trustChk.disabled) prevTrustValue = trustChk.checked;
+      trustChk.checked = true;
+      trustChk.disabled = true;
+      trustChk.title = 'codex 不支持精细审批,trust 锁定为 true';
+    } else {
+      trustChk.disabled = false;
+      trustChk.checked = prevTrustValue;
+      trustChk.title = '';
+    }
+  };
+  engineSel.addEventListener('change', apply);
+  apply();    // run once for initial state (also covers reopening a draft)
 }
 
 // ---------- PC drag-to-reorder ----------
@@ -1016,28 +1048,51 @@ function setupCarousel() {
 }
 
 // Effective per-workspace trust (mirrors backend ws_settings.trust_for):
+//   engine=codex → always true (forced; codex has no fine-grained approval)
 //   explicit setting > config.toml default_trust > false
 function effectiveTrust(name) {
   const s = lastData.wsSettings[name];
+  if (s?.engine === 'codex') return true;
   if (s && typeof s.trust === 'boolean') return s.trust;
   return !!lastData.globalDefaultTrust;
 }
 
-// Render the per-workspace trust toggle button (only in non-detail mode).
+// Render the per-workspace trust toggle button.
+// For codex workspaces the toggle is rendered DISABLED — codex has no
+// PreToolUse-style hook API upstream (issue #8923/#3817), so trust is
+// effectively locked to true. The button still renders so the column
+// header layout stays consistent, but clicking does nothing except
+// surface a toast explanation.
 function trustToggleHtml(name) {
+  const isCodex = lastData.wsSettings[name]?.engine === 'codex';
   const trusted = effectiveTrust(name);
   const icon = trusted ? ICONS.unlock : ICONS.lock;
-  const tip = trusted
-    ? '工具已自动批准 (bypassPermissions). 点击改回 ask.'
-    : '工具需要批准 (acceptEdits). 点击改成自动 (慎用).';
-  return `<button class="ws-trust-toggle${trusted ? ' is-trusted' : ''}" type="button"
+  let tip;
+  if (isCodex) {
+    tip = 'codex 不支持精细工具审批 — trust 锁定为 auto-approve.';
+  } else {
+    tip = trusted
+      ? '工具已自动批准 (bypassPermissions). 点击改回 ask.'
+      : '工具需要批准 (acceptEdits). 点击改成自动 (慎用).';
+  }
+  const classes = ['ws-trust-toggle'];
+  if (trusted) classes.push('is-trusted');
+  if (isCodex) classes.push('is-locked');
+  return `<button class="${classes.join(' ')}" type="button"
                   data-ws="${esc(name)}" data-trusted="${trusted ? '1' : '0'}"
+                  data-codex="${isCodex ? '1' : '0'}"
                   title="${esc(tip)}" aria-label="Toggle trust">${icon}</button>`;
 }
 
 async function onTrustToggleClick(e) {
   const btn = e.currentTarget;
   const name = btn.dataset.ws;
+  // codex workspaces: short-circuit with an explanation rather than firing
+  // a PUT that the backend will 400. Less round-trips, clearer signal.
+  if (btn.dataset.codex === '1') {
+    showToast('info', `${name}: engine=codex 强制 trust=true(codex 无审批 hook)`, { ttl: 3500 });
+    return;
+  }
   const wasTrusted = btn.dataset.trusted === '1';
   const next = !wasTrusted;
   // Only confirm when ENABLING trust — it's the security-relevant direction.

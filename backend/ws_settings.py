@@ -80,13 +80,25 @@ def engine_for(workspace: str) -> str:
 
 def trust_for(workspace: str) -> bool:
     """Trust resolution for tool permissions:
+        engine=codex → always True (forced; see below)
         per-workspace `trust` field > config.toml `default_trust` > False.
 
     When True, agent-run is invoked with `--permission-mode bypassPermissions`
     (claude auto-approves every tool including Bash / Edit / WebFetch).
     When False, the default `acceptEdits` is used — Edit/Write auto-approved,
     others fall through to "please approve" text in headless mode.
+
+    Why codex is forced to True: codex CLI has no PreToolUse-style hook API
+    (upstream issue #8923/#3817), so our path-2 approval flow (PWA pops up
+    [Approve][Deny] buttons) is impossible to implement for codex. The only
+    options codex offers are coarse `--sandbox` + `--ask-for-approval`
+    flags, and any `--ask-for-approval` value other than `never` would TTY-
+    prompt and hang in our headless context. So picking engine=codex is
+    semantically "I accept auto-approve" — we lock trust=True to make that
+    explicit instead of letting users flip a toggle that has no effect.
     """
+    if engine_for(workspace) == "codex":
+        return True
     ws = (load().get(workspace) or {}).get("trust")
     if isinstance(ws, bool):
         return ws

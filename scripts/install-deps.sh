@@ -22,12 +22,19 @@ else
     sudo npm install -g @anthropic-ai/claude-code
 fi
 
-# ---------- codex CLI (best-effort) ----------
+# ---------- codex CLI ----------
+# C1+ (May 2026): codex is no longer best-effort. agent-run's run_codex uses
+# real flags (--json / -o / -a never / -s workspace-write) and a workspace
+# created with engine=codex actually routes through here. Install it
+# unconditionally so users picking codex in the PWA don't hit "command not
+# found". Auth on headless server is via OPENAI_API_KEY (or CODEX_API_KEY) —
+# user fills that into providers.json or shell env separately.
 if have codex; then
     log "codex: $(codex --version 2>/dev/null || codex --help 2>&1 | head -1)"
 else
-    warn "codex CLI not installed (P0-1 best-effort allows this)."
-    warn "manual install: https://github.com/openai/codex"
+    have npm || { err "npm missing — install Node.js first (see claude install step above)"; exit 1; }
+    log "installing @openai/codex..."
+    sudo npm install -g @openai/codex
 fi
 
 # ---------- jq ----------
