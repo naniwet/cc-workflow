@@ -130,6 +130,10 @@ def get_workspaces() -> list[str]:
 
 class NewWorkspaceRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    # Optional: pin the workspace to a specific LLM provider at creation
+    # time. Same semantics as PUT /workspaces/{name}/settings — saved into
+    # workspaces.json. Empty/None means "use global config.toml default".
+    provider: Optional[str] = Field(default=None, max_length=64)
 
 
 @app.get("/config", dependencies=PROTECT)
@@ -202,10 +206,25 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
 
 @app.post("/workspaces", dependencies=PROTECT, status_code=201)
 def create_workspace(req: NewWorkspaceRequest) -> dict:
-    """Create ~/workspaces/<name>/ as a fresh git repo (init + empty README + first commit)."""
+    """Create ~/workspaces/<name>/ as a fresh git repo (init + empty README + first commit).
+
+    Optionally pins the workspace to a specific provider — same effect as
+    calling PUT /workspaces/{name}/settings right after create.
+    """
     target = config.WORKSPACES_DIR / req.name
     if target.exists():
         raise HTTPException(409, {"error": "workspace already exists", "name": req.name})
+
+    # Validate the optional provider FIRST so we don't leave a half-created
+    # repo behind if the provider name is bad.
+    if req.provider:
+        valid = set(list_providers())
+        if req.provider not in valid:
+            raise HTTPException(
+                400,
+                {"error": "unknown provider", "got": req.provider, "valid": sorted(valid)},
+            )
+
     target.mkdir(parents=True, exist_ok=False)
     try:
         for cmd in (
@@ -220,7 +239,14 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
     except subprocess.CalledProcessError as e:
         # Leave the half-initialized dir for inspection; surface error.
         raise HTTPException(500, {"error": "git init failed", "detail": str(e)})
-    return {"ok": True, "name": req.name, "path": str(target)}
+
+    # Save the provider override (if any) — same shape as PUT settings writes.
+    if req.provider:
+        data = _load_ws_settings()
+        data[req.name] = {"provider": req.provider}
+        _save_ws_settings(data)
+
+    return {"ok": True, "name": req.name, "path": str(target), "provider": req.provider}
 
 
 # ---------- /loops (T+1d — P0-2 + P0-3 后半) ----------

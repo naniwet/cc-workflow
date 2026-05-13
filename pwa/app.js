@@ -300,6 +300,15 @@ function renderWorkspacesView() {
       ).join('')
     : '';
 
+  // Provider options for the create form — first option is "(use global
+  // default)" which sends provider=null so workspaces.json stays clean for
+  // this workspace (no per-workspace override, falls through to config.toml).
+  const globalProvider = lastData.globalProvider || '';
+  const newWsProviderOptions = [
+    `<option value="">(use global default${globalProvider ? `: ${esc(globalProvider)}` : ''})</option>`,
+    ...(lastData.providers || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`),
+  ].join('');
+
   $('view').innerHTML = `
     <h1>Workspaces</h1>
     <details class="add-form" data-details-id="add-ws">
@@ -307,10 +316,12 @@ function renderWorkspacesView() {
       <form data-form-id="new-ws">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
           placeholder="repo-name (alphanum / . _ -)" required></label>
+        <label>provider <select name="provider">${newWsProviderOptions}</select></label>
         <button type="submit">Create</button>
         <p class="muted" style="font-size:11px;margin:0">
           Creates <code>~/workspaces/&lt;name&gt;/</code> with <code>git init</code>
-          + empty README + first commit.
+          + empty README + first commit. Provider can be switched anytime via the
+          column header.
         </p>
       </form>
     </details>
@@ -397,6 +408,9 @@ async function onAddWorkspace(e) {
   e.preventDefault();
   const form = e.target;
   const name = form.elements.name.value.trim();
+  // Empty string from the "(use global default)" option → send null so the
+  // backend skips writing a per-workspace override into workspaces.json.
+  const provider = (form.elements.provider?.value || '').trim() || null;
   if (!name) return;
   const btn = form.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = 'Creating…';
@@ -404,7 +418,7 @@ async function onAddWorkspace(e) {
     await api('/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, provider }),
     });
     form.reset();
     clearDraft('new-ws');
