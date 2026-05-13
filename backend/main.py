@@ -11,6 +11,7 @@ Routes:
   GET    /sessions                             session
   GET    /workspaces                           session
   POST   /workspaces                           session
+  DELETE /workspaces/{name}/session            session   (reset PWA conversation)
   GET    /providers/codex                       session   (codex_profiles list)
   GET    /skills                               session   (slash command discovery)
   GET    /loops                                session
@@ -352,6 +353,68 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
         data.pop(name, None)
     ws_settings.save(data)
     return current
+
+
+@app.delete("/workspaces/{name}/session", dependencies=PROTECT)
+def reset_workspace_session(name: str) -> dict:
+    """Reset the PWA's conversation session for this workspace.
+
+    Clears two pieces of state, both keyed by the PWA's session_key
+    convention `pwa-<workspace>`:
+
+      1. ~/.cc-state/sessions.json[pwa-<name>].claude_session_id
+         (the resume pointer; absent → next agent-run starts fresh)
+      2. ~/.cc-state/codex-sessions/<name>__pwa-<name>
+         (the marker file; absent → codex skips `resume --last`)
+
+    Returns {"cleared": [...]} listing what was actually removed (so
+    the PWA can show a precise toast — "session_id + codex marker"
+    vs "session_id only" depending on engine history).
+
+    Does NOT touch cron loops' or Feishu chats' sessions — those use
+    different session_keys and their own UX would call this with
+    different parameters (not implemented yet — single-user can edit
+    sessions.json by hand).
+    """
+    target = config.WORKSPACES_DIR / name
+    if not (target / ".git").exists():
+        raise HTTPException(404, {"error": "workspace not found", "name": name})
+
+    key = f"pwa-{name}"
+    cleared: list[str] = []
+
+    # 1. Claude session_id
+    try:
+        if config.SESSIONS_FILE.exists():
+            data = json.loads(config.SESSIONS_FILE.read_text(encoding="utf-8"))
+            if key in data:
+                # Drop the whole row (both claude and codex slots — they
+                # share the session_key entry). Empty file is fine; agent-run
+                # ensure_sessions_file handles missing dict keys.
+                data.pop(key)
+                tmp = config.SESSIONS_FILE.with_suffix(".tmp")
+                tmp.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                os.replace(tmp, config.SESSIONS_FILE)
+                cleared.append("claude_session_id")
+    except (OSError, json.JSONDecodeError) as e:
+        raise HTTPException(500, {"error": f"sessions.json write failed: {e}"})
+
+    # 2. Codex marker
+    # Marker name mirrors agent-run.sh setup_codex_provider's safe-name logic.
+    import re
+    marker_safe = re.sub(r"[^A-Za-z0-9._-]", "_", f"{name}__{key}")
+    marker = config.CODEX_SESSIONS_DIR / marker_safe
+    try:
+        if marker.exists():
+            marker.unlink()
+            cleared.append("codex_marker")
+    except OSError as e:
+        raise HTTPException(500, {"error": f"codex marker delete failed: {e}"})
+
+    return {"ok": True, "workspace": name, "session_key": key, "cleared": cleared}
 
 
 @app.post("/workspaces", dependencies=PROTECT, status_code=201)

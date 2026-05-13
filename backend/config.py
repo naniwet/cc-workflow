@@ -23,6 +23,14 @@ PROVIDERS_FILE = CCW_DIR / "providers.json"     # ccswitch-style profiles, read 
 STATE_DIR = Path(os.environ.get("CC_STATE_HOME", Path.home() / ".cc-state"))
 RUNS_DB = STATE_DIR / "runs.db"
 JOBS_DIR = STATE_DIR / "jobs"
+# Session id storage — keyed by session_key, written by agent-run.sh's
+# save_session_id(). Read by both agent-run (for --resume) and backend's
+# DELETE /workspaces/{name}/session (to clear an over-long session).
+SESSIONS_FILE = STATE_DIR / "sessions.json"
+# codex marker dir — touched after first codex run per (workspace, session_key)
+# so subsequent runs use `codex exec resume --last`. Same delete endpoint
+# clears both this and the claude session_id.
+CODEX_SESSIONS_DIR = STATE_DIR / "codex-sessions"
 
 # Where agent-run.sh resolves <workspace> names — must match agent-run.sh's
 # WORKSPACES_DIR constant. Used by ui_cards.run_form_card() to populate the

@@ -268,6 +268,58 @@ get_session_id() {  # $1=engine; stdout=sid or empty
         '(.[$k][$f] // "")' "$SESSIONS_FILE" 2>/dev/null || true
 }
 
+# Read the input_tokens count from the last successful claude run for this
+# session_key. Used by run_claude's pre-flight to decide whether to compact.
+# Returns 0 when missing (fresh session) or unparseable.
+get_session_tokens() {
+    ensure_sessions_file
+    jq -r --arg k "$SESSION_KEY" \
+        '(.[$k].last_input_tokens // 0)' "$SESSIONS_FILE" 2>/dev/null || printf '0'
+}
+
+# Save the input_tokens count after a successful run, so next run's
+# pre-flight can decide whether to compact.
+save_session_tokens() {  # $1=tokens (integer)
+    ensure_sessions_file
+    local tokens="$1" tmp
+    tmp="$(mktemp)"
+    jq --arg k "$SESSION_KEY" --arg ws "$WORKSPACE" --argjson t "$tokens" \
+        '
+        (.[$k] //= {workspace:$ws, claude_session_id:null, codex_session_id:null, last_active_at:0})
+        | .[$k].last_input_tokens = $t
+        ' "$SESSIONS_FILE" > "$tmp" && mv "$tmp" "$SESSIONS_FILE"
+}
+
+# Used by run_compact's post-summary phase to drop the prior session_id so
+# the next claude -p call starts fresh (no --resume).
+clear_session_id() {  # $1=engine
+    ensure_sessions_file
+    local field="${1}_session_id" tmp
+    tmp="$(mktemp)"
+    jq --arg k "$SESSION_KEY" --arg f "$field" \
+        'if .[$k] then .[$k][$f] = null else . end' \
+        "$SESSIONS_FILE" > "$tmp" && mv "$tmp" "$SESSIONS_FILE"
+}
+
+# Read compact threshold from config.toml's `compact_threshold_tokens` field.
+# Default 150k — leaves ~50k buffer in a 200k context (claude sonnet) for
+# the new turn + system prompt + tool output. For 1M-context providers
+# (deepseek-v4-pro[1m]) set compact_threshold_tokens = 800000 in config.
+get_compact_threshold() {
+    local default=150000 val
+    [[ -f "$CCW_CONFIG" ]] || { printf '%s' "$default"; return; }
+    val="$(awk -F'=' '
+        /^[[:space:]]*compact_threshold_tokens[[:space:]]*=/ {
+            gsub(/[[:space:]"]/, "", $2); print $2; exit
+        }
+    ' "$CCW_CONFIG")"
+    if [[ -z "$val" ]]; then
+        printf '%s' "$default"
+    else
+        printf '%s' "$val"
+    fi
+}
+
 save_session_id() {  # $1=engine, $2=sid
     ensure_sessions_file
     local field="${1}_session_id" sid="$2" now tmp
@@ -367,12 +419,139 @@ else
     fi
 fi
 
+# ---------- DIY compact ----------
+#
+# Claude Code's /compact is TUI-only — not available under `claude -p`. We
+# replicate it ourselves: when the prior turn's input_tokens (the size of
+# everything sent to the model, including history) exceeds a threshold, run
+# a summarization prompt against the current session, then drop the session
+# and start fresh with the summary as preamble. The summary lives in the
+# new turn's user message, not as a system prompt — claude -p doesn't
+# expose system-prompt injection from the wrapper layer.
+#
+# Prompt structure mirrors Piebald-AI's reverse-engineered template for
+# Claude Code's /compact (not Anthropic-confirmed but the closest public
+# documentation of the format). 9 sections, with §6 (verbatim user messages)
+# called out as non-negotiable per the Claude Code CHANGELOG note:
+#   "Compaction prompt now asks the model to preserve sensitive user
+#    instructions" (preserved verbatim in security-relevant places).
+#
+# INFERRED: structure based on Piebald-AI's repo, not official Anthropic
+# docs. Adjust sections here if you find Anthropic publishes the real one.
+
+COMPACT_PROMPT='You are compacting a long conversation between a user and an AI coding
+assistant. The user is hitting context-window limits and needs the
+conversation pruned to a structured summary that preserves enough state
+for the conversation to continue coherently.
+
+Output a single summary in EXACTLY this structure. Be terse but precise
+— this summary IS the conversation history going forward.
+
+## 1. Primary Request and Intent
+The user'\''s core goal, in their own framing. Quote them verbatim where
+their wording matters (e.g. constraints, preferences).
+
+## 2. Key Technical Concepts
+Concepts, libraries, patterns, conventions agreed on.
+
+## 3. Files and Code Sections
+- Full paths of files touched or referenced
+- For each: 1-line description of role + what changed (if anything)
+- Include critical code snippets (function signatures, schemas)
+
+## 4. Errors and Fixes
+Concrete bugs encountered and how they were resolved. Include exact
+error messages when available.
+
+## 5. Problem Solving
+Investigation paths attempted, what was ruled out, what was confirmed.
+
+## 6. All User Messages
+List ALL of the user'\''s messages verbatim, in order. This is the most
+important section — these are the user'\''s actual words and intent. Do
+not paraphrase, do not omit, do not "clean up" their wording. If a
+message is very long, you may truncate the middle with "[...]" but
+the start and end must be verbatim.
+
+## 7. Pending Tasks
+Anything explicitly assigned but not yet completed. Use the user'\''s
+words for the assignment when possible.
+
+## 8. Current Work
+What was being worked on at the moment of compaction. Include the
+specific file/function, what'\''s done, what'\''s mid-flight.
+
+## 9. Optional Next Step
+One concrete, actionable next step that directly continues the user'\''s
+last message. Skip if the conversation has clearly reached a natural
+pause.
+
+Preserve EXACTLY any security-relevant constraints, user preferences,
+or "don'\''t do X" instructions the user explicitly stated. These are
+non-negotiable and must appear verbatim where they apply.
+
+Do not editorialize. Do not summarize the user'\''s emotional state. Do
+not add your own opinions. Output the structured summary directly.'
+
+# Run the compact prompt against the current session_id. Returns the
+# summary text on stdout, or non-zero exit code on failure.
+run_compact() {  # $1=old_sid
+    local old_sid="$1" out rc=0 log="${LOGS_DIR}/$(date +%Y-%m-%d).jsonl"
+    out="$(mktemp)"
+    # Plain-text output format (no stream-json) — we just need the summary.
+    # Permission mode acceptEdits since compact shouldn'\''t need write tools,
+    # but a noop default is safer than bypassPermissions for a meta-prompt.
+    ( cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" claude -p "$COMPACT_PROMPT" \
+        --resume "$old_sid" --permission-mode acceptEdits ) >"$out" 2>>"$log" || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        rm -f "$out"
+        return 1
+    fi
+    cat "$out"
+    rm -f "$out"
+}
+
 # ---------- engines ----------
 
 run_claude() {
     local log="${LOGS_DIR}/$(date +%Y-%m-%d).jsonl"
     local resume=() stream rc=0 sid new_sid
     sid="$(get_session_id claude)"
+
+    # ---------- pre-flight: DIY compact ----------
+    # If the prior turn's input_tokens exceeded the configured threshold,
+    # summarize the conversation and start a fresh session with the summary
+    # as preamble. Skipped on fresh sessions (no sid yet) and when no prior
+    # token count is recorded (first run after upgrade).
+    if [[ -n "$sid" ]]; then
+        local threshold last_tokens
+        threshold="$(get_compact_threshold)"
+        last_tokens="$(get_session_tokens)"
+        if [[ "$last_tokens" =~ ^[0-9]+$ ]] && (( last_tokens > threshold )); then
+            err "compact: prior turn used ${last_tokens} input tokens (> ${threshold}), summarizing"
+            local summary
+            if summary="$(run_compact "$sid")"; then
+                # Prepend summary to PROMPT; drop sid so the next call
+                # starts a fresh session that begins with this synthetic
+                # "user message" containing the summary.
+                PROMPT="[Previous conversation summary, auto-compacted to fit context]
+${summary}
+
+[New user message]
+${PROMPT}"
+                clear_session_id claude
+                sid=""
+                err "compact: ok — fresh session continues with summary preamble"
+            else
+                # Compact failed. Don't block the user — fall through to
+                # the resume attempt; if it hits context limit, agent-run
+                # dies with EX_ENGINE_FAIL and the user can manually reset.
+                err "compact: failed; continuing with existing session (may hit context limit)"
+            fi
+        fi
+    fi
+    # ---------- end pre-flight ----------
+
     [[ -n "$sid" ]] && resume=(--resume "$sid")
 
     stream="$(mktemp)"
@@ -388,6 +567,16 @@ run_claude() {
     new_sid="$(jq -rs 'map(select(.type=="system" and .subtype=="init"))
                        | .[0].session_id // empty' "$stream" 2>/dev/null || true)"
     [[ -n "$new_sid" ]] && save_session_id claude "$new_sid"
+
+    # Save input_tokens from this run so next run's pre-flight can decide
+    # whether to compact. usage.input_tokens is the total prompt size sent
+    # to the model — includes prior history when --resume is in play, so
+    # it's the right proxy for "how big the conversation is now".
+    local input_tokens
+    input_tokens="$(jq -rs 'map(select(.type=="result")) | .[-1].usage.input_tokens // 0' "$stream" 2>/dev/null || echo 0)"
+    if [[ "$input_tokens" =~ ^[0-9]+$ ]] && (( input_tokens > 0 )); then
+        save_session_tokens "$input_tokens"
+    fi
 
     # Final text: prefer type=result.result, fall back to concatenated assistant text.
     jq -rs 'if (map(select(.type=="result")) | length) > 0

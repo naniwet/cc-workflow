@@ -77,7 +77,14 @@ else
 # Which LLM-backend profile to use (matches a key under "profiles" in providers.json).
 # "claude" (or "anthropic") = empty profile → use Anthropic local OAuth.
 provider = "deepseek"
-TOML
+
+# DIY compact threshold — when the prior PWA turn's input_tokens exceeds
+# this, agent-run.sh auto-summarizes the conversation and starts a fresh
+# session with the summary as preamble. Tune per your provider's context:
+#   200000 (claude sonnet):    leave at 150000 for ~50k headroom
+#   128000 (kimi etc):         drop to 90000
+#   1000000 (deepseek-v4-pro): bump to 800000 (or leave; rarely triggers)
+# compact_threshold_tokens = 150000
 fi
 
 if [[ -f "$PROVIDERS_FILE" ]]; then

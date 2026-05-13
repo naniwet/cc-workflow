@@ -53,6 +53,10 @@ const ICONS = {
   // the user can re-scan ~/.claude/commands + workspace skills after
   // installing a new plugin or editing a command file.
   refresh: `<svg ${_S}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`,
+  // Trash with an arc — "reset session" (forget the conversation history
+  // for this workspace's PWA session). Distinct visual from refresh so
+  // users don't confuse "sync skills" with "wipe history".
+  rewind:  `<svg ${_S}><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`,
 };
 
 // Tag helper — status string → <span class="tag tag-X"> with icon prefix.
@@ -1031,6 +1035,11 @@ function bindWorkspaceColHandlers(root) {
   for (const btn of root.querySelectorAll('.ws-sync-skills')) {
     btn.addEventListener('click', _onSyncSkillsClick);
   }
+  // Reset session button — destructive, confirm first. Clears claude
+  // session_id + codex marker so the next run starts a fresh conversation.
+  for (const btn of root.querySelectorAll('.ws-reset-session')) {
+    btn.addEventListener('click', _onResetSessionClick);
+  }
   for (const sel of root.querySelectorAll('.provider-inline')) {
     sel.addEventListener('change', onProviderInlineChange);
   }
@@ -1414,6 +1423,28 @@ async function _onSyncSkillsClick(e) {
   }
 }
 
+async function _onResetSessionClick(e) {
+  const btn = e.currentTarget;
+  const ws = btn.dataset.ws;
+  if (!ws) return;
+  if (!confirm(
+    `重置 "${ws}" 的对话?\n\n` +
+    `下一次 PWA prompt 会从一张白纸开始,Claude 不再记得之前聊过什么。\n\n` +
+    `(cron loops 和飞书的会话不受影响,只重置 PWA 这条线。)`
+  )) return;
+  btn.disabled = true;
+  try {
+    const result = await api(`/workspaces/${encodeURIComponent(ws)}/session`, { method: 'DELETE' });
+    const what = (result?.cleared || []).join(' + ') || '(nothing cleared)';
+    showToast('success', `${ws}: session reset — ${what}`, { ttl: 2500 });
+    refreshAll();
+  } catch (err) {
+    showError(`reset session failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function onTrustToggleClick(e) {
   const btn = e.currentTarget;
   const name = btn.dataset.ws;
@@ -1583,6 +1614,8 @@ function workspaceColHtml(name, data, opts = {}) {
           ${trustToggleHtml(name)}
           <button class="ws-sync-skills" type="button" data-ws="${esc(name)}"
                   title="Sync slash-command skills (扫盘并写入本地缓存)" aria-label="Sync skills">${ICONS.refresh}</button>
+          <button class="ws-reset-session" type="button" data-ws="${esc(name)}"
+                  title="Reset conversation (清掉当前对话历史,下一条 prompt 重开 session)" aria-label="Reset session">${ICONS.rewind}</button>
         </div>
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
