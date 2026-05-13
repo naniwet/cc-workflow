@@ -303,7 +303,9 @@ main {
   gap: var(--space-3);
   flex: 1 1 0;               /* every row gets an equal slice of vertical space */
   min-height: 200px;         /* below this each card becomes unusable */
-  max-height: 520px;         /* don't let 1-2 rows balloon to viewport height */
+  /* No max-height: with fewer rows, each row expands to fill the viewport
+     so there's no "reserved empty space" feel at the bottom. With many
+     rows, each row hits min-height and the page scrolls. */
 }
 .ws-row .ws-col {
   flex: 1 1 0;
