@@ -14,6 +14,10 @@ Routes:
   POST   /loops/{name}/pause                   basic
   POST   /loops/{name}/resume                  basic
   POST   /cron/parse-nl                        basic   (P0-6c — NL → cron via LLM)
+  GET    /approvals/pending                    basic   (PWA reads pending hook approvals)
+  POST   /approvals/{id}/decision              basic   (PWA approves/denies a tool call)
+  POST   /approvals/internal/pending           localhost-only (claude hook creates entry)
+  GET    /approvals/internal/{id}/wait         localhost-only (claude hook long-polls)
   POST   /im/feishu/webhook                    Feishu signature (NOT basic)
   POST   /im/feishu/card_callback              Feishu signature (NOT basic) — P0-5d
   /pwa/*                                       static, unprotected layer
@@ -35,7 +39,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, config, cron_state, db, im_feishu, llm, runner, ws_settings
+from . import approvals, auth, config, cron_state, db, im_feishu, llm, runner, ws_settings
 
 PROTECT = [Depends(auth.require_basic_auth)]
 
@@ -438,6 +442,62 @@ def parse_nl_cron(req: ParseNlRequest) -> dict:
         422,
         {"error": "llm_did_not_return_cron", "raw_reply": reply},
     )
+
+
+# ---------- Tool-approval queue (路 2 ask_human) ----------
+# Three endpoints split by trust boundary:
+#   - /approvals/internal/*    accept localhost-only (nginx denies public)
+#                              called by cc-approve-hook.sh inside the
+#                              claude subprocess. No auth needed because
+#                              the only caller is on the same machine.
+#   - /approvals/pending       basic-auth — PWA polls to know which run
+#                              rows need [Approve]/[Deny] buttons.
+#   - /approvals/{id}/decision basic-auth — PWA writes the user's choice.
+
+
+class PendingApprovalRequest(BaseModel):
+    run_id: str = Field(..., min_length=1, max_length=64)
+    workspace: str = Field(..., min_length=1, max_length=128)
+    tool_name: str = Field(..., min_length=1, max_length=64)
+    tool_input: dict = Field(default_factory=dict)
+
+
+@app.post("/approvals/internal/pending")
+def post_pending_approval(req: PendingApprovalRequest) -> dict:
+    aid = approvals.request(
+        run_id=req.run_id,
+        workspace=req.workspace,
+        tool_name=req.tool_name,
+        tool_input=req.tool_input,
+    )
+    return {"approval_id": aid}
+
+
+@app.get("/approvals/internal/{approval_id}/wait")
+def wait_approval(approval_id: str, timeout: int = 60) -> dict:
+    """Long-poll. Blocks up to `timeout` seconds (capped at approvals.TTL).
+    Returns the final status — hook treats anything except 'pending' as a
+    decision and exits accordingly."""
+    timeout = max(1, min(timeout, approvals.TTL_SECONDS))
+    status = approvals.wait_for_decision(approval_id, timeout=float(timeout))
+    return {"approval_id": approval_id, "status": status}
+
+
+@app.get("/approvals/pending", dependencies=PROTECT)
+def list_pending_approvals() -> list[dict]:
+    return [a.public() for a in approvals.list_pending()]
+
+
+class DecisionRequest(BaseModel):
+    decision: Literal["approved", "denied"]
+
+
+@app.post("/approvals/{approval_id}/decision", dependencies=PROTECT)
+def post_approval_decision(approval_id: str, req: DecisionRequest) -> dict:
+    a = approvals.decide(approval_id, req.decision)
+    if a is None:
+        raise HTTPException(404, {"error": "approval not found"})
+    return {"ok": True, "approval_id": approval_id, "status": a.status}
 
 
 # ---------- Feishu webhook (T+1.5d — P0-4) ----------

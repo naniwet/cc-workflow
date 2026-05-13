@@ -212,12 +212,13 @@ let lastData = {
 
 async function refreshAll() {
   try {
-    const [ws, sess, lp, providers, cfg] = await Promise.all([
+    const [ws, sess, lp, providers, cfg, approvals] = await Promise.all([
       api('/workspaces'),
       api('/sessions'),
       api('/loops'),
       api('/providers'),
       api('/config'),
+      api('/approvals/pending').catch(() => []),   // graceful: backend may not have it yet
     ]);
     // Workspace settings: one fetch per workspace (small N, fine for now).
     const settingsList = await Promise.all(
@@ -236,6 +237,11 @@ async function refreshAll() {
       wsSettings: Object.fromEntries(settingsList),
       globalProvider: cfg?.provider || '',
       globalDefaultTrust: !!cfg?.default_trust,
+      // Pending approvals from /approvals/pending — claude's PreToolUse
+      // hook has blocked a tool call and is waiting for the user. Each
+      // entry has {approval_id, run_id, workspace, tool_name, tool_input}.
+      // Attached to run rows by run_id in renderWorkspacesView path.
+      pendingApprovals: Array.isArray(approvals) ? approvals : [],
     };
     clearError();
     $('status').textContent = '· ' + new Date().toLocaleTimeString();
@@ -730,6 +736,9 @@ function bindOverviewHandlers() {
   for (const b of $('view').querySelectorAll('.ws-trust-toggle')) {
     b.addEventListener('click', onTrustToggleClick);
   }
+  for (const b of $('view').querySelectorAll('.approval-approve, .approval-deny')) {
+    b.addEventListener('click', onApprovalClick);
+  }
   setupCarousel();
   setupDragReorder();
 }
@@ -1053,7 +1062,10 @@ function workspaceColHtml(name, data, opts = {}) {
   all.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
   const timeline = all.slice(-maxRows);
   const timelineHtml = timeline.length
-    ? timeline.map(runRowHtml).join('')
+    ? timeline.map((r) => {
+        const approvals = pendingApprovalsFor(r.id || '');
+        return runRowHtml(r) + approvals.map(approvalBlockHtml).join('');
+      }).join('')
     : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
@@ -1107,6 +1119,65 @@ function workspaceColHtml(name, data, opts = {}) {
       </form>
     </div>
   `;
+}
+
+// Pending approvals for a single run — used to render [Approve][Deny]
+// blocks alongside the timeline row.
+function pendingApprovalsFor(runId) {
+  if (!runId) return [];
+  return (lastData.pendingApprovals || []).filter((a) => a.run_id === runId);
+}
+
+// Compact human description of a pending tool call — what Claude wants
+// to do. Special-cases Bash + WebFetch (the two we currently hook); other
+// tools fall back to "tool_name + JSON snippet".
+function approvalSummary(a) {
+  const ti = a.tool_input || {};
+  if (a.tool_name === 'Bash' && ti.command) {
+    const cmd = String(ti.command);
+    return `Bash · <code>${esc(cmd.slice(0, 240))}${cmd.length > 240 ? '…' : ''}</code>`;
+  }
+  if (a.tool_name === 'WebFetch' && ti.url) {
+    return `WebFetch · <code>${esc(ti.url)}</code>`;
+  }
+  const inputStr = JSON.stringify(ti).slice(0, 200);
+  return `${esc(a.tool_name)} · <code>${esc(inputStr)}</code>`;
+}
+
+function approvalBlockHtml(a) {
+  return `
+    <div class="approval-pending" data-approval-id="${esc(a.approval_id)}">
+      <div class="approval-pending-head">
+        ${ICONS.warning} Claude wants to run a tool — waiting on you.
+      </div>
+      <div class="approval-tool">${approvalSummary(a)}</div>
+      <div class="approval-actions">
+        <button class="approval-approve" data-id="${esc(a.approval_id)}">Approve</button>
+        <button class="approval-deny" data-id="${esc(a.approval_id)}">Deny</button>
+      </div>
+    </div>
+  `;
+}
+
+async function onApprovalClick(e) {
+  const btn = e.currentTarget;
+  const id = btn.dataset.id;
+  const decision = btn.classList.contains('approval-approve') ? 'approved' : 'denied';
+  // Disable both buttons in this approval block to prevent double-click.
+  const block = btn.closest('.approval-pending');
+  if (block) for (const b of block.querySelectorAll('button')) b.disabled = true;
+  try {
+    await api(`/approvals/${encodeURIComponent(id)}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    });
+    showToast(decision === 'approved' ? 'success' : 'info', `Tool ${decision}.`, { ttl: 1800 });
+    refreshAll();
+  } catch (err) {
+    showError(`decision failed: ${err.message}`);
+    if (block) for (const b of block.querySelectorAll('button')) b.disabled = false;
+  }
 }
 
 function runRowHtml(r) {

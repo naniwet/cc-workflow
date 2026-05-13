@@ -477,6 +477,67 @@ main {
 .row-output { color: var(--accent-cyan); }         /* claude said — cyan (info), NOT green (status) */
 
 /* ============================================================================
+ *  Pending tool-approval block — appears after a "running" run row when
+ *  Claude's PreToolUse hook is blocked waiting on the user. Amber accents
+ *  to match the trust-state color family (this IS the "needs attention"
+ *  variant of trust).
+ * ============================================================================ */
+.approval-pending {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: rgba(245, 158, 11, 0.10);
+  border: 1px solid rgba(245, 158, 11, 0.40);
+  border-radius: var(--radius-md);
+  margin: var(--space-1) 0;
+}
+.approval-pending-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--accent-amber);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.approval-pending-head svg { width: 14px; height: 14px; flex-shrink: 0; }
+.approval-tool {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.approval-tool code {
+  font-family: var(--font-mono);
+  background: var(--bg-canvas);
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+.approval-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+.approval-approve,
+.approval-deny {
+  flex: 1;
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.approval-approve {
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+  color: #fff;
+}
+.approval-approve:hover { background: #1ea34a; border-color: #1ea34a; }
+.approval-deny {
+  background: var(--accent-red);
+  border-color: var(--accent-red);
+  color: #fff;
+}
+.approval-deny:hover { background: #d63838; border-color: #d63838; }
+
+/* ============================================================================
  *  Trigger form (chat input at column bottom)
  * ============================================================================ */
 .ws-col .trigger-form {

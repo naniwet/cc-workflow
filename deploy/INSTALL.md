@@ -101,6 +101,45 @@ install -m 755 /root/projects/cc-workflow/agent-run.sh /usr/local/bin/agent-run
 
 (Or `ln -sf` if you want edits to flow through without reinstall.)
 
+## 3.5. Install the tool-approval hook (路 2 — recommended)
+
+The cc-approve-hook lets Claude pause mid-run on Bash/WebFetch calls and
+surface `[Approve] [Deny]` buttons in the PWA. Workspaces marked
+`trust: true` short-circuit this and never prompt.
+
+```bash
+# 1. Install the hook script
+install -m 755 /root/projects/cc-workflow/scripts/cc-approve-hook.sh \
+    /usr/local/bin/cc-approve-hook
+
+# 2. Wire it into Claude's user-level settings so every claude
+#    invocation on this server picks it up.
+mkdir -p /root/.claude
+cat > /root/.claude/settings.json <<'JSON'
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|WebFetch",
+        "hooks": [
+          {"type": "command", "command": "/usr/local/bin/cc-approve-hook"}
+        ]
+      }
+    ]
+  }
+}
+JSON
+```
+
+The hook calls `127.0.0.1:8765` directly (skipping nginx + basic auth)
+which is why `deploy/nginx.conf` denies `/approvals/internal/*` to the
+public — only same-host callers reach it.
+
+To temporarily disable approval prompts globally without uninstalling,
+remove or rename `/root/.claude/settings.json` and restart Claude. To
+disable per-workspace, mark the workspace as `trust: true` via the PWA
+(🔓 icon in the column header).
+
 ## 4. Install + start the backend
 
 ```bash

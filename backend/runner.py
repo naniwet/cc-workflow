@@ -7,6 +7,7 @@ with exit_code=65 in the db.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 from typing import Callable, Optional
@@ -65,9 +66,17 @@ def _execute(
         argv += ["--provider", provider]
     if permission_mode:
         argv += ["--permission-mode", permission_mode]
+    # Pass run context to agent-run's environment so the claude
+    # PreToolUse hook (cc-approve-hook.sh) can identify which run is
+    # asking for approval. CCW_TRUST controls the hook's short-circuit
+    # behavior: trusted workspaces skip the human-approval round-trip.
+    env = os.environ.copy()
+    env["CCW_RUN_ID"] = run_id
+    env["CCW_WORKSPACE"] = workspace
+    env["CCW_TRUST"] = "true" if permission_mode == "bypassPermissions" else "false"
     try:
         # No outer timeout: agent-run.sh enforces its own 10-min wall (exit 68).
-        proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+        proc = subprocess.run(argv, capture_output=True, text=True, check=False, env=env)
         output = proc.stdout
         if proc.returncode != 0:
             # stderr carries the actionable reason (e.g. exit 67 push-main,
