@@ -76,3 +76,28 @@ def engine_for(workspace: str) -> str:
     than accepting an `engine` from user input.
     """
     return (load().get(workspace) or {}).get("engine") or DEFAULT_ENGINE
+
+
+def trust_for(workspace: str) -> bool:
+    """Trust resolution for tool permissions:
+        per-workspace `trust` field > config.toml `default_trust` > False.
+
+    When True, agent-run is invoked with `--permission-mode bypassPermissions`
+    (claude auto-approves every tool including Bash / Edit / WebFetch).
+    When False, the default `acceptEdits` is used — Edit/Write auto-approved,
+    others fall through to "please approve" text in headless mode.
+    """
+    ws = (load().get(workspace) or {}).get("trust")
+    if isinstance(ws, bool):
+        return ws
+    cfg = (config.load_config() or {})
+    cfg_default = cfg.get("default_trust")
+    if isinstance(cfg_default, bool):
+        return cfg_default
+    return False
+
+
+def permission_mode_for(workspace: str) -> str:
+    """Map trust → claude --permission-mode value. Used by main.py before
+    handing off to runner.submit()."""
+    return "bypassPermissions" if trust_for(workspace) else "acceptEdits"

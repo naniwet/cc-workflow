@@ -26,6 +26,7 @@ def submit(
     session_key: Optional[str],
     source: str,
     provider: Optional[str] = None,
+    permission_mode: Optional[str] = None,
     on_finish: Optional[OnFinish] = None,
 ) -> None:
     db.insert_queued_run(
@@ -38,7 +39,7 @@ def submit(
     )
     threading.Thread(
         target=_execute,
-        args=(run_id, workspace, prompt, engine, session_key, source, provider, on_finish),
+        args=(run_id, workspace, prompt, engine, session_key, source, provider, permission_mode, on_finish),
         name=f"agent-run-{run_id}",
         daemon=True,
     ).start()
@@ -52,6 +53,7 @@ def _execute(
     session_key: Optional[str],
     source: str,
     provider: Optional[str],
+    permission_mode: Optional[str],
     on_finish: Optional[OnFinish],
 ) -> None:
     db.set_running(run_id)
@@ -61,6 +63,8 @@ def _execute(
     argv += ["--source", source]
     if provider:
         argv += ["--provider", provider]
+    if permission_mode:
+        argv += ["--permission-mode", permission_mode]
     try:
         # No outer timeout: agent-run.sh enforces its own 10-min wall (exit 68).
         proc = subprocess.run(argv, capture_output=True, text=True, check=False)

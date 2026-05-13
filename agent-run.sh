@@ -33,6 +33,10 @@ SOURCE="manual"
 JOB_NAME=""
 JOB_FILE=""
 PROVIDER_OVERRIDE=""
+# Default permission mode: auto-allow Edit/Write but still gate Bash/WebFetch.
+# Backend sets `--permission-mode bypassPermissions` for workspaces marked
+# trust=true in workspaces.json (or globally via config.toml default_trust).
+PERMISSION_MODE="acceptEdits"
 SESSION_KEY="default"
 WORKSPACE=""
 PROMPT=""
@@ -48,11 +52,16 @@ usage() {
     cat >&2 <<'EOF'
 Usage: agent-run --engine=<claude|codex> <workspace> "<prompt>" [session_key]
                  [--source <pwa|feishu|cron|manual>] [--job-name <name>]
-                 [--provider <name>]
+                 [--provider <name>] [--permission-mode <mode>]
 
-  --provider <name>   Override config.toml's provider (must match a profile
-                      key in ~/.cc-workflow/providers.json). For per-workspace
-                      LLM backend; falls back to config.toml then "claude".
+  --provider <name>         Override config.toml's provider (must match a profile
+                            key in ~/.cc-workflow/providers.json). For per-workspace
+                            LLM backend; falls back to config.toml then "claude".
+  --permission-mode <mode>  Claude tool-permission mode. One of:
+                              acceptEdits        — default; Edit/Write auto-allowed
+                              bypassPermissions  — all tools auto-allowed (use when
+                                                   the workspace is "trusted")
+                              plan               — planning only, no tool execution
 
 Exit (sysexits.h): 0 ok | 64 usage | 65 concurrency | 66 engine | 67 push-main | 68 timeout
 EOF
@@ -75,6 +84,11 @@ while [[ $# -gt 0 ]]; do
         --provider)   [[ $# -ge 2 ]] || { usage; die "$EX_USAGE" "--provider needs value"; }
                       PROVIDER_OVERRIDE="$2"; shift 2 ;;
         --provider=*) PROVIDER_OVERRIDE="${1#--provider=}"; shift ;;
+        --permission-mode)
+                      [[ $# -ge 2 ]] || { usage; die "$EX_USAGE" "--permission-mode needs value"; }
+                      PERMISSION_MODE="$2"; shift 2 ;;
+        --permission-mode=*)
+                      PERMISSION_MODE="${1#--permission-mode=}"; shift ;;
         -h|--help)    usage; exit "$EX_OK" ;;
         --)           shift; while [[ $# -gt 0 ]]; do POSITIONAL+=("$1"); shift; done ;;
         -*)           usage; die "$EX_USAGE" "unknown flag: $1" ;;
@@ -85,6 +99,7 @@ done
 [[ -n "$ENGINE" ]] || { usage; die "$EX_USAGE" "missing --engine"; }
 [[ "$ENGINE" =~ ^(claude|codex)$ ]] || die "$EX_USAGE" "engine must be claude|codex (got: $ENGINE)"
 case "$SOURCE" in pwa|feishu|cron|manual) ;; *) die "$EX_USAGE" "bad --source: $SOURCE" ;; esac
+case "$PERMISSION_MODE" in acceptEdits|bypassPermissions|plan|default) ;; *) die "$EX_USAGE" "bad --permission-mode: $PERMISSION_MODE (want acceptEdits|bypassPermissions|plan|default)" ;; esac
 [[ ${#POSITIONAL[@]} -ge 2 ]] || { usage; die "$EX_USAGE" "need <workspace> and <prompt>"; }
 [[ ${#POSITIONAL[@]} -le 3 ]] || die "$EX_USAGE" "too many positional args"
 
@@ -283,7 +298,7 @@ run_claude() {
     stream="$(mktemp)"
     ( cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" claude -p "$PROMPT" \
         --output-format stream-json --verbose \
-        --permission-mode acceptEdits "${resume[@]}" ) >"$stream" 2>>"$log" || rc=$?
+        --permission-mode "$PERMISSION_MODE" "${resume[@]}" ) >"$stream" 2>>"$log" || rc=$?
 
     cat "$stream" >>"$log"
 

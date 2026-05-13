@@ -237,6 +237,39 @@ main {
   margin-left: var(--space-1);
 }
 
+/* Per-workspace trust toggle — lock / unlock icon button inline with
+   provider + engine. Click flips trust (with a confirm() when going
+   from locked → unlocked since it's the security-relevant direction).
+   Untrusted = neutral text-tertiary; trusted = amber (signals "this
+   workspace skips tool approvals, treat with care"). */
+.ws-trust-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-tertiary);
+  padding: 2px var(--space-1);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  margin-left: var(--space-1);
+  font: inherit;
+  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
+  flex-shrink: 0;
+}
+.ws-trust-toggle svg { width: 12px; height: 12px; display: block; }
+.ws-trust-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); border-color: var(--border-subtle); }
+.ws-trust-toggle.is-trusted {
+  color: var(--accent-amber);
+  border-color: rgba(245, 158, 11, 0.30);
+  background: rgba(245, 158, 11, 0.10);
+}
+.ws-trust-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
+
+/* Read-only trust badge in mobile overview cards. Same amber color cue as
+   the PC toggle's trusted state. */
+.ws-card-trust { display: inline-flex; align-items: center; }
+.ws-card-trust svg { width: 12px; height: 12px; color: var(--accent-amber); vertical-align: middle; }
+
 /* PC drag-to-reorder handle. Lives at the left of .ws-head-row.
    Hidden on mobile via @media block at the bottom of this file. */
 .ws-drag-handle {

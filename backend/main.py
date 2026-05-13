@@ -70,10 +70,11 @@ def post_run(req: RunRequest) -> dict:
         run_id=run_id,
         workspace=req.workspace,
         prompt=req.prompt,
-        engine=ws_settings.engine_for(req.workspace),       # bound to workspace
+        engine=ws_settings.engine_for(req.workspace),
         session_key=req.session_key,
         source=req.source,
         provider=ws_settings.provider_for(req.workspace, req.provider),
+        permission_mode=ws_settings.permission_mode_for(req.workspace),
     )
     return {"task_id": run_id, "status": "queued"}
 
@@ -111,6 +112,11 @@ class NewWorkspaceRequest(BaseModel):
     # written to workspaces.json so ws_settings.engine_for() can read it
     # without falling back to DEFAULT_ENGINE for fresh workspaces.
     engine: Literal["claude", "codex"] = "claude"
+    # When trust=True, agent-run is invoked with --permission-mode
+    # bypassPermissions for this workspace (Claude auto-approves Bash /
+    # WebFetch / etc.). Mutable post-creation via PUT settings, unlike
+    # engine. None at create time → inherit config.toml default_trust.
+    trust: Optional[bool] = None
 
 
 @app.get("/config", dependencies=PROTECT)
@@ -151,6 +157,10 @@ class WorkspaceSettingsRequest(BaseModel):
     # engine intentionally NOT a field here: it's immutable post-creation,
     # so PUT can't touch it. Any "engine" key in the body is silently dropped.
     provider: Optional[str] = Field(default=None, max_length=64)
+    # trust=None or absent → don't touch (preserves existing). Explicit
+    # true/false → set. Use Pydantic's model_fields_set to distinguish
+    # "field absent" from "field present with null".
+    trust: Optional[bool] = None
 
 
 @app.put("/workspaces/{name}/settings", dependencies=PROTECT)
@@ -168,13 +178,25 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
                 400, {"error": "unknown provider", "got": body.provider, "valid": sorted(valid)}
             )
 
-    # Mutate provider only — engine field (if present) is preserved untouched.
+    # Mutate ONLY fields the client explicitly sent. Pydantic v2's
+    # model_fields_set lists keys that appeared in the request body
+    # (vs. just defaulted to None). Without this check, a PUT
+    # {"trust": true} would also wipe the provider override.
+    sent = body.model_fields_set
     data = ws_settings.load()
     current = data.get(name, {})
-    if body.provider in (None, ""):
-        current.pop("provider", None)
-    else:
-        current["provider"] = body.provider
+
+    if "provider" in sent:
+        if body.provider in (None, ""):
+            current.pop("provider", None)
+        else:
+            current["provider"] = body.provider
+
+    if "trust" in sent:
+        if body.trust is None:
+            current.pop("trust", None)              # null → revert to default
+        else:
+            current["trust"] = bool(body.trust)
 
     if current:
         data[name] = current
@@ -227,12 +249,17 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
     if req.provider:
         settings["provider"] = req.provider
     settings["engine"] = req.engine
+    if req.trust is not None:
+        settings["trust"] = bool(req.trust)
+    # If req.trust is None we DON'T write anything — trust_for() will fall
+    # back to config.toml default_trust at runtime. Avoids freezing the
+    # current global default into the workspace.
     data[req.name] = settings
     ws_settings.save(data)
 
     return {
         "ok": True, "name": req.name, "path": str(target),
-        "provider": req.provider, "engine": req.engine,
+        "provider": req.provider, "engine": req.engine, "trust": req.trust,
     }
 
 
@@ -299,6 +326,7 @@ def create_loop(req: NewLoopRequest) -> dict:
             session_key=req.name,        # align with cron-fired runs for this loop
             source="pwa",                # honest: PWA triggered this, not cron
             provider=ws_settings.provider_for(req.workspace),
+            permission_mode=ws_settings.permission_mode_for(req.workspace),
         )
         result["first_run_id"] = first_run_id
     return result
@@ -435,6 +463,7 @@ async def feishu_webhook(request: Request) -> dict:
         # _handle_message hardcodes engine="claude" since it has no access to
         # workspaces.json; override here with the resolved per-workspace engine.
         intent["engine"] = ws_settings.engine_for(intent["workspace"])
+        intent["permission_mode"] = ws_settings.permission_mode_for(intent["workspace"])
         run_id = db.new_run_id()
         runner.submit(run_id=run_id, on_finish=im_feishu.reply_from_run, **intent)
         parsed["task_id"] = run_id

@@ -46,6 +46,9 @@ const ICONS = {
   minimize: `<svg ${_S}><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
   // Eye with a slash — "hide this card from the overview"
   eyeOff:   `<svg ${_S}><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>`,
+  // Lock / unlock — workspace trust state (auto-approve tools or not)
+  lock:    `<svg ${_S}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+  unlock:  `<svg ${_S}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>`,
 };
 
 // Tag helper — status string → <span class="tag tag-X"> with icon prefix.
@@ -232,6 +235,7 @@ async function refreshAll() {
       providers,
       wsSettings: Object.fromEntries(settingsList),
       globalProvider: cfg?.provider || '',
+      globalDefaultTrust: !!cfg?.default_trust,
     };
     clearError();
     $('status').textContent = '· ' + new Date().toLocaleTimeString();
@@ -563,12 +567,15 @@ function renderDesktopOverview() {
             </select>
           </label>
         </div>
+        <label class="inline-check">
+          <input type="checkbox" name="trust" ${lastData.globalDefaultTrust ? 'checked' : ''}>
+          Auto-approve all tools (trust this workspace — Bash / git / WebFetch / etc. won't ask for permission)
+        </label>
         <button type="submit">Create</button>
         <p class="muted" style="font-size:11px;margin:0">
           Creates <code>~/workspaces/&lt;name&gt;/</code> with <code>git init</code>
-          + empty README + first commit. <strong>Engine is locked once the
-          workspace is created</strong> (to change, delete and recreate).
-          Provider can be switched anytime via the column header.
+          + empty README + first commit. <strong>Engine is locked once created</strong>.
+          Provider and trust can be flipped anytime via the column header (🔒/🔓).
         </p>
       </form>
     </details>
@@ -640,13 +647,15 @@ function renderMobileOverview() {
     const wsProvider =
       lastData.wsSettings[name]?.provider || lastData.globalProvider || '';
     const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
+    const trusted = effectiveTrust(name);
+    const trustBadge = trusted ? ` · <span class="ws-card-trust" title="Auto-approves tools">${ICONS.unlock}</span>` : '';
     const promptSnippet = last?.prompt ? last.prompt.slice(0, 50) : '';
     const promptOverflow = last?.prompt && last.prompt.length > 50 ? '…' : '';
     return `
       <a class="ws-card" href="#workspaces/${encodeURIComponent(name)}">
         <div class="ws-card-head">
           <h3>${esc(name)}</h3>
-          <span class="ws-card-provider">${esc(wsProvider) || '—'} · ${esc(wsEngine)}</span>
+          <span class="ws-card-provider">${esc(wsProvider) || '—'} · ${esc(wsEngine)}${trustBadge}</span>
         </div>
         ${last
           ? `<div class="ws-card-meta">
@@ -687,9 +696,13 @@ function renderMobileOverview() {
             </select>
           </label>
         </div>
+        <label class="inline-check">
+          <input type="checkbox" name="trust" ${lastData.globalDefaultTrust ? 'checked' : ''}>
+          Auto-approve all tools (trust)
+        </label>
         <button type="submit">Create</button>
         <p class="muted" style="font-size:11px;margin:0">
-          Engine is locked once created. To switch, delete and recreate.
+          Engine is locked once created.
         </p>
       </form>
     </details>
@@ -713,6 +726,9 @@ function bindOverviewHandlers() {
   }
   for (const sel of $('view').querySelectorAll('.provider-inline')) {
     sel.addEventListener('change', onProviderInlineChange);
+  }
+  for (const b of $('view').querySelectorAll('.ws-trust-toggle')) {
+    b.addEventListener('click', onTrustToggleClick);
   }
   setupCarousel();
   setupDragReorder();
@@ -901,6 +917,54 @@ function setupCarousel() {
   });
 }
 
+// Effective per-workspace trust (mirrors backend ws_settings.trust_for):
+//   explicit setting > config.toml default_trust > false
+function effectiveTrust(name) {
+  const s = lastData.wsSettings[name];
+  if (s && typeof s.trust === 'boolean') return s.trust;
+  return !!lastData.globalDefaultTrust;
+}
+
+// Render the per-workspace trust toggle button (only in non-detail mode).
+function trustToggleHtml(name) {
+  const trusted = effectiveTrust(name);
+  const icon = trusted ? ICONS.unlock : ICONS.lock;
+  const tip = trusted
+    ? '工具已自动批准 (bypassPermissions). 点击改回 ask.'
+    : '工具需要批准 (acceptEdits). 点击改成自动 (慎用).';
+  return `<button class="ws-trust-toggle${trusted ? ' is-trusted' : ''}" type="button"
+                  data-ws="${esc(name)}" data-trusted="${trusted ? '1' : '0'}"
+                  title="${esc(tip)}" aria-label="Toggle trust">${icon}</button>`;
+}
+
+async function onTrustToggleClick(e) {
+  const btn = e.currentTarget;
+  const name = btn.dataset.ws;
+  const wasTrusted = btn.dataset.trusted === '1';
+  const next = !wasTrusted;
+  // Only confirm when ENABLING trust — it's the security-relevant direction.
+  if (next && !confirm(
+    `将 "${name}" 切到 trusted 模式?\n\n` +
+    `开启后 Claude 自动批准所有工具(Bash / git / WebFetch / 文件 IO),\n` +
+    `不再发"请批准"的提示。\n\n` +
+    `仅当你信任这个 workspace 跑的所有 prompt 时启用。`,
+  )) return;
+  btn.disabled = true;
+  try {
+    await api(`/workspaces/${encodeURIComponent(name)}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trust: next }),
+    });
+    showToast('success', `${name}: ${next ? 'trusted (auto-approve)' : 'untrusted (will ask)'}`, { ttl: 2500 });
+    refreshAll();
+  } catch (err) {
+    showError(`save trust failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function onProviderInlineChange(e) {
   const sel = e.target;
   const name = sel.dataset.workspace;
@@ -936,6 +1000,10 @@ async function onAddWorkspace(e) {
   // to "claude" if the field is omitted; we send the selected value to be
   // explicit. The select always has a value (claude is the first option).
   const engine = (form.elements.engine?.value || 'claude').trim();
+  // Trust checkbox value. Always send explicit true/false at creation time
+  // so the workspace's resolution doesn't drift if the global default changes
+  // later.
+  const trust = !!form.elements.trust?.checked;
   if (!name) return;
   const btn = form.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = 'Creating…';
@@ -943,7 +1011,7 @@ async function onAddWorkspace(e) {
     await api('/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, provider, engine }),
+      body: JSON.stringify({ name, provider, engine, trust }),
     });
     form.reset();
     clearDraft('new-ws');
@@ -1029,6 +1097,7 @@ function workspaceColHtml(name, data, opts = {}) {
             ${providerOptions}
           </select>
           <span class="ws-engine" title="Engine (immutable)">· ${esc(wsEngine)}</span>
+          ${detail ? '' : trustToggleHtml(name)}
         </div>
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>

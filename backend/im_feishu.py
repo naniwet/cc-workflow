@@ -676,7 +676,8 @@ def _dispatch_action(action) -> dict:
             run_id=run_id,
             workspace=workspace,
             prompt=prompt,
-            engine=ws_settings.engine_for(workspace),   # workspace-bound
+            engine=ws_settings.engine_for(workspace),
+            permission_mode=ws_settings.permission_mode_for(workspace),
             session_key=f"feishu-{action.chat_id}" if action.chat_id else None,
             source="feishu",
             on_finish=reply_from_run,
