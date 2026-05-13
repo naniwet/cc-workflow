@@ -667,7 +667,7 @@ function renderMobileOverview() {
       lastData.wsSettings[name]?.provider || lastData.globalProvider || '';
     const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
     const trusted = effectiveTrust(name);
-    const trustBadge = trusted ? ` · <span class="ws-card-trust" title="Auto-approves tools">${ICONS.unlock}</span>` : '';
+    const trustBadge = trusted ? `<span class="ws-card-trust" title="Auto-approves tools">${ICONS.unlock}</span>` : '';
     const pendingCount = pendingApprovalsForWorkspace(name).length;
     const pendingBadge = pendingCount > 0
       ? `<span class="ws-card-pending" title="${pendingCount} pending approval${pendingCount > 1 ? 's' : ''}">${ICONS.warning}${pendingCount} 待批准</span>`
@@ -678,7 +678,10 @@ function renderMobileOverview() {
       <a class="ws-card" href="#workspaces/${encodeURIComponent(name)}">
         <div class="ws-card-head">
           <h3>${esc(name)}</h3>
-          <span class="ws-card-provider">${esc(wsProvider) || '—'} · ${esc(wsEngine)}${trustBadge}</span>
+          <span class="ws-card-provider">
+            ${wsProvider ? `<span class="ws-card-provider-name">${esc(wsProvider)}</span>` : '<span class="muted">—</span>'}
+            <span class="ws-engine" data-engine="${esc(wsEngine)}">${esc(wsEngine)}</span>${trustBadge}
+          </span>
         </div>
         ${pendingBadge ? `<div class="ws-card-pending-row">${pendingBadge}</div>` : ''}
         ${last
@@ -1190,11 +1193,10 @@ function workspaceColHtml(name, data, opts = {}) {
           ${hideBtn}
         </div>
         <div class="ws-provider">
-          <span class="ws-provider-label">as</span>
           <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
             ${providerOptions}
           </select>
-          <span class="ws-engine" title="Engine (immutable)">· ${esc(wsEngine)}</span>
+          <span class="ws-engine" data-engine="${esc(wsEngine)}" title="Engine (immutable post-create)">${esc(wsEngine)}</span>
           ${trustToggleHtml(name)}
         </div>
       </div>

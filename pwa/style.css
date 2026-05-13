@@ -27,9 +27,10 @@
   --accent-blue-hover:  #4a90ff;
   --accent-blue-faint:  rgba(47, 126, 255, 0.15);
   --accent-green:       #22c55e;    /* success — task done */
-  --accent-cyan:        #06b6d4;    /* info — Claude reply */
+  --accent-cyan:        #06b6d4;    /* info — Claude reply, engine=claude */
   --accent-amber:       #f59e0b;    /* warning / queued */
   --accent-red:         #ef4444;    /* danger / failed */
+  --accent-purple:      #a855f7;    /* engine=codex (OpenAI-ish) */
 
   /* spacing — 8px rhythm */
   --space-1: 4px;
@@ -226,15 +227,44 @@ main {
 .ws-provider {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
   font-size: var(--text-sm);
   color: var(--text-tertiary);
+  flex-wrap: wrap;        /* graceful fallback on very narrow screens */
+  row-gap: var(--space-1);
 }
-.ws-provider-label { color: var(--text-tertiary); user-select: none; }
+/* "as" label was removed in favor of a colored engine chip — the
+   workspace's identity is now visually anchored by the engine pill,
+   not a small English word. Class kept around in case of future use. */
+.ws-provider-label { display: none; }
+
+/* Engine chip — small colored pill that anchors the workspace's
+   identity. claude/codex are immutable post-create, so the chip
+   doubles as a visual id (you learn to scan for "the cyan one"
+   vs "the purple one"). Same chip shape as .tag, slightly smaller. */
 .ws-engine {
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-  margin-left: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--space-2);
+  font-size: var(--text-micro);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.ws-engine[data-engine="claude"] {
+  background: rgba(6, 182, 212, 0.10);
+  color: var(--accent-cyan);
+  border-color: rgba(6, 182, 212, 0.30);
+}
+.ws-engine[data-engine="codex"] {
+  background: rgba(168, 85, 247, 0.10);
+  color: var(--accent-purple);
+  border-color: rgba(168, 85, 247, 0.30);
 }
 
 /* Per-workspace trust toggle — lock / unlock icon button inline with
@@ -996,9 +1026,16 @@ pre {
   color: var(--text-primary);
 }
 .ws-card-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-size: var(--text-sm);
   color: var(--text-tertiary);
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+  justify-content: flex-end;     /* hug the right side of .ws-card-head */
 }
+.ws-card-provider-name { color: var(--text-secondary); }
 .ws-card-meta {
   display: flex;
   align-items: center;
