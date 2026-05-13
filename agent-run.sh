@@ -343,24 +343,44 @@ run_codex() {
     # engine=codex → trust=true at workspace-create time, so the user has
     # already opted into "auto-approve everything" by picking this engine.
     #
-    # Session resume is NOT yet wired up — codex's session_id isn't exposed
-    # in --json output (upstream bug #8923) and `codex resume --last` works
-    # per-cwd which interacts oddly with our worktree-per-session_key model.
-    # Each codex run is currently standalone. C2 will revisit.
+    # Session resume:
+    # We can't fetch session_id from --json output (upstream issue #8923),
+    # so claude's "store sid in sessions.json, pass --resume <sid>" pattern
+    # doesn't translate. Instead use codex's own per-cwd "resume --last"
+    # semantics: codex tracks the most recent session by cwd, and our
+    # WORKDIR is already per-session_key (via worktree when session_key !=
+    # "default"). So resume-on-this-cwd ≈ resume-on-this-session_key.
+    #
+    # We gate it behind a marker file under STATE_DIR so we don't try to
+    # resume a session that never existed on the first run for a new
+    # workspace/session_key combo — `codex exec resume --last` errors out
+    # with "no prior session" in that case.
     local log="${LOGS_DIR}/$(date +%Y-%m-%d).jsonl"
     local out rc=0
     out="$(mktemp)"
+    local marker_dir="${STATE_DIR}/codex-sessions"
+    local marker_safe
+    marker_safe="$(printf '%s' "${WORKSPACE}__${SESSION_KEY}" | tr -c 'A-Za-z0-9._-' '_')"
+    local marker="${marker_dir}/${marker_safe}"
+    # Build the codex command. `exec resume --last` continues the most
+    # recent session in cwd; `exec` starts a fresh one.
+    local cmd=(codex exec)
+    if [[ -f "$marker" ]]; then
+        cmd+=(resume --last)
+    fi
+    cmd+=(--json --output-last-message "$out" -a never -s workspace-write --skip-git-repo-check "$PROMPT")
     (
-        cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" codex exec \
-            --json \
-            --output-last-message "$out" \
-            -a never \
-            -s workspace-write \
-            --skip-git-repo-check \
-            "$PROMPT"
+        cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" "${cmd[@]}"
     ) >>"$log" 2>&1 || rc=$?
     if [[ $rc -eq 124 ]]; then rm -f "$out"; die "$EX_TIMEOUT" "codex timeout (${TIMEOUT_SECONDS}s)"; fi
     if [[ $rc -ne 0 ]]; then  rm -f "$out"; die "$EX_ENGINE_FAIL" "codex exit=$rc (log: $log)"; fi
+    # First-run success → drop the marker so the next call resumes. If codex
+    # state gets wiped externally (e.g. ~/.codex/ deleted), the resume call
+    # will fail loudly with EX_ENGINE_FAIL — user can clear our marker by
+    # hand. We don't auto-recover because silently dropping conversation
+    # context would be more surprising than an explicit error.
+    mkdir -p "$marker_dir"
+    touch "$marker"
     # Emit the final assistant text so the outer OUTPUT="$(run_codex)" captures
     # it. codex writes plain text (no JSON wrapping) to --output-last-message.
     cat "$out" 2>/dev/null || true

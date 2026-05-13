@@ -191,6 +191,27 @@ cc-workflow/
 
 ---
 
+## engine=claude vs engine=codex 的语义差异
+
+两套 engine 都能跑,但**能力不对等**——codex CLI 没暴露和 Claude Code 等价的所有钩子,所以创建 `engine=codex` 的 workspace 会自动锁定一些行为。看完这张表再选:
+
+| 维度 | claude | codex | 备注 |
+|---|---|---|---|
+| 一次性 prompt | ✅ | ✅ | 都通过 `agent-run.sh` 包装 |
+| 工具审批(PWA `[Approve][Deny]`) | ✅ PreToolUse hook | ❌ 上游无 hook API([#8923](https://github.com/openai/codex/issues/8923) / [#3817](https://github.com/openai/codex/issues/3817)) | codex workspace 自动 `trust=true`、PWA trust 锁定为 🔓 不可改 |
+| 多轮对话(session 连续) | ✅ `--resume <sid>` | ⚠ `codex exec resume --last`(per-cwd) | 我们用 marker 文件管理"这个 ws/session 是否跑过 codex" |
+| 沙盒 | claude 自己的 permission-mode | codex `--sandbox workspace-write` | 都允许写 WORKDIR,网络默认禁(claude permission-mode 视情况) |
+| 通过 `providers.json` 切端点 | ✅ Anthropic 兼容端点(DeepSeek / Kimi) | ⚠ codex 用自己的 `~/.codex/config.toml`,不读 `providers.json` | 想给 codex 配 Azure / 自定义 endpoint,手动写 `[model_providers.X]` 块 |
+| install | `npm i -g @anthropic-ai/claude-code` | `npm i -g @openai/codex` | 两个都 npm 全局装 |
+
+**实际意义**:
+
+- 你想要"任何 Bash / WebFetch 都过我一遍"的安全感 → 用 claude
+- 你想试 OpenAI 系模型(gpt-5-codex 等)、且不介意"我点了 codex 就等于自动批一切" → 用 codex
+- 切换 engine 不能在 workspace 创建后改 —— 新建一个就是
+
+—
+
 ## 当前架构关键决策
 
 按反悔成本从高到低:
