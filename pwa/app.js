@@ -756,7 +756,53 @@ function bindWorkspaceColHandlers(root) {
   }
   for (const b of root.querySelectorAll('.approval-approve, .approval-deny')) {
     b.addEventListener('click', onApprovalClick);
+    // Mobile fallback. Approval buttons live inside .ws-timeline which has
+    // overflow-y: auto AND is itself inside .ws-grid with scroll-snap-type:
+    // x mandatory (mobile carousel). Some Android browsers (Quark, the
+    // Vivo/Mi/Huawei stock browsers, sometimes even Chrome) decide that a
+    // tap which touches anywhere inside a nested-scroll container is
+    // "ambiguous" and silently swallow the click event. `touchend` still
+    // fires reliably, so we synthesize a click from it when the touch
+    // didn't drift far enough to count as a swipe.
+    _addTapFallback(b, onApprovalClick);
   }
+}
+
+// Generic helper: turn a finger tap (≤ 15px movement, ≤ 600ms) into a
+// click handler invocation. Skips when the touch turned into a scroll
+// gesture so we don't fire on swipe-pass-through. Pairs WITH a regular
+// click listener, not instead of — on platforms where click works
+// normally (i.e. PC), touchend simply isn't fired.
+function _addTapFallback(el, handler) {
+  let start = null;
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { start = null; return; }
+    const t = e.touches[0];
+    start = { x: t.clientX, y: t.clientY, t: Date.now() };
+  }, { passive: true });
+  el.addEventListener('touchend', (e) => {
+    if (!start) return;
+    const begin = start;
+    start = null;
+    const end = e.changedTouches[0];
+    if (!end) return;
+    const dx = end.clientX - begin.x;
+    const dy = end.clientY - begin.y;
+    if (Math.hypot(dx, dy) > 15 || Date.now() - begin.t > 600) return;
+    // Only fire if the corresponding 'click' didn't already — set a flag
+    // on the element and clear in next microtask.
+    if (el.dataset.tapHandled === '1') return;
+    el.dataset.tapHandled = '1';
+    setTimeout(() => { delete el.dataset.tapHandled; }, 400);
+    e.preventDefault();
+    handler({ currentTarget: el, preventDefault() {}, stopPropagation() {} });
+  });
+  // If a normal click fires (PC, Android Chrome usually), claim the
+  // tap-handled flag so the touchend fallback above doesn't double-fire.
+  el.addEventListener('click', () => {
+    el.dataset.tapHandled = '1';
+    setTimeout(() => { delete el.dataset.tapHandled; }, 400);
+  }, { capture: true });
 }
 
 // PC-overview-specific bindings: new-ws form + drag-to-reorder. Always
