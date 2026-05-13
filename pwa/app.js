@@ -753,6 +753,9 @@ function bindWorkspaceColHandlers(root) {
   }
   for (const b of root.querySelectorAll('.ws-trust-toggle')) {
     b.addEventListener('click', onTrustToggleClick);
+    // Mobile fallback. See _addTapFallback comment — same reliability
+    // work the approval buttons needed.
+    _addTapFallback(b, onTrustToggleClick);
   }
   const approvalBtns = root.querySelectorAll('.approval-approve, .approval-deny');
   console.log('[cc-debug] bindWorkspaceColHandlers: approval buttons found =', approvalBtns.length);
@@ -1192,7 +1195,7 @@ function workspaceColHtml(name, data, opts = {}) {
             ${providerOptions}
           </select>
           <span class="ws-engine" title="Engine (immutable)">· ${esc(wsEngine)}</span>
-          ${detail ? '' : trustToggleHtml(name)}
+          ${trustToggleHtml(name)}
         </div>
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
