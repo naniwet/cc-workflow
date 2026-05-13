@@ -269,7 +269,8 @@ main {
   display: flex;
   gap: var(--space-3);
   flex: 1 1 0;               /* every row gets an equal slice of vertical space */
-  min-height: 180px;         /* below this each card becomes unusable */
+  min-height: 200px;         /* below this each card becomes unusable */
+  max-height: 520px;         /* don't let 1-2 rows balloon to viewport height */
 }
 .ws-row .ws-col {
   flex: 1 1 0;
@@ -355,7 +356,14 @@ main {
 .ws-col.dragging { opacity: 0.35; }
 .ws-col.drop-target {
   border-color: var(--accent-blue);
-  box-shadow: 0 0 0 2px var(--accent-blue-faint);
+  box-shadow: 0 0 0 3px var(--accent-blue-faint), inset 0 0 0 1px var(--accent-blue);
+  background: var(--accent-blue-faint);
+}
+.ws-col {
+  /* Subtle hint that the whole card is a drop target when something IS
+     being dragged. dragenter/dragover toggles .drop-target above; this
+     is just the resting visual continuity. */
+  position: relative;
 }
 
 .provider-inline {

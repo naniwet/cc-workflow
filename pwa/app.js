@@ -728,14 +728,19 @@ function bindOverviewHandlers() {
 //     horizontal midpoint
 // HTML5 drag API does the heavy lifting (momentum, drag image, etc).
 function setupDragReorder() {
-  const grid = $('view').querySelector('.ws-grid');
-  if (!grid) return;
-  for (const col of grid.querySelectorAll('.ws-col')) {
+  // Bind from #view directly — PC overview puts .ws-col under .ws-layout
+  // > .ws-row, while the mobile-detail carousel puts them under .ws-grid.
+  // Earlier this function only queried .ws-grid, so PC card-drop handlers
+  // never got attached (only the row-gap handlers, bound elsewhere). That
+  // made card-to-card dragging visually start but drop with no effect.
+  // .ws-drag-handle is only emitted in non-detail mode so the handle
+  // selector naturally skips mobile carousel.
+  for (const col of $('view').querySelectorAll('.ws-col')) {
     col.addEventListener('dragover', onColDragOver);
     col.addEventListener('dragleave', onColDragLeave);
     col.addEventListener('drop', onColDrop);
   }
-  for (const h of grid.querySelectorAll('.ws-drag-handle')) {
+  for (const h of $('view').querySelectorAll('.ws-drag-handle')) {
     h.addEventListener('dragstart', onHandleDragStart);
     h.addEventListener('dragend', onHandleDragEnd);
   }
