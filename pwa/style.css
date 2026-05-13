@@ -270,21 +270,27 @@ main {
 .ws-card-trust { display: inline-flex; align-items: center; }
 .ws-card-trust svg { width: 12px; height: 12px; color: var(--accent-amber); vertical-align: middle; }
 
-/* PC drag-to-reorder handle. Lives at the left of .ws-head-row.
-   Hidden on mobile via @media block at the bottom of this file. */
+/* PC drag-to-reorder handle — larger hit area + clearer hover state
+   so it's easy to target with a mouse. Hidden on mobile. */
 .ws-drag-handle {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   cursor: grab;
   color: var(--text-tertiary);
-  padding: var(--space-1) 2px;
+  padding: var(--space-2);
   border-radius: var(--radius-sm);
   user-select: none;
   transition: color var(--t-base), background var(--t-base);
   flex-shrink: 0;
+  min-width: 32px;
+  min-height: 32px;
 }
-.ws-drag-handle svg { width: 14px; height: 14px; display: block; }
-.ws-drag-handle:hover { color: var(--text-primary); background: var(--bg-elevated); }
+.ws-drag-handle svg { width: 16px; height: 16px; display: block; }
+.ws-drag-handle:hover {
+  color: var(--accent-blue);
+  background: var(--accent-blue-faint);
+}
 .ws-drag-handle:active { cursor: grabbing; }
 
 /* Row-based PC overview layout. Each row is its own flex container so
@@ -388,17 +394,58 @@ main {
 }
 
 /* Visual state during drag */
-.ws-col.dragging { opacity: 0.35; }
-.ws-col.drop-target {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 3px var(--accent-blue-faint), inset 0 0 0 1px var(--accent-blue);
-  background: var(--accent-blue-faint);
+.ws-col.dragging {
+  opacity: 0.35;
+  transform: scale(0.98);
+  box-shadow: none;
 }
 .ws-col {
-  /* Subtle hint that the whole card is a drop target when something IS
-     being dragged. dragenter/dragover toggles .drop-target above; this
-     is just the resting visual continuity. */
-  position: relative;
+  position: relative;            /* anchor for ::before / ::after insertion lines */
+  transition: box-shadow var(--t-base);
+}
+
+/* Drop-target hover: render a vertical insertion line on the left OR right
+   edge of the target card, depending on which side of the midline the
+   cursor is on. Trello-style — tells the user EXACTLY where the source
+   card will land before they commit. */
+.ws-col.drop-target-left::before,
+.ws-col.drop-target-right::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--accent-blue);
+  border-radius: 2px;
+  box-shadow: 0 0 12px var(--accent-blue);
+  z-index: 5;
+}
+.ws-col.drop-target-left::before {
+  left: calc(-1 * var(--space-2));
+}
+.ws-col.drop-target-right::after {
+  right: calc(-1 * var(--space-2));
+}
+
+/* Global drag-state class on <body>. While ANY card is being dragged,
+   make every potential drop zone discoverable — slim row-gaps puff up
+   to 36px with dashed outlines so the user sees "you can drop here too,
+   not just on a card". */
+body.is-dragging {
+  cursor: grabbing;
+}
+body.is-dragging .ws-row-gap {
+  height: 36px;
+  border: 2px dashed rgba(47, 126, 255, 0.45);
+  background: rgba(47, 126, 255, 0.05);
+}
+body.is-dragging .ws-row-gap.drop-target {
+  height: 56px;
+  border-color: var(--accent-blue);
+  background: var(--accent-blue-faint);
+}
+body.is-dragging .ws-col:not(.dragging) {
+  box-shadow: var(--shadow-2);     /* slight lift so non-source cards look "ready to receive" */
 }
 
 .provider-inline {

@@ -780,10 +780,19 @@ function onHandleDragStart(e) {
   // Offset slightly so the preview's top-left sits a bit below the cursor.
   e.dataTransfer.setDragImage(col, Math.min(80, col.offsetWidth / 2), 20);
   col.classList.add('dragging');
+  // Global drag flag — CSS uses body.is-dragging to "wake up" row-gap
+  // drop zones and add a subtle lift to non-source cards.
+  document.body.classList.add('is-dragging');
 }
 
 function onHandleDragEnd(e) {
   e.target.closest('.ws-col')?.classList.remove('dragging');
+  document.body.classList.remove('is-dragging');
+  // Clear any lingering target classes (defensive — should already be
+  // gone via the per-element drop / dragleave handlers).
+  for (const el of document.querySelectorAll('.drop-target, .drop-target-left, .drop-target-right')) {
+    el.classList.remove('drop-target', 'drop-target-left', 'drop-target-right');
+  }
 }
 
 function onColDragOver(e) {
@@ -791,22 +800,28 @@ function onColDragOver(e) {
   // to fire drop events.
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
-  e.currentTarget.classList.add('drop-target');
+  const target = e.currentTarget;
+  // Insertion-line side based on cursor horizontal position relative to
+  // the target's midpoint. CSS renders the line on the matching edge so
+  // the user sees exactly where the drop will land.
+  const rect = target.getBoundingClientRect();
+  const insertBefore = e.clientX < rect.left + rect.width / 2;
+  target.classList.toggle('drop-target-left', insertBefore);
+  target.classList.toggle('drop-target-right', !insertBefore);
 }
 
 function onColDragLeave(e) {
-  e.currentTarget.classList.remove('drop-target');
+  e.currentTarget.classList.remove('drop-target-left', 'drop-target-right');
 }
 
 function onColDrop(e) {
   e.preventDefault();
   const target = e.currentTarget;
-  target.classList.remove('drop-target');
+  const insertBefore = target.classList.contains('drop-target-left');
+  target.classList.remove('drop-target-left', 'drop-target-right');
   const sourceName = e.dataTransfer.getData('text/plain');
   const targetName = target.dataset.ws;
   if (!sourceName || !targetName || sourceName === targetName) return;
-  const rect = target.getBoundingClientRect();
-  const insertBefore = e.clientX < rect.left + rect.width / 2;
   reorderWorkspaceTo(sourceName, targetName, insertBefore);
 }
 
