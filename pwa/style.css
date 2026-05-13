@@ -177,7 +177,9 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
   box-shadow: var(--shadow-1);
 }
 
-/* Column header: name big/bold, "as <provider>" small/secondary below */
+/* Column header: 2-line layout.
+     row 1 — [drag handle] [name h2 (flex grows)] [wide toggle]
+     row 2 — "as <provider> · <engine>" */
 .ws-head {
   display: flex;
   flex-direction: column;
@@ -186,6 +188,12 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
   border-bottom: 1px solid var(--border-subtle);
   margin-bottom: var(--space-1);
 }
+.ws-head-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.ws-head-row h2 { flex: 1; min-width: 0; }
 .ws-col h2 {
   margin: 0;
   font-size: var(--text-lg);
@@ -206,7 +214,7 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
   margin-left: var(--space-1);
 }
 
-/* PC drag-to-reorder handle. Lives in .ws-head before the title.
+/* PC drag-to-reorder handle. Lives at the left of .ws-head-row.
    Hidden on mobile via @media block at the bottom of this file. */
 .ws-drag-handle {
   display: inline-flex;
@@ -217,17 +225,39 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
   border-radius: var(--radius-sm);
   user-select: none;
   transition: color var(--t-base), background var(--t-base);
-  margin-right: var(--space-1);
-  align-self: flex-start;
+  flex-shrink: 0;
 }
 .ws-drag-handle svg { width: 14px; height: 14px; display: block; }
 .ws-drag-handle:hover { color: var(--text-primary); background: var(--bg-elevated); }
 .ws-drag-handle:active { cursor: grabbing; }
 
-/* Header row now has 3 logical slots (handle / title / provider). The
-   handle sits inline; the provider goes below the title via the existing
-   flex-direction: column on .ws-head. */
-.ws-col .ws-head { position: relative; }
+/* Per-card width toggle — "expand to span 2 cols / shrink back". Sits
+   at the right of .ws-head-row (pushed by h2's flex:1). */
+.ws-wide-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-tertiary);
+  padding: var(--space-1);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
+  flex-shrink: 0;
+  font: inherit;
+}
+.ws-wide-toggle svg { width: 14px; height: 14px; display: block; }
+.ws-wide-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); border-color: var(--border-subtle); }
+.ws-wide-toggle.is-wide {
+  color: var(--accent-blue);
+  border-color: rgba(47, 126, 255, 0.30);
+  background: var(--accent-blue-faint);
+}
+.ws-wide-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
+
+/* Apply 2-col span when a workspace is marked "wide". `grid-column: span 2`
+   gracefully clamps to grid width if the grid is only 1 col. */
+.ws-col-wide { grid-column: span 2; }
 
 /* Visual state during drag */
 .ws-col.dragging { opacity: 0.35; }
@@ -235,6 +265,40 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
   border-color: var(--accent-blue);
   box-shadow: 0 0 0 2px var(--accent-blue-faint);
 }
+
+/* Layout toolbar — sits above the grid. Hidden on mobile.
+   1-6 segmented control style: borderless buttons in a single rounded shell. */
+.ws-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+}
+.ws-toolbar-label { font-size: var(--text-sm); }
+.ws-cols-toggle {
+  display: inline-flex;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+.ws-cols-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  min-width: 32px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--t-base), color var(--t-base);
+  font: inherit;
+}
+.ws-cols-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+.ws-cols-btn.active { background: var(--accent-blue); color: #fff; }
+.ws-cols-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
 .provider-inline {
   width: auto;
   padding: 2px var(--space-2);
@@ -862,9 +926,11 @@ pre {
   /* Detail page <pre>: stay readable on narrow viewport */
   pre { font-size: var(--text-sm); padding: var(--space-3); }
 
-  /* Drag-to-reorder is PC-only — touch users would conflict with carousel
-     scroll-snap anyway. Hide the handle entirely on mobile. */
-  .ws-drag-handle { display: none; }
+  /* Drag-to-reorder + wide-toggle + layout toolbar are PC-only —
+     mobile uses overview-card-list which doesn't have a grid to rearrange. */
+  .ws-drag-handle,
+  .ws-wide-toggle,
+  .ws-toolbar { display: none; }
 
   /* ---------------------------------------------------------------
    *  Add-form on mobile: open state becomes a bottom-sheet overlay

@@ -41,6 +41,9 @@ const ICONS = {
   warning: `<svg ${_S}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
   // 6-dot vertical grip — drag handle on PC workspace cards
   grip:    `<svg ${_S}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>`,
+  // Maximize / minimize corner arrows — "make this card wider (span 2 cols)"
+  maximize: `<svg ${_S}><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
+  minimize: `<svg ${_S}><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
 };
 
 // Tag helper — status string → <span class="tag tag-X"> with icon prefix.
@@ -253,7 +256,38 @@ function orderedWorkspaces(names) {
   return [...userOrdered, ...newOnes];
 }
 
+// Grid column count (1-6), per-browser preference.
+let _wsCols = 4;
+const WS_COLS_MIN = 1, WS_COLS_MAX = 6;
+
+function loadWsCols() {
+  try {
+    const v = parseInt(localStorage.getItem('ws-cols'), 10);
+    _wsCols = v >= WS_COLS_MIN && v <= WS_COLS_MAX ? v : 4;
+  } catch { _wsCols = 4; }
+}
+
+function saveWsCols() {
+  try { localStorage.setItem('ws-cols', String(_wsCols)); } catch {}
+}
+
+// Set of workspace names marked "wide" (each spans 2 grid columns).
+let _wsWide = new Set();
+
+function loadWsWide() {
+  try {
+    const arr = JSON.parse(localStorage.getItem('ws-wide'));
+    _wsWide = new Set(Array.isArray(arr) ? arr.filter((n) => typeof n === 'string') : []);
+  } catch { _wsWide = new Set(); }
+}
+
+function saveWsWide() {
+  try { localStorage.setItem('ws-wide', JSON.stringify([..._wsWide])); } catch {}
+}
+
 loadWsOrder();
+loadWsCols();
+loadWsWide();
 
 function snapshotDrafts() {
   for (const form of document.querySelectorAll('form[data-form-id]')) {
@@ -382,8 +416,26 @@ function renderDesktopOverview() {
     ...(lastData.providers || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`),
   ].join('');
 
+  // Toolbar: column-count picker (1-6). Inline style on .ws-grid applies
+  // user choice; existing @media rules in CSS are weaker (selector class)
+  // and stay only as a fallback for the no-JS / pre-render moment.
+  const colsBtns = [];
+  for (let n = WS_COLS_MIN; n <= WS_COLS_MAX; n++) {
+    const active = n === _wsCols;
+    colsBtns.push(
+      `<button class="ws-cols-btn${active ? ' active' : ''}" type="button"
+               data-cols="${n}" role="radio" aria-checked="${active}">${n}</button>`
+    );
+  }
+
   $('view').innerHTML = `
     <h1>Workspaces</h1>
+    <div class="ws-toolbar">
+      <span class="ws-toolbar-label muted">Layout</span>
+      <div class="ws-cols-toggle" role="radiogroup" aria-label="Grid columns">
+        ${colsBtns.join('')}
+      </div>
+    </div>
     <details class="add-form" data-details-id="add-ws">
       <summary>New workspace</summary>
       <form data-form-id="new-ws">
@@ -408,11 +460,37 @@ function renderDesktopOverview() {
       </form>
     </details>
     ${cols
-      ? `<div class="ws-grid">${cols}</div>`
+      ? `<div class="ws-grid" style="grid-template-columns: repeat(${_wsCols}, minmax(0, 1fr));">${cols}</div>`
       : `<p class="muted">No workspaces yet. Use the form above or create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
   `;
 
   bindOverviewHandlers();
+  // Toolbar + per-card wide buttons. Re-bound on every render because
+  // innerHTML wipes prior listeners.
+  for (const b of $('view').querySelectorAll('.ws-cols-btn')) {
+    b.addEventListener('click', onColsBtnClick);
+  }
+  for (const b of $('view').querySelectorAll('.ws-wide-toggle')) {
+    b.addEventListener('click', onWideToggleClick);
+  }
+}
+
+// ---------- Layout toolbar handlers ----------
+function onColsBtnClick(e) {
+  const n = parseInt(e.currentTarget.dataset.cols, 10);
+  if (!(n >= WS_COLS_MIN && n <= WS_COLS_MAX) || n === _wsCols) return;
+  _wsCols = n;
+  saveWsCols();
+  render();
+}
+
+function onWideToggleClick(e) {
+  const name = e.currentTarget.dataset.ws;
+  if (!name) return;
+  if (_wsWide.has(name)) _wsWide.delete(name);
+  else _wsWide.add(name);
+  saveWsWide();
+  render();
 }
 
 // Mobile overview = compact card list. Each card is a hyperlink that
@@ -726,9 +804,12 @@ function workspaceColHtml(name, data, opts = {}) {
     .join('');
 
   // Overview: h2 wraps in a link so clicking it drills into detail; also
-  // gets a drag handle for PC drag-to-reorder.
+  // gets a drag handle for PC drag-to-reorder + a width-toggle button.
   // Detail: plain h2 (we're already in detail; the back-link handles exit).
-  // No drag handle either — we're already focused on one workspace.
+  // No drag handle / wide toggle either — we're already focused on one ws.
+  const isWide = _wsWide.has(name);
+  const wideClass = isWide && !detail ? ' ws-col-wide' : '';
+
   const headerTitle = detail
     ? `<h2>${esc(name)}</h2>`
     : `<h2><a class="ws-name-link" href="#workspaces/${encodeURIComponent(name)}">${esc(name)}</a></h2>`;
@@ -737,11 +818,20 @@ function workspaceColHtml(name, data, opts = {}) {
     ? ''
     : `<span class="ws-drag-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">${ICONS.grip}</span>`;
 
+  const wideToggle = detail
+    ? ''
+    : `<button class="ws-wide-toggle${isWide ? ' is-wide' : ''}" type="button"
+               data-ws="${esc(name)}" title="${isWide ? 'Shrink to 1×' : 'Expand to 2× wide'}"
+               aria-label="Toggle width">${isWide ? ICONS.minimize : ICONS.maximize}</button>`;
+
   return `
-    <div class="ws-col ${extraClass}" data-ws="${esc(name)}">
+    <div class="ws-col ${extraClass}${wideClass}" data-ws="${esc(name)}">
       <div class="ws-head">
-        ${dragHandle}
-        ${headerTitle}
+        <div class="ws-head-row">
+          ${dragHandle}
+          ${headerTitle}
+          ${wideToggle}
+        </div>
         <div class="ws-provider">
           <span class="ws-provider-label">as</span>
           <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
