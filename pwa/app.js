@@ -1211,12 +1211,23 @@ function approvalBlockHtml(a) {
 }
 
 async function onApprovalClick(e) {
+  // Stop the click from bubbling up into any parent that might preventDefault
+  // it (e.g. the run-link <a> earlier in the timeline). Both stopPropagation
+  // AND preventDefault on the click event are belt-and-suspenders for mobile
+  // browsers that sometimes treat tap-on-button as tap-on-nearest-link.
+  e.preventDefault();
+  e.stopPropagation();
+
   const btn = e.currentTarget;
   const id = btn.dataset.id;
   const decision = btn.classList.contains('approval-approve') ? 'approved' : 'denied';
-  // Disable both buttons in this approval block to prevent double-click.
+  // Visible feedback FIRST — before the network call. Confirms the click
+  // actually registered (covers the "tap → silence" failure mode).
   const block = btn.closest('.approval-pending');
+  const originalText = btn.textContent;
   if (block) for (const b of block.querySelectorAll('button')) b.disabled = true;
+  btn.textContent = decision === 'approved' ? 'Approving…' : 'Denying…';
+
   try {
     await api(`/approvals/${encodeURIComponent(id)}/decision`, {
       method: 'POST',
@@ -1227,6 +1238,7 @@ async function onApprovalClick(e) {
     refreshAll();
   } catch (err) {
     showError(`decision failed: ${err.message}`);
+    btn.textContent = originalText;
     if (block) for (const b of block.querySelectorAll('button')) b.disabled = false;
   }
 }

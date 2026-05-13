@@ -582,6 +582,12 @@ body.is-dragging .ws-col:not(.dragging) {
   color: #fff;
   border-width: 1px;
   border-style: solid;
+  cursor: pointer;
+  pointer-events: auto;        /* defensive — no parent should block taps */
+  touch-action: manipulation;  /* skip the 300ms double-tap-zoom delay on mobile */
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0.15);
+  position: relative;
+  z-index: 1;                  /* sit above any drag-state pseudo-elements */
 }
 .approval-pending .approval-approve {
   background: var(--accent-green);
