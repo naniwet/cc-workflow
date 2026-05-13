@@ -668,6 +668,10 @@ function renderMobileOverview() {
     const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
     const trusted = effectiveTrust(name);
     const trustBadge = trusted ? ` · <span class="ws-card-trust" title="Auto-approves tools">${ICONS.unlock}</span>` : '';
+    const pendingCount = pendingApprovalsForWorkspace(name).length;
+    const pendingBadge = pendingCount > 0
+      ? `<span class="ws-card-pending" title="${pendingCount} pending approval${pendingCount > 1 ? 's' : ''}">${ICONS.warning}${pendingCount} 待批准</span>`
+      : '';
     const promptSnippet = last?.prompt ? last.prompt.slice(0, 50) : '';
     const promptOverflow = last?.prompt && last.prompt.length > 50 ? '…' : '';
     return `
@@ -676,6 +680,7 @@ function renderMobileOverview() {
           <h3>${esc(name)}</h3>
           <span class="ws-card-provider">${esc(wsProvider) || '—'} · ${esc(wsEngine)}${trustBadge}</span>
         </div>
+        ${pendingBadge ? `<div class="ws-card-pending-row">${pendingBadge}</div>` : ''}
         ${last
           ? `<div class="ws-card-meta">
                ${statusTag(last.status || '?')}
@@ -734,24 +739,33 @@ function renderMobileOverview() {
     ?.addEventListener('submit', onAddWorkspace);
 }
 
-// Shared handler binding for renderDesktopOverview (PC) and
-// renderMobileWorkspaceDetail (mobile carousel). Both render full .ws-col
-// instances with trigger forms + provider selects.
+// Bind handlers that exist on every .ws-col-rendering view (PC overview,
+// PC single-ws detail, mobile carousel detail). Approval buttons in
+// particular live INSIDE the timeline so they're re-emitted whenever
+// workspaceColHtml runs — without this binder, they were dead on the
+// mobile carousel + PC detail views (only PC overview was wired up).
+function bindWorkspaceColHandlers(root) {
+  for (const f of root.querySelectorAll('.trigger-form')) {
+    f.addEventListener('submit', onTriggerSubmit);
+  }
+  for (const sel of root.querySelectorAll('.provider-inline')) {
+    sel.addEventListener('change', onProviderInlineChange);
+  }
+  for (const b of root.querySelectorAll('.ws-trust-toggle')) {
+    b.addEventListener('click', onTrustToggleClick);
+  }
+  for (const b of root.querySelectorAll('.approval-approve, .approval-deny')) {
+    b.addEventListener('click', onApprovalClick);
+  }
+}
+
+// PC-overview-specific bindings: new-ws form + drag-to-reorder. Always
+// also runs the shared bindWorkspaceColHandlers so every card has its
+// trigger / provider / trust / approval handlers wired.
 function bindOverviewHandlers() {
   $('view').querySelector('form[data-form-id="new-ws"]')
     ?.addEventListener('submit', onAddWorkspace);
-  for (const f of $('view').querySelectorAll('.trigger-form')) {
-    f.addEventListener('submit', onTriggerSubmit);
-  }
-  for (const sel of $('view').querySelectorAll('.provider-inline')) {
-    sel.addEventListener('change', onProviderInlineChange);
-  }
-  for (const b of $('view').querySelectorAll('.ws-trust-toggle')) {
-    b.addEventListener('click', onTrustToggleClick);
-  }
-  for (const b of $('view').querySelectorAll('.approval-approve, .approval-deny')) {
-    b.addEventListener('click', onApprovalClick);
-  }
+  bindWorkspaceColHandlers($('view'));
   setupCarousel();
   setupDragReorder();
 }
@@ -1156,6 +1170,15 @@ function pendingApprovalsFor(runId) {
   return (lastData.pendingApprovals || []).filter((a) => a.run_id === runId);
 }
 
+// Pending approvals for a workspace — used by the mobile overview card
+// to badge workspaces that are blocked waiting on the user. Without
+// this badge, mobile users had to tap into each workspace to discover
+// a pending approval.
+function pendingApprovalsForWorkspace(name) {
+  if (!name) return [];
+  return (lastData.pendingApprovals || []).filter((a) => a.workspace === name);
+}
+
 // Compact human description of a pending tool call — what Claude wants
 // to do. Special-cases Bash + WebFetch (the two we currently hook); other
 // tools fall back to "tool_name + JSON snippet".
@@ -1307,12 +1330,7 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
       : `<p class="muted">No workspaces.</p>`}
   `;
 
-  for (const f of $('view').querySelectorAll('.trigger-form')) {
-    f.addEventListener('submit', onTriggerSubmit);
-  }
-  for (const sel of $('view').querySelectorAll('.provider-inline')) {
-    sel.addEventListener('change', onProviderInlineChange);
-  }
+  bindWorkspaceColHandlers($('view'));
   setupCarousel();
 
   // Jump to the requested workspace only on fresh navigation. Polling re-
@@ -1347,12 +1365,7 @@ function renderDesktopWorkspaceDetail(name) {
     ${workspaceColHtml(name, data, { maxRows: 30, detail: true, extraClass: 'ws-col-detail' })}
   `;
 
-  for (const f of $('view').querySelectorAll('.trigger-form')) {
-    f.addEventListener('submit', onTriggerSubmit);
-  }
-  for (const sel of $('view').querySelectorAll('.provider-inline')) {
-    sel.addEventListener('change', onProviderInlineChange);
-  }
+  bindWorkspaceColHandlers($('view'));
 }
 
 // ---------- Run detail view (#runs/<id>) ----------

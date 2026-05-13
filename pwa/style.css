@@ -995,6 +995,27 @@ pre {
   text-overflow: ellipsis;
 }
 
+/* Pending-approval indicator on the mobile overview card. Amber tint
+   matches the in-card .approval-pending block so the visual language
+   is consistent: amber = "human action required". */
+.ws-card-pending-row {
+  display: flex;
+  align-items: center;
+}
+.ws-card-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  padding: 2px var(--space-2);
+  background: rgba(245, 158, 11, 0.10);
+  border: 1px solid rgba(245, 158, 11, 0.40);
+  border-radius: var(--radius-sm);
+  color: var(--accent-amber);
+}
+.ws-card-pending svg { width: 13px; height: 13px; }
+
 /* ============================================================================
  *  PC detail view (#workspaces/<name> on desktop) — single .ws-col centered,
  *  wider, more history rows visible.
