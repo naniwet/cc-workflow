@@ -374,16 +374,90 @@ label {
   font-weight: 500;
 }
 
-/* ============================================================================
- *  Banner (legacy — replaced by toast in commit 3, kept for compatibility)
- * ============================================================================ */
-.banner { padding: var(--space-2) var(--space-4); font-size: var(--text-sm); }
-.banner-error {
-  background: rgba(239, 68, 68, 0.10);
-  color: var(--accent-red);
-  border-top: 1px solid rgba(239, 68, 68, 0.30);
-}
 .hidden { display: none; }
+
+/* ============================================================================
+ *  Tag icons — 12px line icons inside .tag chips
+ * ============================================================================ */
+.tag svg { width: 12px; height: 12px; flex-shrink: 0; }
+
+/* ============================================================================
+ *  Toast — replaces the old fixed-top error banner.
+ *  Desktop: stack at bottom-right.  Mobile: above the bottom-nav.
+ * ============================================================================ */
+#toast-container {
+  position: fixed;
+  bottom: var(--space-4);
+  right: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: 100;
+  max-width: 400px;
+  pointer-events: none;             /* container ignores clicks; toasts opt in */
+}
+@media (max-width: 768px) {
+  #toast-container {
+    /* sit above bottom-nav (64px nominal) + safe-area inset */
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    left: var(--space-3);
+    right: var(--space-3);
+    max-width: none;
+  }
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateX(20px);
+  transition: opacity var(--t-base), transform var(--t-base);
+}
+.toast.toast-show { opacity: 1; transform: translateX(0); }
+.toast.toast-hide { opacity: 0; transform: translateX(20px); }
+
+@media (max-width: 768px) {
+  .toast            { transform: translateY(20px); }
+  .toast.toast-show { transform: translateY(0); }
+  .toast.toast-hide { transform: translateY(20px); }
+}
+
+.toast-icon { display: flex; flex-shrink: 0; }
+.toast-icon svg { width: 16px; height: 16px; }
+.toast-message  { flex: 1; min-width: 0; word-break: break-word; line-height: var(--lh-normal); }
+.toast-close {
+  background: transparent;
+  color: var(--text-tertiary);
+  border: none;
+  padding: 0;
+  width: 22px;
+  height: 22px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  transition: color var(--t-base), background var(--t-base);
+}
+.toast-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+.toast-error   { border-color: rgba(239, 68, 68, 0.40); }
+.toast-error   .toast-icon { color: var(--accent-red); }
+.toast-success { border-color: rgba(34, 197, 94, 0.40); }
+.toast-success .toast-icon { color: var(--accent-green); }
+.toast-info    { border-color: rgba(6, 182, 212, 0.40); }
+.toast-info    .toast-icon { color: var(--accent-cyan); }
+.toast-warning { border-color: rgba(245, 158, 11, 0.40); }
+.toast-warning .toast-icon { color: var(--accent-amber); }
 
 /* ============================================================================
  *  Add-form (collapsible <details>)

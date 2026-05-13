@@ -22,6 +22,30 @@ const esc = (s) =>
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
   );
 
+// ---------- inline SVG icon set (lucide-style 24px line icons) ----------
+// All icons share the same stroke / linecap / linejoin attrs so they look
+// consistent regardless of where they're embedded. CSS sets the actual
+// rendered size (.tag svg { 12px }, .toast svg { 16px }).
+const _S = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+const ICONS = {
+  // status icons (used inside .tag chips)
+  done:    `<svg ${_S}><polyline points="20 6 9 17 4 12"/></svg>`,
+  running: `<svg ${_S}><polygon points="6 3 20 12 6 21"/></svg>`,
+  queued:  `<svg ${_S}><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>`,
+  failed:  `<svg ${_S}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+  paused:  `<svg ${_S}><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`,
+  // toast icons
+  error:   `<svg ${_S}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12.01" y2="16.5"/></svg>`,
+  success: `<svg ${_S}><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>`,
+  info:    `<svg ${_S}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
+  warning: `<svg ${_S}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+};
+
+// Tag helper — status string → <span class="tag tag-X"> with icon prefix.
+function statusTag(status) {
+  return `<span class="tag tag-${esc(status)}">${ICONS[status] || ''}${esc(status)}</span>`;
+}
+
 // ---------- service worker ----------
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/pwa/sw.js').catch(() => {});
@@ -55,17 +79,46 @@ async function api(path, opts = {}) {
   return ct.includes('json') ? r.json() : r.text();
 }
 
-let errorVisible = false;
-function showError(msg) {
-  $('error-banner').textContent = msg;
-  $('error-banner').classList.remove('hidden');
-  errorVisible = true;
+// ---------- toast (replaces the old banner-error) ----------
+// Stack at bottom-right (desktop) / bottom-edge above bottom-nav (mobile).
+// Auto-dismiss after 4s; click × to dismiss manually. Identical API surface
+// as the old showError/clearError so call sites don't have to change.
+let _toastSeq = 0;
+const TOAST_TTL_MS = 4000;
+
+function showToast(level, message, opts = {}) {
+  let container = $('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const id = ++_toastSeq;
+  const el = document.createElement('div');
+  el.className = `toast toast-${level}`;
+  el.dataset.id = id;
+  el.innerHTML = `
+    <span class="toast-icon">${ICONS[level] || ICONS.info}</span>
+    <span class="toast-message">${esc(message)}</span>
+    <button class="toast-close" type="button" aria-label="Dismiss">×</button>
+  `;
+  el.querySelector('.toast-close').addEventListener('click', () => dismissToast(id));
+  container.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('toast-show'));
+  setTimeout(() => dismissToast(id), opts.ttl ?? TOAST_TTL_MS);
+  return id;
 }
-function clearError() {
-  if (!errorVisible) return;
-  $('error-banner').classList.add('hidden');
-  errorVisible = false;
+
+function dismissToast(id) {
+  const el = document.querySelector(`.toast[data-id="${id}"]`);
+  if (!el) return;
+  el.classList.remove('toast-show');
+  el.classList.add('toast-hide');
+  setTimeout(() => el.remove(), 200);                  // matches CSS exit transition
 }
+
+function showError(msg) { showToast('error', msg); }
+function clearError()   { /* no-op — toasts auto-dismiss themselves */ }
 
 // ---------- shared state (refreshed every 3 s) ----------
 let lastData = {
@@ -435,7 +488,7 @@ function runRowHtml(r) {
   return `
     <a class="row run-link" href="#runs/${esc(r.id || '')}" title="Click for full output">
       <div class="row-head">
-        <span class="tag tag-${esc(status)}">${esc(status)}</span>
+        ${statusTag(status)}
         <code>${esc((r.id || '').slice(0, 8))}</code>
         ${r.elapsed_s != null ? `· ${esc(r.elapsed_s)}s` : ''}
         ${r.exit_code != null && r.exit_code !== 0 ? `· exit ${esc(r.exit_code)}` : ''}
@@ -529,7 +582,7 @@ function paintRunDetail(id, row) {
     <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
     <h1>Run <code>${esc(id.slice(0, 8))}</code></h1>
     <div class="run-meta">
-      <span class="tag tag-${esc(status)}">${esc(status)}</span>
+      ${statusTag(status)}
       ${row.workspace ? ` <code>${esc(row.workspace)}</code>` : ''}
       ${row.engine ? ` · ${esc(row.engine)}` : ''}
       ${row.elapsed_s != null ? ` · ${esc(row.elapsed_s)}s` : ''}
@@ -616,12 +669,15 @@ function loopRowHtml(loop) {
     : '—';
   const last_exit = loop.last_exit != null ? loop.last_exit : '—';
   const stale = (loop.consecutive_errors || 0) >= 3;
+  const enabledTag = enabled
+    ? `<span class="tag tag-done">${ICONS.done}enabled</span>`
+    : `<span class="tag tag-failed">${ICONS.paused}paused</span>`;
   return `
     <div class="row">
       <span>
         <code>${esc(loop.name)}</code>
-        <span class="tag ${enabled ? 'tag-done' : 'tag-failed'}">${enabled ? 'enabled' : 'paused'}</span>
-        ${stale ? `<span class="tag tag-failed">stale ${esc(loop.consecutive_errors)}</span>` : ''}
+        ${enabledTag}
+        ${stale ? `<span class="tag tag-failed">${ICONS.warning}stale ${esc(loop.consecutive_errors)}</span>` : ''}
         · last ${esc(lastRun)} · runs ${esc(loop.total_runs || 0)} · exit ${esc(last_exit)}
       </span>
       <span>
