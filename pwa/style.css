@@ -569,24 +569,38 @@ body.is-dragging .ws-col:not(.dragging) {
   display: flex;
   gap: var(--space-2);
 }
-.approval-approve,
-.approval-deny {
+/* Higher-specificity selectors (.approval-pending .approval-xxx) so
+   the colors win regardless of source order / mobile browser default
+   button styling. Some Android browsers were rendering these as plain
+   neutral buttons when the rule was just .approval-approve alone. */
+.approval-pending .approval-approve,
+.approval-pending .approval-deny {
   flex: 1;
   font-size: var(--text-sm);
   padding: var(--space-2) var(--space-3);
+  font-weight: 600;
+  color: #fff;
+  border-width: 1px;
+  border-style: solid;
 }
-.approval-approve {
+.approval-pending .approval-approve {
   background: var(--accent-green);
   border-color: var(--accent-green);
-  color: #fff;
 }
-.approval-approve:hover { background: #1ea34a; border-color: #1ea34a; }
-.approval-deny {
+.approval-pending .approval-approve:hover,
+.approval-pending .approval-approve:active {
+  background: #1ea34a;
+  border-color: #1ea34a;
+}
+.approval-pending .approval-deny {
   background: var(--accent-red);
   border-color: var(--accent-red);
-  color: #fff;
 }
-.approval-deny:hover { background: #d63838; border-color: #d63838; }
+.approval-pending .approval-deny:hover,
+.approval-pending .approval-deny:active {
+  background: #d63838;
+  border-color: #d63838;
+}
 
 /* ============================================================================
  *  Trigger form (chat input at column bottom)
