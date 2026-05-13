@@ -959,29 +959,33 @@ pre {
     overflow: visible;       /* the fixed summary still renders */
   }
 
-  /* CLOSED summary = circular FAB at bottom-right, above bottom-nav. */
+  /* CLOSED summary = small round "+" button at top-right of <main>,
+     visually aligned with the page h1 ("Workspaces" / "Tasks"). Avoids
+     overlapping the carousel's trigger form or the bottom-nav.
+     Requires main { position: relative } (set below). */
+  main { position: relative; }
   .add-form:not([open]) > summary {
-    position: fixed;
+    position: absolute;
+    top: var(--space-2);
     right: var(--space-3);
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
-    width: 56px;
-    height: 56px;
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
     padding: 0;
     border-radius: 999px;
     background: var(--accent-blue);
     border: none;
-    box-shadow: var(--shadow-3);
+    box-shadow: var(--shadow-1);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 0;            /* hide the "New workspace" text */
-    z-index: 30;             /* above bottom-nav (z=20), below toast (z=100) */
-    min-height: 56px;
-    transition: transform var(--t-base), background var(--t-base);
+    z-index: 5;
+    transition: background var(--t-base), box-shadow var(--t-base);
   }
   .add-form:not([open]) > summary::before {
     content: '+';
-    font-size: 28px;
+    font-size: 22px;
     font-weight: 600;
     color: #fff;
     line-height: 1;
@@ -989,7 +993,7 @@ pre {
   .add-form:not([open]) > summary:hover,
   .add-form:not([open]) > summary:active {
     background: var(--accent-blue-hover);
-    transform: scale(1.05);
+    box-shadow: var(--shadow-2);
   }
 
   /* OPEN: bottom sheet. Same pattern as before. */
