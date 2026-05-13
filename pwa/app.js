@@ -49,6 +49,10 @@ const ICONS = {
   // Lock / unlock — workspace trust state (auto-approve tools or not)
   lock:    `<svg ${_S}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
   unlock:  `<svg ${_S}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>`,
+  // Refresh / sync — used by the per-workspace "Sync skills" button so
+  // the user can re-scan ~/.claude/commands + workspace skills after
+  // installing a new plugin or editing a command file.
+  refresh: `<svg ${_S}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`,
 };
 
 // Tag helper — status string → <span class="tag tag-X"> with icon prefix.
@@ -752,8 +756,205 @@ function renderMobileOverview() {
 // workspaceColHtml runs — without this binder, they were dead on the
 // mobile carousel + PC detail views (only PC overview was wired up).
 // Detect mobile once at module load — viewport width never changes mid-session
-// for a chat-style PWA (no responsive flip mid-typing). Used by Enter-to-send.
+// for a chat-style PWA (no responsive flip mid-typing). Used by Enter-to-send
+// and to skip the slash popup on mobile (virtual keyboards make positioned
+// menus glitchy).
 const _isMobileViewport = window.matchMedia('(max-width: 768px)').matches;
+
+// ============================================================================
+// Slash-command autocomplete
+// ============================================================================
+// Why this lives in the PWA rather than a backend feature:
+//   `claude -p "/foo args"` already resolves slash commands (verified
+//   2026-05-13 via canary test — see commit log). So we DON'T need to
+//   expand the .md body ourselves; we just need to surface "what skills
+//   are available" so the user knows what to type.
+//
+// Strategy:
+//   1. Per-workspace cache in localStorage (key cc_skills_<ws>).
+//      Backend GET /skills?workspace=X scans disk; we cache the result
+//      so typing-time filtering is fully client-side.
+//   2. Sync button in each ws column header fetches fresh + writes cache.
+//   3. On `/` typed in a trigger-form textarea, open a popup anchored to
+//      the textarea. Filter as user types more chars after the slash.
+//      Tab/Enter or click selects; Esc/blur dismisses.
+//
+// Skipped on mobile: virtual keyboards push the textarea up and an
+// absolutely-positioned menu either falls off-screen or fights the IME
+// candidate strip. PC users get the full experience.
+
+// Match a trailing "/foo" at end of substring, where the "/" is at start
+// of string or right after whitespace. Avoids triggering on paths like
+// `src/utils/x.ts`. The query (chars after /) is capture group 1.
+const _SLASH_TRIGGER_RE = /(?:^|\s)\/(\S*)$/;
+
+// One popup element for the whole PWA, lazily created on first need.
+let _slashPopupEl = null;
+let _slashState = null;        // { textarea, workspace, items, filtered, idx, queryStart }
+
+function _ensureSlashPopup() {
+  if (_slashPopupEl) return _slashPopupEl;
+  const el = document.createElement('div');
+  el.id = 'slash-popup';
+  el.className = 'slash-popup';
+  el.hidden = true;
+  el.addEventListener('mousedown', (e) => {
+    // Prevent the textarea from losing focus when the user clicks an item.
+    // Without this, blur fires first and we lose the cursor position before
+    // the click handler runs.
+    e.preventDefault();
+  });
+  document.body.appendChild(el);
+  _slashPopupEl = el;
+  return el;
+}
+
+function _slashCacheKey(workspace) { return `cc_skills_${workspace}`; }
+
+function _loadSkillsCache(workspace) {
+  try {
+    const raw = localStorage.getItem(_slashCacheKey(workspace));
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function _saveSkillsCache(workspace, items) {
+  try {
+    localStorage.setItem(_slashCacheKey(workspace), JSON.stringify(items));
+  } catch {}
+}
+
+async function syncSkillsFor(workspace) {
+  try {
+    const items = await api(`/skills?workspace=${encodeURIComponent(workspace)}`);
+    _saveSkillsCache(workspace, Array.isArray(items) ? items : []);
+    return items;
+  } catch (e) {
+    showError(`sync skills failed: ${e.message}`);
+    return null;
+  }
+}
+
+// Called when user presses a key in a trigger-form textarea — *before* the
+// Enter-to-send check, so the slash popup gets first crack at handling
+// Tab/Enter/Esc/Arrow events.
+function _onPromptInput(e) {
+  const ta = e.currentTarget;
+  if (_isMobileViewport) return;
+  const cursor = ta.selectionStart;
+  const before = ta.value.substring(0, cursor);
+  const m = before.match(_SLASH_TRIGGER_RE);
+  if (!m) { _closeSlashPopup(); return; }
+  const ws = ta.closest('form')?.dataset.workspace;
+  if (!ws) return;
+  const query = m[1] || '';
+  const queryStart = cursor - query.length - 1;    // index of the "/"
+  _openOrUpdateSlashPopup(ta, ws, query, queryStart);
+}
+
+function _openOrUpdateSlashPopup(textarea, workspace, query, queryStart) {
+  const all = _loadSkillsCache(workspace);
+  const ql = query.toLowerCase();
+  const filtered = all.filter((s) =>
+    s.name.toLowerCase().includes(ql)
+    || (s.description || '').toLowerCase().includes(ql),
+  );
+  // If we have no cache yet and no items, show a hint to sync.
+  if (all.length === 0 && filtered.length === 0) {
+    _renderSlashPopupEmpty(textarea, workspace);
+    _slashState = { textarea, workspace, items: [], filtered: [], idx: -1, queryStart };
+    return;
+  }
+  if (filtered.length === 0) {
+    _closeSlashPopup();
+    return;
+  }
+  // Preserve idx if still valid, else reset to 0.
+  let idx = 0;
+  if (_slashState && _slashState.textarea === textarea) {
+    idx = Math.min(_slashState.idx, filtered.length - 1);
+    if (idx < 0) idx = 0;
+  }
+  _slashState = { textarea, workspace, items: all, filtered, idx, queryStart };
+  _renderSlashPopup();
+}
+
+function _renderSlashPopupEmpty(textarea, workspace) {
+  const el = _ensureSlashPopup();
+  el.innerHTML = `
+    <div class="slash-popup-empty">
+      <div>暂无 skills 数据。</div>
+      <div class="muted" style="font-size:11px;margin-top:4px">
+        点 workspace 列头的 🔄 Sync skills 按钮拉一次。
+      </div>
+    </div>
+  `;
+  _positionSlashPopup(textarea);
+  el.hidden = false;
+}
+
+function _renderSlashPopup() {
+  const el = _ensureSlashPopup();
+  const { filtered, idx } = _slashState;
+  el.innerHTML = filtered.map((s, i) => `
+    <div class="slash-item${i === idx ? ' selected' : ''}" data-i="${i}">
+      <div class="slash-item-row">
+        <code class="slash-item-name">/${esc(s.name)}</code>
+        <span class="slash-item-source">${esc(s.source)}</span>
+      </div>
+      ${s.description ? `<div class="slash-item-desc">${esc(s.description)}</div>` : ''}
+    </div>
+  `).join('');
+  for (const item of el.querySelectorAll('.slash-item')) {
+    item.addEventListener('click', (e) => {
+      const i = Number(e.currentTarget.dataset.i);
+      if (Number.isFinite(i)) _commitSlashSelection(i);
+    });
+  }
+  _positionSlashPopup(_slashState.textarea);
+  el.hidden = false;
+}
+
+function _positionSlashPopup(textarea) {
+  const el = _ensureSlashPopup();
+  const r = textarea.getBoundingClientRect();
+  // Default: open above the textarea (most prompt boxes sit at the bottom
+  // of the column, so "below" would clip). If we'd run off the top of the
+  // viewport, fall back to below.
+  el.style.left = `${Math.round(r.left + window.scrollX)}px`;
+  el.style.minWidth = `${Math.round(r.width)}px`;
+  // Render first to measure height
+  el.style.bottom = 'auto';
+  el.style.top = '-9999px';
+  el.hidden = false;
+  const h = el.offsetHeight || 200;
+  const topIfAbove = r.top + window.scrollY - h - 4;
+  if (topIfAbove >= 0) {
+    el.style.top = `${topIfAbove}px`;
+  } else {
+    el.style.top = `${r.bottom + window.scrollY + 4}px`;
+  }
+}
+
+function _closeSlashPopup() {
+  if (_slashPopupEl) _slashPopupEl.hidden = true;
+  _slashState = null;
+}
+
+function _commitSlashSelection(i) {
+  if (!_slashState) return;
+  const skill = _slashState.filtered[i];
+  if (!skill) return;
+  const ta = _slashState.textarea;
+  const insertText = `/${skill.name}${skill.has_args ? ' ' : ''}`;
+  const before = ta.value.substring(0, _slashState.queryStart);
+  const after = ta.value.substring(ta.selectionStart);
+  ta.value = before + insertText + after;
+  const newCursor = before.length + insertText.length;
+  ta.setSelectionRange(newCursor, newCursor);
+  ta.focus();
+  _closeSlashPopup();
+}
 
 function _onPromptKeydown(e) {
   // IME composing (Chinese pinyin / Japanese / Korean): the user is mid-
@@ -761,6 +962,36 @@ function _onPromptKeydown(e) {
   // isComposing is the canonical signal; keyCode 229 is the legacy fallback
   // some IMEs send instead of setting isComposing properly.
   if (e.isComposing || e.keyCode === 229) return;
+
+  // Slash popup keyboard nav (takes priority over Enter-to-send when open):
+  //   ↑ / ↓     navigate
+  //   Tab / Enter   select
+  //   Esc       dismiss
+  if (_slashState && !_slashPopupEl?.hidden && _slashState.filtered.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _slashState.idx = (_slashState.idx + 1) % _slashState.filtered.length;
+      _renderSlashPopup();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _slashState.idx = (_slashState.idx - 1 + _slashState.filtered.length) % _slashState.filtered.length;
+      _renderSlashPopup();
+      return;
+    }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey)) {
+      e.preventDefault();
+      _commitSlashSelection(_slashState.idx);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      _closeSlashPopup();
+      return;
+    }
+  }
+
   if (e.key !== 'Enter') return;
   // Cmd/Ctrl+Enter: universal "send" shortcut, works on PC + mobile.
   // Plain Enter: send on PC only (mobile keyboards have no Shift+Enter,
@@ -780,13 +1011,25 @@ function _onPromptKeydown(e) {
 function bindWorkspaceColHandlers(root) {
   for (const f of root.querySelectorAll('.trigger-form')) {
     f.addEventListener('submit', onTriggerSubmit);
-    // Enter-to-send on PC. Plain Enter submits, Shift+Enter inserts a
-    // newline (default <textarea> behavior). On mobile we leave Enter
-    // alone — the virtual keyboard's Enter key doubles as newline and
-    // there's no Shift modifier on most IMEs. Cmd/Ctrl+Enter works
-    // everywhere as a universal "send" shortcut.
     const ta = f.querySelector('textarea[name="prompt"]');
-    if (ta) ta.addEventListener('keydown', _onPromptKeydown);
+    if (ta) {
+      // Enter-to-send on PC, slash popup nav — both live in _onPromptKeydown.
+      ta.addEventListener('keydown', _onPromptKeydown);
+      // input fires after every value change (typing, paste, IME commit) —
+      // use it to detect "user just typed / or extended the slash query".
+      ta.addEventListener('input', _onPromptInput);
+      // Closing the popup on blur would race the click handler on items
+      // (blur fires before click). We pre-prevent the click's default to
+      // keep focus, so blur shouldn't fire for clicks. Bind anyway for
+      // outside-click via document below.
+      ta.addEventListener('blur', () => setTimeout(_closeSlashPopup, 150));
+    }
+  }
+  // Sync skills button per column header. Calls /skills?workspace=X and
+  // refreshes localStorage. No re-render needed afterwards — the next
+  // _onPromptInput will pick up the new cache.
+  for (const btn of root.querySelectorAll('.ws-sync-skills')) {
+    btn.addEventListener('click', _onSyncSkillsClick);
   }
   for (const sel of root.querySelectorAll('.provider-inline')) {
     sel.addEventListener('change', onProviderInlineChange);
@@ -1154,6 +1397,23 @@ function trustToggleHtml(name) {
                   title="${esc(tip)}" aria-label="Toggle trust">${icon}</button>`;
 }
 
+async function _onSyncSkillsClick(e) {
+  const btn = e.currentTarget;
+  const ws = btn.dataset.ws;
+  if (!ws) return;
+  btn.disabled = true;
+  btn.classList.add('is-syncing');
+  try {
+    const items = await syncSkillsFor(ws);
+    if (items !== null) {
+      showToast('success', `${ws}: ${items.length} skills 同步成功`, { ttl: 2200 });
+    }
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('is-syncing');
+  }
+}
+
 async function onTrustToggleClick(e) {
   const btn = e.currentTarget;
   const name = btn.dataset.ws;
@@ -1321,6 +1581,8 @@ function workspaceColHtml(name, data, opts = {}) {
           </select>
           <span class="ws-engine" data-engine="${esc(wsEngine)}" title="Engine (immutable post-create)">${esc(wsEngine)}</span>
           ${trustToggleHtml(name)}
+          <button class="ws-sync-skills" type="button" data-ws="${esc(name)}"
+                  title="Sync slash-command skills (扫盘并写入本地缓存)" aria-label="Sync skills">${ICONS.refresh}</button>
         </div>
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>

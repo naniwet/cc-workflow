@@ -12,6 +12,7 @@ Routes:
   GET    /workspaces                           session
   POST   /workspaces                           session
   GET    /providers/codex                       session   (codex_profiles list)
+  GET    /skills                               session   (slash command discovery)
   GET    /loops                                session
   POST   /loops                                session
   DELETE /loops/{name}                         session
@@ -46,7 +47,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import approvals, auth, config, cron_state, db, im_feishu, llm, runner, ws_settings
+from . import approvals, auth, config, cron_state, db, im_feishu, llm, runner, skills, ws_settings
 
 PROTECT = [Depends(auth.require_user)]
 
@@ -233,6 +234,26 @@ def list_providers() -> list[str]:
     """
     profiles = _load_providers_json().get("profiles") or {}
     return sorted(name for name, p in profiles.items() if (p.get("env") or {}))
+
+
+@app.get("/skills", dependencies=PROTECT)
+def get_skills(workspace: Optional[str] = None) -> list[dict]:
+    """Discover slash commands (skills) for the PWA's `/` autocomplete menu.
+
+    Project-level skills are scoped to ?workspace=<name> when supplied.
+    User-level (~/.claude/commands) and plugin-level
+    (~/.claude/plugins/*/commands) are always included.
+
+    cc-workflow does NOT execute these — claude -p resolves them itself.
+    This endpoint only enumerates what exists. Called on-demand from the
+    PWA Sync button (not polled), so a fresh disk scan per call is fine.
+    """
+    ws_path = None
+    if workspace:
+        target = config.WORKSPACES_DIR / workspace
+        if target.is_dir():
+            ws_path = target
+    return skills.scan_skills(ws_path)
 
 
 @app.get("/providers/codex", dependencies=PROTECT)
