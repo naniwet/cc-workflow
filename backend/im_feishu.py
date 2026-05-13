@@ -25,7 +25,9 @@ Workspace resolution — 4-tier priority (highest first):
 
 `/use <workspace>` slash command stores the per-chat default so users with
 multiple workspaces don't have to type the [prefix] every message. `/where`
-queries the current effective default for the calling chat.
+queries the current effective default for the calling chat. `/ws` (alias
+`/workspaces`) lists every workspace with its engine / provider / trust
+state, marking the current chat's default and the global default.
 
 session_key encoding: "feishu-<chat_id>" — reply_from_run reads chat_id back.
 
@@ -286,6 +288,37 @@ def _handle_slash(cmd: str, rest: str, chat_id: str) -> Optional[dict]:
             body = f"当前 workspace: {global_default}\n(全局默认 — /use <name> 改成本聊天专属)"
         reply_to_chat(chat_id, body)
         return {"ok": True, "slash": "where"}
+
+    # /ws (alias /workspaces) — list all workspaces with per-line engine /
+    # provider / trust hint. Marks the current chat's default with ✓ and
+    # annotates the global default. Plain text (matches /where shape).
+    # Mutating actions still go through /use <name> — listing and switching
+    # are deliberately separate slashes (one slash = one thing).
+    if cmd in ("ws", "workspaces"):
+        from . import ui_cards, ws_settings   # lazy: keep slash-only imports out of cold path
+        names = ui_cards._discover_workspaces()
+        if not names:
+            reply_to_chat(chat_id, "暂无 workspace。先在 PWA → Workspaces → + New workspace 建一个。")
+            return {"ok": True, "slash": "ws", "count": 0}
+        chat_default = (_load_chat_ws().get(chat_id) or {}).get("workspace")
+        global_default = _secrets().get("default_workspace") or "test-repo"
+        lines = [f"Workspaces ({len(names)}):"]
+        for n in names:
+            engine = ws_settings.engine_for(n)
+            provider = ws_settings.provider_for(n) or "—"
+            trust_mark = " 🔓" if ws_settings.trust_for(n) else ""
+            marker = "✓" if n == chat_default else " "
+            annot = []
+            if n == chat_default:
+                annot.append("这个聊天默认")
+            if n == global_default and n != chat_default:
+                annot.append("全局默认")
+            annot_str = f"  ({', '.join(annot)})" if annot else ""
+            lines.append(f"{marker} {n} · {engine} · {provider}{trust_mark}{annot_str}")
+        lines.append("")
+        lines.append("切换默认: /use <name>")
+        reply_to_chat(chat_id, "\n".join(lines))
+        return {"ok": True, "slash": "ws", "count": len(names)}
 
     return None
 
