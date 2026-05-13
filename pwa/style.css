@@ -940,15 +940,59 @@ pre {
   .ws-toolbar { display: none; }
 
   /* ---------------------------------------------------------------
-   *  Add-form on mobile: open state becomes a bottom-sheet overlay
-   *  rather than expanding inline. Inline expansion would push the
-   *  workspace carousel below the fold, defeating the carousel's
-   *  whole purpose. Sheet sits above bottom-nav, takes up to 70vh,
-   *  scrolls internally if the form (e.g. "New cron loop") is tall.
-   *  Summary doubles as the sheet header — its leading "+" swaps
-   *  to a "✕" close indicator when open. CSS-only, no JS needed
-   *  because <details> already handles the open/close click target.
+   *  Add-form on mobile, layered behavior:
+   *    - CLOSED:  the <summary> shrinks to a circular FAB at bottom-
+   *               right (above bottom-nav). The container .add-form
+   *               itself is zero-height (out of flow) so the workspace
+   *               list isn't pushed down by an inline dashed "+"
+   *               summary anymore.
+   *    - OPEN:    .add-form becomes a fixed bottom-sheet (existing
+   *               pattern). Summary becomes the sheet's sticky header.
    * --------------------------------------------------------------- */
+
+  /* CLOSED: take up no inline space. The summary is fixed-positioned
+     (next rule), so leaving the container in flow with 0 height keeps
+     content stable. */
+  .add-form { margin: 0; }
+  .add-form:not([open]) {
+    height: 0;
+    overflow: visible;       /* the fixed summary still renders */
+  }
+
+  /* CLOSED summary = circular FAB at bottom-right, above bottom-nav. */
+  .add-form:not([open]) > summary {
+    position: fixed;
+    right: var(--space-3);
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    width: 56px;
+    height: 56px;
+    padding: 0;
+    border-radius: 999px;
+    background: var(--accent-blue);
+    border: none;
+    box-shadow: var(--shadow-3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0;            /* hide the "New workspace" text */
+    z-index: 30;             /* above bottom-nav (z=20), below toast (z=100) */
+    min-height: 56px;
+    transition: transform var(--t-base), background var(--t-base);
+  }
+  .add-form:not([open]) > summary::before {
+    content: '+';
+    font-size: 28px;
+    font-weight: 600;
+    color: #fff;
+    line-height: 1;
+  }
+  .add-form:not([open]) > summary:hover,
+  .add-form:not([open]) > summary:active {
+    background: var(--accent-blue-hover);
+    transform: scale(1.05);
+  }
+
+  /* OPEN: bottom sheet. Same pattern as before. */
   .add-form[open] {
     position: fixed;
     left: 0;
@@ -980,11 +1024,9 @@ pre {
     align-items: center;
     justify-content: space-between;
   }
-  /* Swap the "+ " prefix for a "✕" suffix to signal "tap to close" */
   .add-form[open] > summary::before { content: ''; }
   .add-form[open] > summary::after  { content: '✕'; color: var(--text-tertiary); font-size: var(--text-md); }
 
-  /* The inner <form> is now the sheet body — no double border/padding */
   .add-form[open] form {
     border: none;
     background: transparent;
