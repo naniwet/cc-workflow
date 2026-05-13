@@ -91,6 +91,16 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* Body is a column flex container so <main> can flex-grow to fill the
+   remaining viewport space below the sticky topbar. This is what lets
+   .ws-layout (a child of main) shrink-to-fit single-viewport, no
+   page scroll, regardless of how many rows there are. */
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
 code, pre { font-family: var(--font-mono); }
 
 h1, h2, h3 {
@@ -152,7 +162,16 @@ a:hover { color: var(--accent-blue-hover); }
 /* ============================================================================
  *  Main / views
  * ============================================================================ */
-main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
+main {
+  padding: var(--space-4);
+  max-width: 1600px;
+  margin: 0 auto;
+  width: 100%;
+  flex: 1 1 auto;            /* fill viewport below topbar */
+  min-height: 0;             /* allow children to shrink */
+  display: flex;
+  flex-direction: column;
+}
 
 /* ============================================================================
  *  Workspaces grid — used ONLY by the mobile carousel detail view now.
@@ -237,25 +256,37 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
 
 /* Row-based PC overview layout. Each row is its own flex container so
    cards share the row's width equally; row count is implicit (= # of
-   inner arrays in _wsLayout). */
+   inner arrays in _wsLayout). The layout itself flex-grows to fill
+   whatever vertical space <main> has left after h1 + add-form. */
 .ws-layout {
   display: flex;
   flex-direction: column;
-  gap: 0;                                /* rows touch row-gap drop zones */
+  gap: 0;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .ws-row {
   display: flex;
   gap: var(--space-3);
+  flex: 1 1 0;               /* every row gets an equal slice of vertical space */
+  min-height: 180px;         /* below this each card becomes unusable */
 }
 .ws-row .ws-col {
   flex: 1 1 0;
   min-width: 0;
+  min-height: 0;             /* override the 240px default so flex can shrink */
+}
+.ws-row .ws-col .ws-timeline {
+  flex: 1 1 auto;
+  max-height: none;          /* let timeline use whatever's left after head + form */
+  min-height: 0;
 }
 
 /* Slim drop zone between rows. Expands + highlights when a card is
    dragged over it. Dropping here splits/creates a row. */
 .ws-row-gap {
   height: 8px;
+  flex: 0 0 auto;
   margin: 0;
   border-radius: var(--radius-md);
   transition: height var(--t-base), background var(--t-base), border-color var(--t-base);
@@ -267,6 +298,59 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
   border-color: var(--accent-blue);
 }
 
+/* Hide button — small "eye-off" icon at the right of .ws-head-row, only
+   on PC overview (mobile overview uses card list, no head row). */
+.ws-hide-btn {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-tertiary);
+  padding: var(--space-1);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
+  flex-shrink: 0;
+  font: inherit;
+  margin-left: auto;
+}
+.ws-hide-btn svg { width: 14px; height: 14px; display: block; }
+.ws-hide-btn:hover { color: var(--text-primary); background: var(--bg-elevated); border-color: var(--border-subtle); }
+.ws-hide-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
+
+/* Hidden strip — slim row of pills, each restores a workspace back to
+   the layout. Only rendered when _wsHidden is non-empty. */
+.ws-hidden-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  flex: 0 0 auto;
+}
+.ws-restore-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-strong);
+  padding: 2px var(--space-2);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
+}
+.ws-restore-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--accent-blue);
+  border-style: solid;
+}
+
 /* Visual state during drag */
 .ws-col.dragging { opacity: 0.35; }
 .ws-col.drop-target {
@@ -274,39 +358,6 @@ main { padding: var(--space-4); max-width: 1600px; margin: 0 auto; }
   box-shadow: 0 0 0 2px var(--accent-blue-faint);
 }
 
-/* Layout toolbar — sits above the grid. Hidden on mobile.
-   1-6 segmented control style: borderless buttons in a single rounded shell. */
-.ws-toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin: var(--space-3) 0;
-}
-.ws-toolbar-label { font-size: var(--text-sm); }
-.ws-cols-toggle {
-  display: inline-flex;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 2px;
-  gap: 2px;
-}
-.ws-cols-btn {
-  background: transparent;
-  color: var(--text-secondary);
-  border: none;
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  min-width: 32px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background var(--t-base), color var(--t-base);
-  font: inherit;
-}
-.ws-cols-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
-.ws-cols-btn.active { background: var(--accent-blue); color: #fff; }
-.ws-cols-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
 .provider-inline {
   width: auto;
   padding: 2px var(--space-2);
@@ -934,10 +985,10 @@ pre {
   /* Detail page <pre>: stay readable on narrow viewport */
   pre { font-size: var(--text-sm); padding: var(--space-3); }
 
-  /* Drag-to-reorder + layout toolbar are PC-only —
-     mobile uses overview-card-list which doesn't have a grid to rearrange. */
+  /* Drag-to-reorder + hide button are PC-only —
+     mobile uses overview-card-list, no grid to rearrange. */
   .ws-drag-handle,
-  .ws-toolbar { display: none; }
+  .ws-hide-btn { display: none; }
 
   /* ---------------------------------------------------------------
    *  Add-form on mobile, layered behavior:

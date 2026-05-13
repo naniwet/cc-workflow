@@ -41,9 +41,11 @@ const ICONS = {
   warning: `<svg ${_S}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
   // 6-dot vertical grip — drag handle on PC workspace cards
   grip:    `<svg ${_S}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>`,
-  // Maximize / minimize corner arrows — "make this card wider (span 2 cols)"
+  // Maximize / minimize corner arrows (kept for potential reuse)
   maximize: `<svg ${_S}><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
   minimize: `<svg ${_S}><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
+  // Eye with a slash — "hide this card from the overview"
+  eyeOff:   `<svg ${_S}><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>`,
 };
 
 // Tag helper — status string → <span class="tag tag-X"> with icon prefix.
@@ -235,8 +237,15 @@ let _carouselObserver = null;
 // an equal flex share, so the bottom card here would be full-width.
 // Per-browser; not synced to server.
 let _wsLayout = [];
-const WS_MAX_PER_ROW_MIN = 1, WS_MAX_PER_ROW_MAX = 8;
-let _wsMaxPerRow = 4;
+
+// Hard cap on row width — 4 cards max per row. No user-facing toggle:
+// keeps the UI focused on the row-split-by-drag interaction.
+const WS_MAX_PER_ROW = 4;
+
+// Names of workspaces the user hid from the overview. Hidden cards
+// don't render in any row; instead a slim "Hidden: …" strip at the
+// bottom of the layout lets the user restore them.
+let _wsHidden = new Set();
 
 function _sanitizeLayout(raw) {
   if (!Array.isArray(raw)) return [];
@@ -270,23 +279,20 @@ function saveWsLayout() {
   } catch { /* private-mode / quota — silently skip */ }
 }
 
-function loadWsMaxPerRow() {
+function loadWsHidden() {
   try {
-    let v = parseInt(localStorage.getItem('ws-max-per-row'), 10);
-    if (!(v >= WS_MAX_PER_ROW_MIN && v <= WS_MAX_PER_ROW_MAX)) {
-      // Migration: older sessions used "ws-cols" with a similar semantic.
-      v = parseInt(localStorage.getItem('ws-cols'), 10);
-    }
-    _wsMaxPerRow = v >= WS_MAX_PER_ROW_MIN && v <= WS_MAX_PER_ROW_MAX ? v : 4;
-  } catch { _wsMaxPerRow = 4; }
+    const arr = JSON.parse(localStorage.getItem('ws-hidden'));
+    _wsHidden = new Set(Array.isArray(arr) ? arr.filter((n) => typeof n === 'string') : []);
+  } catch { _wsHidden = new Set(); }
 }
 
-function saveWsMaxPerRow() {
-  try { localStorage.setItem('ws-max-per-row', String(_wsMaxPerRow)); } catch {}
+function saveWsHidden() {
+  try { localStorage.setItem('ws-hidden', JSON.stringify([..._wsHidden])); } catch {}
 }
 
 // Build the effective layout for the current workspaces:
 //   - drop names no longer present (deleted workspaces)
+//   - drop names in _wsHidden (user explicitly hid them)
 //   - append fresh names (newly-created since last save) to the last row,
 //     creating a new row when the last is at max-per-row
 //   - drop now-empty rows
@@ -295,15 +301,15 @@ function effectiveLayout(allNames) {
   const placed = new Set();
   const layout = [];
   for (const row of _wsLayout) {
-    const kept = row.filter((n) => present.has(n) && !placed.has(n));
+    const kept = row.filter((n) => present.has(n) && !placed.has(n) && !_wsHidden.has(n));
     if (kept.length) {
       layout.push(kept);
       for (const n of kept) placed.add(n);
     }
   }
-  const fresh = allNames.filter((n) => !placed.has(n)).sort();
+  const fresh = allNames.filter((n) => !placed.has(n) && !_wsHidden.has(n)).sort();
   for (const n of fresh) {
-    if (layout.length === 0 || layout[layout.length - 1].length >= _wsMaxPerRow) {
+    if (layout.length === 0 || layout[layout.length - 1].length >= WS_MAX_PER_ROW) {
       layout.push([n]);
     } else {
       layout[layout.length - 1].push(n);
@@ -329,7 +335,7 @@ function _findLayoutCoord(name) {
 }
 
 loadWsLayout();
-loadWsMaxPerRow();
+loadWsHidden();
 
 function snapshotDrafts() {
   for (const form of document.querySelectorAll('form[data-form-id]')) {
@@ -444,10 +450,9 @@ function renderWorkspacesView() {
 }
 
 // PC overview = row-based layout. Each row is a flex container where
-// cards share width equally; drop a card on the gap above/below a row to
-// create a new row. The toolbar caps how many cards a single row can
-// hold, so dragging into a full row is rejected and the user is nudged
-// toward a row gap instead.
+// cards share width equally; drop a card on the gap above/below a row
+// to create a new row. Max 4 per row (hardcoded). Hidden cards drop
+// out of the layout and appear in a slim strip below.
 function renderDesktopOverview() {
   const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
   const allNames = Object.keys(groups);
@@ -458,16 +463,6 @@ function renderDesktopOverview() {
     `<option value="">(use global default${globalProvider ? `: ${esc(globalProvider)}` : ''})</option>`,
     ...(lastData.providers || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`),
   ].join('');
-
-  // Toolbar: max-per-row picker (1-8).
-  const maxBtns = [];
-  for (let n = WS_MAX_PER_ROW_MIN; n <= WS_MAX_PER_ROW_MAX; n++) {
-    const active = n === _wsMaxPerRow;
-    maxBtns.push(
-      `<button class="ws-cols-btn${active ? ' active' : ''}" type="button"
-               data-max="${n}" role="radio" aria-checked="${active}">${n}</button>`
-    );
-  }
 
   // Render: alternating row-gap + row. The trailing gap (after the last
   // row) is a drop target for "create new row at the bottom".
@@ -483,15 +478,20 @@ function renderDesktopOverview() {
         `;
       }).join('') + `<div class="ws-row-gap" data-gap-before="${layout.length}" aria-hidden="true"></div>`;
 
+  // Hidden strip — only visible when the user has actually hidden things.
+  // Each pill is a "restore" button.
+  const hiddenNamesPresent = [...allNames].filter((n) => _wsHidden.has(n));
+  const hiddenHtml = hiddenNamesPresent.length
+    ? `<div class="ws-hidden-strip">
+         <span class="muted">Hidden (${hiddenNamesPresent.length}):</span>
+         ${hiddenNamesPresent
+            .map((n) => `<button class="ws-restore-btn" type="button" data-ws="${esc(n)}" title="Restore to overview">${esc(n)}</button>`)
+            .join('')}
+       </div>`
+    : '';
+
   $('view').innerHTML = `
     <h1>Workspaces</h1>
-    <div class="ws-toolbar">
-      <span class="ws-toolbar-label muted">Max per row</span>
-      <div class="ws-cols-toggle" role="radiogroup" aria-label="Max workspaces per row">
-        ${maxBtns.join('')}
-      </div>
-      <span class="ws-toolbar-hint muted">Drag a card between rows to split / merge rows.</span>
-    </div>
     <details class="add-form" data-details-id="add-ws">
       <summary>New workspace</summary>
       <form data-form-id="new-ws">
@@ -518,25 +518,49 @@ function renderDesktopOverview() {
     ${layoutHtml
       ? `<div class="ws-layout">${layoutHtml}</div>`
       : `<p class="muted">No workspaces yet. Use the form above or create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
+    ${hiddenHtml}
   `;
 
   bindOverviewHandlers();
-  for (const b of $('view').querySelectorAll('.ws-cols-btn')) {
-    b.addEventListener('click', onMaxPerRowBtnClick);
-  }
   for (const gap of $('view').querySelectorAll('.ws-row-gap')) {
     gap.addEventListener('dragover', onRowGapDragOver);
     gap.addEventListener('dragleave', onRowGapDragLeave);
     gap.addEventListener('drop', onRowGapDrop);
   }
+  for (const b of $('view').querySelectorAll('.ws-hide-btn')) {
+    b.addEventListener('click', onHideBtnClick);
+  }
+  for (const b of $('view').querySelectorAll('.ws-restore-btn')) {
+    b.addEventListener('click', onRestoreBtnClick);
+  }
 }
 
-// ---------- Layout toolbar handler ----------
-function onMaxPerRowBtnClick(e) {
-  const n = parseInt(e.currentTarget.dataset.max, 10);
-  if (!(n >= WS_MAX_PER_ROW_MIN && n <= WS_MAX_PER_ROW_MAX) || n === _wsMaxPerRow) return;
-  _wsMaxPerRow = n;
-  saveWsMaxPerRow();
+// ---------- Hide / restore handlers ----------
+function onHideBtnClick(e) {
+  const name = e.currentTarget.dataset.ws;
+  if (!name) return;
+  _wsHidden.add(name);
+  // Also drop the workspace from the saved layout so restore can decide
+  // where to put it back (last row of remaining layout).
+  _removeFromLayout(name);
+  _wsLayout = _wsLayout.filter((row) => row.length > 0);
+  saveWsHidden();
+  saveWsLayout();
+  render();
+}
+
+function onRestoreBtnClick(e) {
+  const name = e.currentTarget.dataset.ws;
+  if (!name) return;
+  _wsHidden.delete(name);
+  // Append to the last row, or start a new row if it'd exceed max.
+  if (_wsLayout.length === 0 || _wsLayout[_wsLayout.length - 1].length >= WS_MAX_PER_ROW) {
+    _wsLayout.push([name]);
+  } else {
+    _wsLayout[_wsLayout.length - 1].push(name);
+  }
+  saveWsHidden();
+  saveWsLayout();
   render();
 }
 
@@ -710,11 +734,11 @@ function reorderWorkspaceTo(sourceName, targetName, insertBefore) {
   if (
     sourceCoord &&
     sourceCoord.row !== targetCoord.row &&
-    _wsLayout[targetCoord.row].length >= _wsMaxPerRow
+    _wsLayout[targetCoord.row].length >= WS_MAX_PER_ROW
   ) {
     showToast(
       'warning',
-      `Row already at max ${_wsMaxPerRow}. Drop to a row gap (between rows) to create a new row instead.`,
+      `Row already at max ${WS_MAX_PER_ROW}. Drop to a row gap (between rows) to create a new row instead.`,
       { ttl: 3000 },
     );
     return;
@@ -923,12 +947,19 @@ function workspaceColHtml(name, data, opts = {}) {
     ? ''
     : `<span class="ws-drag-handle" draggable="true" title="Drag to reorder / move to another row" aria-label="Drag to reorder">${ICONS.grip}</span>`;
 
+  const hideBtn = detail
+    ? ''
+    : `<button class="ws-hide-btn" type="button" data-ws="${esc(name)}"
+               title="Hide from overview (restore via the strip at bottom)"
+               aria-label="Hide">${ICONS.eyeOff}</button>`;
+
   return `
     <div class="ws-col ${extraClass}" data-ws="${esc(name)}">
       <div class="ws-head">
         <div class="ws-head-row">
           ${dragHandle}
           ${headerTitle}
+          ${hideBtn}
         </div>
         <div class="ws-provider">
           <span class="ws-provider-label">as</span>
