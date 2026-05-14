@@ -669,29 +669,34 @@ body.is-dragging .ws-col:not(.dragging) {
   font-size: var(--text-sm);
 }
 
-/* Cancel button on long-running rows. Pushed to the far right via
- * margin-left:auto. Small + low-contrast in idle, red on hover so the
- * "this is destructive" affordance is clear when you're aiming for it
- * but the button doesn't compete with the row's primary content. */
+/* Cancel button on the run-detail page. Visible only when the run is
+ * actually 'running'. Sized as a normal action button — the previous
+ * tiny ghost-button-in-row design was misclick bait on mobile, so we
+ * moved this to the dedicated detail page where it gets its own row
+ * (.run-actions) and a hit target you actually have to aim at. Red
+ * theme communicates "destructive"; not pre-disabled so the click +
+ * confirm path is the only barrier between intent and action. */
+.run-actions {
+  margin: var(--space-2) 0 var(--space-4);
+}
 .run-cancel-btn {
-  margin-left: auto;
-  flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  background: transparent;
-  border: 1px solid var(--border-subtle);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: rgba(239, 68, 68, 0.10);
+  color: var(--accent-red);
+  border: 1px solid rgba(239, 68, 68, 0.40);
+  padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
-  font-size: 12px;
-  line-height: 1;
+  font-size: var(--text-sm);
+  font-weight: 500;
   cursor: pointer;
-  transition: color var(--t-base), border-color var(--t-base), background var(--t-base);
+  transition: background var(--t-base), color var(--t-base), border-color var(--t-base);
 }
 .run-cancel-btn:hover {
-  color: var(--accent-red);
+  background: rgba(239, 68, 68, 0.20);
+  color: var(--text-primary);
   border-color: var(--accent-red);
-  background: rgba(239, 68, 68, 0.10);
 }
 .run-cancel-btn:disabled { opacity: 0.5; cursor: wait; }
 .row-prompt, .row-output {

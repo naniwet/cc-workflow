@@ -2031,12 +2031,6 @@ async function onApprovalClick(e) {
   }
 }
 
-// Show the Cancel button only after this many seconds of running. Short-
-// running tasks aren't worth interrupting (and the button next to a
-// 30-second healthy run would be misclick bait). Tuned to 5 min based
-// on user feedback after the May 15 stuck-run incident.
-const _CANCEL_BUTTON_THRESHOLD_S = 300;
-
 function runRowHtml(r) {
   const status = r.status || '?';
   // 3-row layout: meta line · prompt preview · output preview.
@@ -2044,6 +2038,14 @@ function runRowHtml(r) {
   //   ↳ <output_preview>    Claude's reply (green) — only when run finished
   // Both snippets are SQL-capped at 200 chars by db.py. Click anywhere on
   // the row navigates to the full-output detail page.
+  //
+  // Cancel button used to live here (right edge of row-head, on rows
+  // running > 5 min). Moved to the run-detail page 2026-05-15 — the
+  // timeline list is an "information view" that the user scrolls through
+  // by feel; tapping a destructive ✕ in there is too easy by accident
+  // on mobile. Cancel now requires "tap row → land on detail → tap
+  // the prominent red button", which makes the destructive intent
+  // explicit.
   const prompt = r.prompt || '';
   const output = r.output_preview || '';
   // Relative "Nm ago" with absolute timestamp on hover — matches the
@@ -2051,20 +2053,6 @@ function runRowHtml(r) {
   const startedRel = r.started_at ? timeAgo(r.started_at) : '';
   const startedAbs = r.started_at
     ? new Date(r.started_at * 1000).toLocaleString()
-    : '';
-  // Cancel button: visible only when this run has been 'running' for
-  // longer than the threshold AND there's a real id to send to backend.
-  // The <button> nested inside the <a> is technically invalid HTML
-  // (a-can't-contain-button) but every browser tolerates it; the click
-  // handler uses preventDefault + stopPropagation to keep the cancel
-  // click from navigating to run detail.
-  const nowS = Math.floor(Date.now() / 1000);
-  const elapsedS = r.started_at ? nowS - r.started_at : 0;
-  const showCancel =
-    status === 'running' && elapsedS > _CANCEL_BUTTON_THRESHOLD_S && r.id;
-  const cancelBtn = showCancel
-    ? `<button class="run-cancel-btn" type="button" data-run-id="${esc(r.id)}"
-              title="Cancel this run (SIGTERM)" aria-label="Cancel run">✕</button>`
     : '';
 
   return `
@@ -2076,7 +2064,6 @@ function runRowHtml(r) {
         ${r.exit_code != null && r.exit_code !== 0 ? `· exit ${esc(r.exit_code)}` : ''}
         ${r.source ? `· ${esc(r.source)}` : ''}
         ${r.started_at ? `· <span class="row-time" title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
-        ${cancelBtn}
       </div>
       ${prompt ? `<div class="row-prompt">▸ ${esc(prompt)}</div>` : ''}
       ${output ? `<div class="row-output">↳ ${esc(output)}</div>` : ''}
@@ -2243,6 +2230,20 @@ function paintRunDetail(id, row) {
   // everything at once" surface, which is more useful than dropping back
   // into a single workspace detail. (On mobile this link is hidden by
   // CSS anyway — see .back-link media query.)
+  // Cancel button — only when this run is actually running (and we
+  // know its id). Placed in a dedicated .run-actions row below the
+  // meta line so it has visual weight + a clear hit target on mobile.
+  // No elapsed-time threshold any more: short tasks deserve a cancel
+  // too (you sent the wrong prompt, you want to stop within 30s).
+  // The misclick-bait concern that pushed us toward a threshold goes
+  // away by virtue of this being on a dedicated detail page, not in
+  // the timeline list view.
+  const cancelBtn = status === 'running' && id
+    ? `<button class="run-cancel-btn" type="button" data-run-id="${esc(id)}">
+         ✕  Cancel this run
+       </button>`
+    : '';
+
   $('view').innerHTML = `
     <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
     <h1>Run <code>${esc(id.slice(0, 8))}</code></h1>
@@ -2255,6 +2256,7 @@ function paintRunDetail(id, row) {
       ${row.source ? ` · ${esc(row.source)}` : ''}
       ${startedAt ? ` · ${esc(startedAt)}` : ''}
     </div>
+    ${cancelBtn ? `<div class="run-actions">${cancelBtn}</div>` : ''}
     <h3>Prompt</h3>
     <pre>${esc(row.prompt || '')}</pre>
     <h3>Output</h3>
