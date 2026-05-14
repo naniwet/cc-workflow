@@ -61,6 +61,10 @@ const ICONS = {
   // Distinct from rewind: rewind = "wipe history, keep ws"; trash =
   // "everything goes". Red on hover (see style.css).
   trash:   `<svg ${_S}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>`,
+  // Three-dot "more" — opens the mobile actions dropdown (trust /
+  // sync / reset / delete + provider switch, all collapsed because
+  // 6 icons inline are too cramped on phone screens).
+  more:    `<svg ${_S}><circle cx="12" cy="12" r="1.5"/><circle cx="6" cy="12" r="1.5"/><circle cx="18" cy="12" r="1.5"/></svg>`,
 };
 
 // Tag helper — status string → <span class="tag tag-X"> with icon prefix.
@@ -1349,6 +1353,7 @@ async function _onSyncSkillsClick(e) {
   const btn = e.currentTarget;
   const ws = btn.dataset.ws;
   if (!ws) return;
+  _closeAncestorMenu(btn);
   btn.disabled = true;
   btn.classList.add('is-syncing');
   try {
@@ -1362,10 +1367,19 @@ async function _onSyncSkillsClick(e) {
   }
 }
 
+// Close the nearest ancestor <details class="ws-actions-menu"> if any.
+// Called after destructive actions (sync/reset/delete) inside the
+// mobile menu so the menu doesn't stay open over the toast.
+function _closeAncestorMenu(el) {
+  const det = el?.closest?.('details.ws-actions-menu');
+  if (det) det.open = false;
+}
+
 async function _onDeleteWorkspaceClick(e) {
   const btn = e.currentTarget;
   const ws = btn.dataset.ws;
   if (!ws) return;
+  _closeAncestorMenu(btn);
   if (!confirm(
     `永久删除 workspace "${ws}"?\n\n` +
     `会清掉:\n` +
@@ -1399,6 +1413,7 @@ async function _onResetSessionClick(e) {
   const btn = e.currentTarget;
   const ws = btn.dataset.ws;
   if (!ws) return;
+  _closeAncestorMenu(btn);
   if (!confirm(
     `重置 "${ws}" 的对话?\n\n` +
     `下一次 PWA prompt 会从一张白纸开始,Claude 不再记得之前聊过什么。\n\n` +
@@ -1563,6 +1578,81 @@ function workspaceColHtml(name, data, opts = {}) {
                title="Hide from overview (restore via the strip at bottom)"
                aria-label="Hide">${ICONS.eyeOff}</button>`;
 
+  // Provider+engine: read-only state label (mobile) vs interactive
+  // dropdown row (PC). Mobile collapses the 4 action buttons into a
+  // <details> dropdown — 6 icons in a phone-width column was a wall.
+  const providerLabel = wsProvider
+    ? `<span class="ws-meta-provider">${esc(wsProvider)}</span>`
+    : `<span class="ws-meta-provider muted">(default${lastData.globalProvider ? `: ${esc(lastData.globalProvider)}` : ''})</span>`;
+  const engineChip = `<span class="ws-engine" data-engine="${esc(wsEngine)}" title="Engine (immutable post-create)">${esc(wsEngine)}</span>`;
+
+  // Action buttons — same DOM classes whether they live inline (PC) or
+  // inside the mobile menu, so existing event binding keeps working.
+  // The .ws-menu-item modifier is the CSS hook for "stretch + label inside menu".
+  const trustBtn = trustToggleHtml(name);
+  const syncBtn = `<button class="ws-sync-skills" type="button" data-ws="${esc(name)}"
+                          title="Sync slash-command skills (扫盘并写入本地缓存)"
+                          aria-label="Sync skills">${ICONS.refresh}</button>`;
+  const resetBtn = `<button class="ws-reset-session" type="button" data-ws="${esc(name)}"
+                           title="Reset conversation"
+                           aria-label="Reset session">${ICONS.rewind}</button>`;
+  const deleteBtn = `<button class="ws-delete-workspace" type="button" data-ws="${esc(name)}"
+                            title="Delete workspace (rm -rf 目录 + 清配置 + 清 session)"
+                            aria-label="Delete workspace">${ICONS.trash}</button>`;
+
+  let providerEngineBlock;
+  if (_isMobileViewport) {
+    // Mobile: read-only state above + ⋯ menu with full controls.
+    // Inside the menu, buttons get .ws-menu-item to render as wide
+    // text-labeled rows; the provider select gets a labeled row.
+    providerEngineBlock = `
+      <div class="ws-meta-mobile">
+        ${providerLabel}
+        ${engineChip}
+        <details class="ws-actions-menu">
+          <summary class="ws-actions-trigger" aria-label="More actions">${ICONS.more}</summary>
+          <div class="ws-actions-menu-body">
+            <label class="ws-menu-row">
+              <span class="muted">Provider</span>
+              <select class="provider-inline" data-workspace="${esc(name)}">
+                ${providerOptions}
+              </select>
+            </label>
+            <button class="ws-trust-toggle ws-menu-item" type="button"
+                    data-ws="${esc(name)}" data-trusted="${effectiveTrust(name) ? '1' : '0'}"
+                    aria-label="Toggle trust">
+              ${effectiveTrust(name) ? ICONS.unlock : ICONS.lock}
+              <span>Trust: ${effectiveTrust(name) ? '<strong>on</strong> · auto-approve' : '<strong>off</strong> · ask first'}</span>
+            </button>
+            <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
+              ${ICONS.refresh} <span>Sync skills</span>
+            </button>
+            <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}">
+              ${ICONS.rewind} <span>Reset conversation</span>
+            </button>
+            <button class="ws-delete-workspace ws-menu-item ws-menu-item-danger" type="button" data-ws="${esc(name)}">
+              ${ICONS.trash} <span>Delete workspace</span>
+            </button>
+          </div>
+        </details>
+      </div>
+    `;
+  } else {
+    // PC: existing inline row — provider dropdown + engine chip + 4 icon buttons.
+    providerEngineBlock = `
+      <div class="ws-provider">
+        <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
+          ${providerOptions}
+        </select>
+        ${engineChip}
+        ${trustBtn}
+        ${syncBtn}
+        ${resetBtn}
+        ${deleteBtn}
+      </div>
+    `;
+  }
+
   return `
     <div class="ws-col ${extraClass}" data-ws="${esc(name)}">
       <div class="ws-head">
@@ -1571,20 +1661,7 @@ function workspaceColHtml(name, data, opts = {}) {
           ${headerTitle}
           ${hideBtn}
         </div>
-        <div class="ws-provider">
-          <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
-            ${providerOptions}
-          </select>
-          <span class="ws-engine" data-engine="${esc(wsEngine)}" title="Engine (immutable post-create)">${esc(wsEngine)}</span>
-          ${trustToggleHtml(name)}
-          <button class="ws-sync-skills" type="button" data-ws="${esc(name)}"
-                  title="Sync slash-command skills (扫盘并写入本地缓存)" aria-label="Sync skills">${ICONS.refresh}</button>
-          <button class="ws-reset-session" type="button" data-ws="${esc(name)}"
-                  title="Reset conversation (清掉当前对话历史,下一条 prompt 重开 session)" aria-label="Reset session">${ICONS.rewind}</button>
-          <button class="ws-delete-workspace" type="button" data-ws="${esc(name)}"
-                  title="Delete workspace (永久删:rm -rf 目录 + 清配置 + 清 session)"
-                  aria-label="Delete workspace">${ICONS.trash}</button>
-        </div>
+        ${providerEngineBlock}
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">

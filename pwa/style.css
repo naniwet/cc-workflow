@@ -1680,3 +1680,117 @@ pre {
   .rt-cell { padding: var(--space-2); }
   .rt-r3 { padding: var(--space-3); }
 }
+
+/* ============================================================================
+ *  Mobile: collapsed column-header actions menu (⋯)
+ *  ----------------------------------------------------------------------------
+ *  On phone widths the column header had 6 inline elements (provider select +
+ *  engine chip + 4 icon buttons). That's a wall. New layout:
+ *    Row 1: drag-handle / name / hide-btn (unchanged)
+ *    Row 2 (.ws-meta-mobile):
+ *      [provider name label] [engine chip]              [⋯ trigger]
+ *                                                       └ <details> menu body
+ *  The menu body floats absolutely below the trigger and stacks 4 wide
+ *  text-labeled buttons + a Provider <select> row.
+ * ============================================================================ */
+
+.ws-meta-mobile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  margin-top: 2px;
+}
+.ws-meta-provider {
+  color: var(--text-secondary);
+}
+.ws-actions-menu {
+  position: relative;
+  margin-left: auto;     /* push the ⋯ trigger to the right edge */
+}
+.ws-actions-trigger {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 4px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  list-style: none;     /* hide default disclosure */
+  user-select: none;
+}
+.ws-actions-trigger::-webkit-details-marker { display: none; }
+.ws-actions-trigger svg { width: 16px; height: 16px; display: block; }
+.ws-actions-menu[open] > .ws-actions-trigger {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+.ws-actions-menu-body {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  min-width: 240px;
+  max-width: 320px;
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Provider <select> row inside the menu */
+.ws-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+}
+.ws-menu-row > .muted { flex: 0 0 auto; font-size: var(--text-sm); }
+.ws-menu-row .provider-inline {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Wide, text-labeled buttons inside the menu — override the icon-only
+   inline styles by being more specific (.is-menu-item modifier). */
+.ws-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  /* override the inline icon-only width/padding/border-style rules */
+  margin-left: 0;
+}
+.ws-menu-item svg { width: 14px; height: 14px; flex-shrink: 0; }
+.ws-menu-item > span { flex: 1; }
+.ws-menu-item:hover { background: var(--bg-elevated); }
+.ws-menu-item.is-trusted { color: var(--accent-amber); }
+.ws-menu-item-danger:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+
+/* The legacy .ws-provider inline row (the PC layout) is hidden on
+   mobile — we render .ws-meta-mobile instead. (The branch is in JS,
+   so technically only one form is ever in the DOM. But future code
+   that accidentally adds both should still degrade gracefully.) */
+@media (max-width: 768px) {
+  .ws-provider:not(.ws-meta-mobile) { display: none; }
+}
