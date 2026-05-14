@@ -12,6 +12,7 @@ Routes:
   GET    /workspaces                           session
   POST   /workspaces                           session
   DELETE /workspaces/{name}/session            session   (reset PWA conversation)
+  DELETE /workspaces/{name}                    session   (hard delete: rm dir + settings + session)
   GET    /skills                               session   (slash command discovery)
   GET    /loops                                session
   POST   /loops                                session
@@ -43,6 +44,7 @@ from typing import Literal, Optional
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -366,6 +368,81 @@ def reset_workspace_session(name: str) -> dict:
         raise HTTPException(500, {"error": f"sessions.json write failed: {e}"})
 
     return {"ok": True, "workspace": name, "session_key": key, "cleared": cleared}
+
+
+@app.delete("/workspaces/{name}", dependencies=PROTECT)
+def delete_workspace(name: str) -> dict:
+    """Hard-delete a workspace.
+
+    Removes three things:
+      1. ~/workspaces/<name>/ directory (rm -rf — code, git history, all)
+      2. workspaces.json entry (provider / engine / trust)
+      3. sessions.json entry for `pwa-<name>` (claude session_id +
+         last_input_tokens used by DIY compact)
+
+    Does NOT touch:
+      - cron loops referencing this workspace (they'll start failing
+        once the dir is gone — user should delete the loop separately)
+      - feishu chat-to-workspace mappings in feishu_chats.json
+        (harmless — `/use` simply binds a name that no longer resolves)
+
+    Path-traversal guard: regex on name + resolved-path-is-under-
+    WORKSPACES_DIR check (defense in depth).
+
+    404 only when nothing was found to clean (no dir, no settings, no
+    session — i.e. it's already fully gone or never existed).
+    """
+    if not re.match(r"^[A-Za-z0-9._\-]+$", name):
+        raise HTTPException(400, {"error": "invalid workspace name"})
+
+    target = config.WORKSPACES_DIR / name
+    try:
+        resolved = target.resolve()
+        ws_root = config.WORKSPACES_DIR.resolve()
+        # 3.9+: is_relative_to; on older Pythons we'd need a try/except on relative_to
+        if not resolved.is_relative_to(ws_root):
+            raise HTTPException(400, {"error": "path escapes WORKSPACES_DIR", "name": name})
+    except FileNotFoundError:
+        # target doesn't exist — that's fine, we still try to clean settings/sessions
+        pass
+
+    cleaned: list[str] = []
+
+    # 1. Remove the directory tree
+    if target.exists():
+        try:
+            shutil.rmtree(target)
+            cleaned.append("workspace_dir")
+        except OSError as e:
+            raise HTTPException(500, {"error": f"rm -rf failed: {e}"})
+
+    # 2. Remove the workspaces.json entry
+    settings = ws_settings.load()
+    if name in settings:
+        del settings[name]
+        ws_settings.save(settings)
+        cleaned.append("workspaces.json")
+
+    # 3. Remove the sessions.json row for pwa-<name>
+    try:
+        if config.SESSIONS_FILE.exists():
+            data = json.loads(config.SESSIONS_FILE.read_text(encoding="utf-8"))
+            key = f"pwa-{name}"
+            if key in data:
+                del data[key]
+                tmp = config.SESSIONS_FILE.with_suffix(".tmp")
+                tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, config.SESSIONS_FILE)
+                cleaned.append("sessions.json")
+    except (OSError, json.JSONDecodeError):
+        # Non-fatal — the workspace dir is already gone, sessions.json
+        # leftover is harmless (just an orphan claude_session_id).
+        pass
+
+    if not cleaned:
+        raise HTTPException(404, {"error": "workspace not found", "name": name})
+
+    return {"ok": True, "name": name, "cleaned": cleaned}
 
 
 @app.post("/workspaces", dependencies=PROTECT, status_code=201)

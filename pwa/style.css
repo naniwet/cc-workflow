@@ -342,6 +342,31 @@ main {
 }
 .ws-reset-session:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.30); }
 
+/* Delete workspace button — same chrome as siblings, slightly more
+   aggressive red on hover than .ws-reset-session because this op is
+   strictly worse (whole dir + configs, vs just session history). */
+.ws-delete-workspace {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-tertiary);
+  padding: 2px var(--space-1);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  margin-left: var(--space-1);
+  font: inherit;
+  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
+  flex-shrink: 0;
+}
+.ws-delete-workspace svg { width: 12px; height: 12px; display: block; }
+.ws-delete-workspace:hover {
+  color: var(--accent-red);
+  background: rgba(239, 68, 68, 0.18);
+  border-color: var(--accent-red);
+}
+.ws-delete-workspace:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.40); }
+
 /* Slash command autocomplete popup — absolutely positioned over textareas.
    Single element re-used across all workspaces (see _ensureSlashPopup in app.js).
    Width tracks the textarea via inline style.minWidth. */

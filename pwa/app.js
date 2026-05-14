@@ -57,6 +57,10 @@ const ICONS = {
   // for this workspace's PWA session). Distinct visual from refresh so
   // users don't confuse "sync skills" with "wipe history".
   rewind:  `<svg ${_S}><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`,
+  // Trash can — "hard delete this workspace" (rm -rf + clean configs).
+  // Distinct from rewind: rewind = "wipe history, keep ws"; trash =
+  // "everything goes". Red on hover (see style.css).
+  trash:   `<svg ${_S}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>`,
 };
 
 // Tag helper — status string → <span class="tag tag-X"> with icon prefix.
@@ -1029,10 +1033,15 @@ function bindWorkspaceColHandlers(root) {
   for (const btn of root.querySelectorAll('.ws-sync-skills')) {
     btn.addEventListener('click', _onSyncSkillsClick);
   }
-  // Reset session button — destructive, confirm first. Clears claude
+  // Reset session button — destructive, confirm first. Clears
   // claude session_id so the next run starts a fresh conversation.
   for (const btn of root.querySelectorAll('.ws-reset-session')) {
     btn.addEventListener('click', _onResetSessionClick);
+  }
+  // Delete workspace button — extra destructive. Removes the entire
+  // ~/workspaces/<name>/ directory + per-ws settings + session.
+  for (const btn of root.querySelectorAll('.ws-delete-workspace')) {
+    btn.addEventListener('click', _onDeleteWorkspaceClick);
   }
   for (const sel of root.querySelectorAll('.provider-inline')) {
     sel.addEventListener('change', onProviderInlineChange);
@@ -1353,6 +1362,39 @@ async function _onSyncSkillsClick(e) {
   }
 }
 
+async function _onDeleteWorkspaceClick(e) {
+  const btn = e.currentTarget;
+  const ws = btn.dataset.ws;
+  if (!ws) return;
+  if (!confirm(
+    `永久删除 workspace "${ws}"?\n\n` +
+    `会清掉:\n` +
+    `  • ~/workspaces/${ws}/ 整个目录(代码 + git 历史)\n` +
+    `  • workspaces.json 里的 provider / engine / trust 配置\n` +
+    `  • sessions.json 里的对话 session\n\n` +
+    `cron loops 引用 "${ws}" 的话会开始报错,要单独删 loop。\n` +
+    `此操作不可恢复。`
+  )) return;
+  btn.disabled = true;
+  try {
+    const result = await api(`/workspaces/${encodeURIComponent(ws)}`, { method: 'DELETE' });
+    const what = (result?.cleaned || []).join(' + ') || '(nothing)';
+    showToast('success', `${ws}: deleted — ${what}`, { ttl: 3000 });
+    // If user is currently viewing this workspace's detail page,
+    // navigate back to the overview before refreshAll repaints — else
+    // they'll see a 404 detail view for a workspace that no longer exists.
+    const route = parseRoute();
+    if (route.name === 'workspace-detail' && route.id === ws) {
+      location.hash = '#workspaces';
+    }
+    refreshAll();
+  } catch (err) {
+    showError(`delete failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function _onResetSessionClick(e) {
   const btn = e.currentTarget;
   const ws = btn.dataset.ws;
@@ -1539,6 +1581,9 @@ function workspaceColHtml(name, data, opts = {}) {
                   title="Sync slash-command skills (扫盘并写入本地缓存)" aria-label="Sync skills">${ICONS.refresh}</button>
           <button class="ws-reset-session" type="button" data-ws="${esc(name)}"
                   title="Reset conversation (清掉当前对话历史,下一条 prompt 重开 session)" aria-label="Reset session">${ICONS.rewind}</button>
+          <button class="ws-delete-workspace" type="button" data-ws="${esc(name)}"
+                  title="Delete workspace (永久删:rm -rf 目录 + 清配置 + 清 session)"
+                  aria-label="Delete workspace">${ICONS.trash}</button>
         </div>
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
