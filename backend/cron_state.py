@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import re
 import shlex
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -35,7 +37,24 @@ from . import config
 
 CC_LOOPS_PATH = Path("/etc/cron.d/cc-loops")
 AGENT_RUN_BIN = "/usr/local/bin/agent-run"
+# Wrapper installed by `scripts/install-cc-loops` — used when backend is
+# not running as root, so we can atomically replace /etc/cron.d/cc-loops
+# (which must be root-owned for cron to honor it). See deploy/cc-workflow.sudoers
+# for the sudoers grant that makes this no-password.
+INSTALL_HELPER = "/usr/local/bin/install-cc-loops"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _cron_user() -> str:
+    """The username that cron lines should run as.
+
+    For a root-installed backend this is "root"; for the non-root install
+    (User=ccw in systemd), this is "ccw". We resolve from the *current*
+    process's uid so the same code path works in both deployments without
+    a config flag — backend runs as the same user cron should run agent-run
+    as, by design.
+    """
+    return pwd.getpwuid(os.getuid()).pw_name
 
 
 def _job_file(name: str) -> Path:
@@ -108,14 +127,18 @@ def _parse_cron_line(line: str) -> Optional[dict]:
         tokens = shlex.split(parts[5])
     except ValueError:
         return None
-    if len(tokens) < 6 or tokens[0] != "root":
+    if len(tokens) < 6:
         return None
+    # tokens[0] is the cron USER field. Used to be hardcoded "root"; now
+    # varies by deployment (root vs ccw). We don't validate it — if it's
+    # there in the cron file, cron will run agent-run as that user, and
+    # that's the user we want to honor.
 
     # Walk tokens after the agent-run path. Collect positionals; pick out
     # the engine value from either --engine=X or --engine X form.
     engine = "claude"
     positionals: list[str] = []
-    i = 2                                               # skip 'root' + agent-run path
+    i = 2                                               # skip USER + agent-run path
     while i < len(tokens):
         t = tokens[i]
         if t.startswith("--engine="):
@@ -217,12 +240,46 @@ def _init_job_state(name: str) -> None:
 
 
 def _write_cron_file(content: str) -> None:
-    """Atomic write to /etc/cron.d/cc-loops with 0644 root:root."""
-    CC_LOOPS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CC_LOOPS_PATH.with_suffix(".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, CC_LOOPS_PATH)
+    """Atomic write to /etc/cron.d/cc-loops with 0644 root:root.
+
+    Two code paths, switched on whether the current process is root:
+
+    1. Root backend (legacy install): we own /etc/cron.d/, can rename a
+       tmpfile directly. One syscall, classic atomicity.
+    2. Non-root backend (User=ccw, recommended since 2026-05-14): we
+       can't write under /etc/cron.d/ ourselves. Stage the content in
+       our state dir, then shell out to a sudo wrapper (install-cc-loops)
+       that validates the staging path and does the install as root.
+       The wrapper is the only command granted in /etc/sudoers.d/cc-workflow,
+       so this doesn't enlarge the trust surface beyond "ccw can replace
+       this one file with this one shape".
+    """
+    if os.geteuid() == 0:
+        CC_LOOPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CC_LOOPS_PATH.with_suffix(".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, CC_LOOPS_PATH)
+        return
+
+    # Non-root path. Stage in $STATE_DIR/cc-loops.tmp (where the sudoers
+    # wrapper expects to find it — see scripts/install-cc-loops).
+    stage = config.STATE_DIR / "cc-loops.tmp"
+    stage.parent.mkdir(parents=True, exist_ok=True)
+    stage.write_text(content, encoding="utf-8")
+    os.chmod(stage, 0o644)
+    result = subprocess.run(
+        ["sudo", "-n", INSTALL_HELPER, str(stage)],
+        capture_output=True, text=True, check=False,
+    )
+    # The wrapper deletes the staged file on success. If it failed, the
+    # stage stays around — useful for debugging — and we surface the
+    # wrapper's stderr.
+    if result.returncode != 0:
+        raise OSError(
+            f"install-cc-loops wrapper exited {result.returncode}: "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
 
 
 def _ensure_header(existing: str) -> str:
@@ -261,7 +318,7 @@ def add_cron_loop(
     # shlex.quote keeps the prompt safe inside a cron shell line.
     quoted_prompt = shlex.quote(prompt)
     cron_line = (
-        f"{schedule} root {AGENT_RUN_BIN} --engine={engine} "
+        f"{schedule} {_cron_user()} {AGENT_RUN_BIN} --engine={engine} "
         f"{shlex.quote(workspace)} {quoted_prompt} {name} "
         f"--source cron --job-name {name}"
     )

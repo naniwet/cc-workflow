@@ -1,8 +1,23 @@
 # cc-workflow — one-shot install
 
-Target: Ubuntu 22.04 / 24.04 cloud server, single-user, run as root.
+Target: Ubuntu 22.04 / 24.04 cloud server, single-user.
 
 Estimated time: 10 minutes (excluding LLM API key signups).
+
+> **⚠️ Heads-up on the service user.** The steps below install everything
+> under `/root/` and run the backend as `root`. This works, but recent
+> Claude CLI refuses `--dangerously-skip-permissions` (the flag agent-run
+> uses for trust=on workspaces) when running as root. Two options:
+>
+> - **New install — recommended:** install under root first as documented,
+>   then run [`scripts/migrate-to-non-root.sh`](../scripts/migrate-to-non-root.sh)
+>   which flips you over to a dedicated `ccw` user. The script is idempotent
+>   and keeps your data.
+> - **Already running as root and don't care about trust=on:** ignore. The
+>   only loss is auto-approve for trust=on workspaces; everything else works.
+>
+> See [§9 Non-root deployment](#9-non-root-deployment) at the bottom for
+> what the migration actually does.
 
 ## 0. Prerequisites
 
@@ -237,3 +252,54 @@ systemctl restart cc-workflow        # only needed if backend/* changed
 # nginx reload only needed if deploy/nginx.conf changed
 # PWA hard-refresh only needed if pwa/* changed (browser SW caches them)
 ```
+
+> If you migrated to non-root (§9), the paths are `/home/ccw/cc-workflow`
+> and you should `sudo -u ccw git pull` so the working tree stays owned
+> by `ccw`. The systemd unit + nginx reload commands stay the same.
+
+## 9. Non-root deployment
+
+By default, the backend runs as `root`. This works for everything except
+`trust=on` workspaces — recent Claude CLI refuses
+`--dangerously-skip-permissions` when invoked as root, so any tool call
+that would normally be auto-approved gets stuck. The fix is to run the
+backend as a dedicated non-root user (`ccw`).
+
+The migration is handled by an idempotent script:
+
+```bash
+cd /root/projects/cc-workflow
+git pull
+sudo bash scripts/migrate-to-non-root.sh
+sudo systemctl restart cc-workflow
+sudo systemctl status cc-workflow      # should be "active (running)" as User=ccw
+```
+
+What it does (see the script source for details):
+
+1. Creates user `ccw` (home `/home/ccw/`, no login shell required for service use)
+2. Copies `/root/.cc-workflow`, `.cc-state`, and `workspaces` to `/home/ccw/` and chowns them
+3. Re-clones the project to `/home/ccw/cc-workflow` (or pulls latest if already there)
+4. Installs `deploy/cc-workflow.sudoers` to `/etc/sudoers.d/cc-workflow`
+   (grants `ccw` no-password access to ONE command —
+   `/usr/local/bin/install-cc-loops` — so the backend can still atomically
+   replace `/etc/cron.d/cc-loops` despite being non-root)
+5. Installs `scripts/install-cc-loops` to `/usr/local/bin/` (root-owned wrapper
+   that the sudoers grant points at; validates the stage path and uid before
+   running `install(1)`)
+6. Installs the new `cc-workflow.service` (with `User=ccw`)
+7. Rewrites existing cron lines in `/etc/cron.d/cc-loops` so the USER field
+   is `ccw` instead of `root` (otherwise cron would still fire agent-run
+   as root and we'd be back where we started)
+
+After verifying everything works for a few days, you can clean up the old
+root paths:
+
+```bash
+sudo rm -rf /root/.cc-workflow /root/.cc-state /root/workspaces /root/projects/cc-workflow
+```
+
+The legacy root install path (User=root, paths under /root/) is still
+supported by the code — `cron_state.py:_write_cron_file` switches on
+`os.geteuid()` and skips the sudo wrapper when it's already root. You
+won't accidentally break a root install by deploying this code.

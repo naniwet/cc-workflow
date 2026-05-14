@@ -1,0 +1,66 @@
+#!/bin/bash
+#
+# install-cc-loops — atomically copy a staged cc-loops file to /etc/cron.d/.
+#
+# Called by backend/cron_state.py:_write_cron_file when cc-workflow's backend
+# runs as a non-root user. The sudoers grant in /etc/sudoers.d/cc-workflow
+# allows the cc-workflow service user to run THIS specific binary with no
+# password — so this script is the entire trust surface for "non-root backend
+# writes to /etc/cron.d/".
+#
+# Install location: /usr/local/bin/install-cc-loops, owned root:root, mode 0755.
+# Sudoers entry: ccw ALL=(root) NOPASSWD: /usr/local/bin/install-cc-loops
+#
+# Defense in depth:
+#   - Hard-coded destination (we never write anywhere else)
+#   - Source path must live under one of the recognized state dirs (regex)
+#   - Source must be a regular file (no symlink trickery)
+#   - install(1) sets 0644 root:root atomically
+#
+# Failure modes are stderr + non-zero exit; the caller surfaces them to the user.
+
+set -euo pipefail
+
+usage() {
+    echo "usage: install-cc-loops <staged-file>" >&2
+    echo "       staged-file must live at \$HOME/.cc-state/cc-loops.tmp" >&2
+    exit 64    # EX_USAGE
+}
+
+[[ $# -eq 1 ]] || usage
+SRC="$1"
+
+# Reject anything not matching the expected state-dir staging path.
+# This blocks symlink races, traversal (../../etc/shadow), and any path
+# that wasn't put there by cc-workflow's own _write_cron_file.
+if [[ ! "$SRC" =~ ^/home/[a-z][a-z0-9_-]*/\.cc-state/cc-loops\.tmp$ ]] \
+   && [[ ! "$SRC" =~ ^/var/lib/[a-z][a-z0-9_-]*/cc-loops\.tmp$ ]]; then
+    echo "install-cc-loops: source path not allowed: $SRC" >&2
+    exit 65    # EX_DATAERR
+fi
+
+# Reject if the source isn't a regular file (no symlinks, no fifos).
+# Using `-h` to check symlink even on the staged path itself.
+if [[ -h "$SRC" ]] || [[ ! -f "$SRC" ]]; then
+    echo "install-cc-loops: source must be a regular file (no symlinks): $SRC" >&2
+    exit 65
+fi
+
+# Reject if the source file is owned by anyone other than the caller.
+# (sudo means we're root here; SUDO_UID is the original caller.)
+if [[ -n "${SUDO_UID:-}" ]]; then
+    SRC_UID=$(stat -c '%u' "$SRC")
+    if [[ "$SRC_UID" != "$SUDO_UID" ]]; then
+        echo "install-cc-loops: source uid $SRC_UID != caller uid $SUDO_UID" >&2
+        exit 77    # EX_NOPERM
+    fi
+fi
+
+# Atomically install. install(1) writes to a temp + rename, so no torn read
+# by cron mid-replace.
+install -m 644 -o root -g root "$SRC" /etc/cron.d/cc-loops
+
+# Clean up the staged file. Best-effort; the backend doesn't depend on it.
+rm -f "$SRC" 2>/dev/null || true
+
+exit 0

@@ -1,0 +1,23 @@
+# Sudoers grant for the cc-workflow service user.
+#
+# Install this file at /etc/sudoers.d/cc-workflow with mode 0440 and ownership
+# root:root — e.g.:
+#
+#   sudo install -m 440 -o root -g root deploy/cc-workflow.sudoers \
+#                /etc/sudoers.d/cc-workflow
+#
+# Then verify with `sudo visudo -c -f /etc/sudoers.d/cc-workflow`. If that
+# returns "parsed OK", you're good.
+#
+# What this grants:
+#   The user `ccw` is allowed to invoke /usr/local/bin/install-cc-loops with
+#   NO password prompt. That wrapper is the ONLY way the non-root backend
+#   can replace /etc/cron.d/cc-loops, and it has internal guards (path regex
+#   on the source, symlink rejection, uid check) so this grant does not
+#   become a general privilege escalation.
+#
+# Change the user `ccw` below if you installed the service under a different
+# username. Keep the command path absolute and exact — sudoers matches the
+# string literally; any variation lets the grant get rejected.
+
+ccw ALL=(root) NOPASSWD: /usr/local/bin/install-cc-loops
