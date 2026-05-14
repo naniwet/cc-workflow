@@ -1632,3 +1632,36 @@ pre {
 .rt-cell-precedent h4 { color: var(--accent-purple); }
 .rt-cell-pessimist  { border-top-color: var(--accent-amber); }
 .rt-cell-pessimist h4 { color: var(--accent-amber); }
+
+/* Mobile: R1/R2 collapsed by default — R3 is the product value, so the
+   detail view leads with it and lets R1/R2 be on-demand evidence. */
+.rt-round-collapsible {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.rt-round-collapsible > summary {
+  padding: var(--space-3);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.rt-round-collapsible > summary::-webkit-details-marker { display: none; }
+.rt-round-collapsible > summary h3 { margin: 0; flex: 1; }
+.rt-round-collapsible > summary::after {
+  content: '▾';
+  color: var(--text-tertiary);
+  transition: transform var(--t-base);
+}
+.rt-round-collapsible[open] > summary::after { transform: rotate(180deg); }
+.rt-round-collapsible[open] > .rt-grid { padding: 0 var(--space-3) var(--space-3); }
+
+/* Mobile: shrink the form padding & question heading so the actual
+   list isn't pushed below the fold. */
+@media (max-width: 600px) {
+  .rt-question { font-size: var(--text-h3); }
+  .rt-cell { padding: var(--space-2); }
+  .rt-r3 { padding: var(--space-3); }
+}

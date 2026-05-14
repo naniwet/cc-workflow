@@ -2143,13 +2143,22 @@ function renderRoundtablesView() {
   const list = rows.length
     ? rows.map(_roundtableListRow).join('')
     : '<p class="muted">还没有圆桌会议。先写一个问题,4 个角色 + 1 个整理员会替你辩论 3 轮。</p>';
-  $('view').innerHTML = `
-    <h1>圆桌会议</h1>
+  // Form is open by default ONLY when the list is empty — otherwise the
+  // existing sessions are what the user wants to see first. They can
+  // click the summary to expand the form when starting a new one.
+  const formOpen = rows.length === 0 ? 'open' : '';
+  // The blurb is informational; on mobile it takes a lot of vertical
+  // space above the list — hide it once the user has at least one
+  // session (they already know what the tab does by then).
+  const blurb = rows.length === 0 ? `
     <p class="muted" style="margin-top:-8px">
       4 个固定角色(<strong>极简派 / 场景派 / 借鉴派 / 悲观派</strong>)对一个决策问题各抒己见,
       <strong>整理员</strong>把分歧整理成 <em>共识点 / 分歧轴 / 判断题</em>。让你做决定,不替你做决定。
-    </p>
-    <details class="add-form" data-details-id="add-roundtable" open>
+    </p>` : '';
+  $('view').innerHTML = `
+    <h1>圆桌会议</h1>
+    ${blurb}
+    <details class="add-form" data-details-id="add-roundtable" ${formOpen}>
       <summary>新开一场</summary>
       <form data-form-id="new-roundtable">
         <label>问题(决策级,不是事实问题)
@@ -2317,15 +2326,32 @@ function paintRoundtableDetail(id, row) {
     ${errorBlock}
     <div class="rt-detail">
       ${r3Block}
-      <section class="rt-round">
-        <h3>Round 1 — 初次回答</h3>
-        <div class="rt-grid">${r1Cells}</div>
-      </section>
-      <section class="rt-round">
-        <h3>Round 2 — Steel-man + Attack</h3>
-        <div class="rt-grid">${r2Cells}</div>
-      </section>
+      ${_rtRoundBlock('Round 1 — 初次回答', r1Cells)}
+      ${_rtRoundBlock('Round 2 — Steel-man + Attack', r2Cells)}
     </div>
+  `;
+}
+
+// R1/R2 sections — R3 is the product value (consensus / disagreement
+// axes / judgment questions), R1/R2 are 4 long cells each that justify
+// the synthesis. On a phone, 8 stacked cells is a wall of scroll; on a
+// PC the 4-col grid fits beside R3 and there's no scroll cost.
+// → mobile: collapsed by default, summary tappable to expand
+// → PC: always open (no <details> wrapper, just plain section)
+function _rtRoundBlock(title, cellsHtml) {
+  if (_isMobileViewport) {
+    return `
+      <details class="rt-round rt-round-collapsible">
+        <summary><h3>${esc(title)}</h3></summary>
+        <div class="rt-grid">${cellsHtml}</div>
+      </details>
+    `;
+  }
+  return `
+    <section class="rt-round">
+      <h3>${esc(title)}</h3>
+      <div class="rt-grid">${cellsHtml}</div>
+    </section>
   `;
 }
 
