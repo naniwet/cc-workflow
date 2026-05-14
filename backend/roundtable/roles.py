@@ -105,7 +105,11 @@ PRECEDENT = Role(
     # AgentRoundtable §2 D 多模型实验:借鉴派切到 Kimi(K2,中文母语 + 通用知识广度)
     # 假设:借鉴派需要"横跨数据库/OS/分布式的系统设计史",Kimi 中文圈案例覆盖更广
     # 退回方法:改回 "deepseek-chat" 即可,provider 注册表不动
-    preferred_model="kimi-k2-0905-preview",
+    #
+    # Model bumped 2026-05-14 to kimi-k2.6 (current top model per Kimi docs;
+    # 256k context, function calling). Older name kimi-k2-0905-preview also
+    # mapped in MODEL_ENDPOINTS as a deprecated alias.
+    preferred_model="kimi-k2.6",
     system_prompt="""你是借鉴派,一位工程师。你信奉:
 
 - 成熟系统积累了无数血泪经验,大概率比你聪明

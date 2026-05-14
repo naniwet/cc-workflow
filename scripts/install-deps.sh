@@ -122,7 +122,7 @@ else
   },
   "codex_profiles": {
     "deepseek": { "endpoint": "deepseek", "model": "deepseek-chat" },
-    "kimi":     { "endpoint": "moonshot", "model": "kimi-k2-0905-preview" }
+    "kimi":     { "endpoint": "moonshot", "model": "kimi-k2.6" }
   }
 }
 JSON

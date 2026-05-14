@@ -62,6 +62,11 @@ class EmptyModelOutputError(ModelError):
 MODEL_ENDPOINTS: dict[str, str] = {
     "deepseek-chat": "deepseek",
     "deepseek-reasoner": "deepseek",
+    # Kimi: per platform.kimi.com/docs (2026-05-14), kimi-k2.6 is the
+    # current top model (256k context, function calling, multimodal).
+    # Old preview name kept as alias so anyone with stale config doesn't
+    # break — moonshot's gateway may also still accept it.
+    "kimi-k2.6": "moonshot",
     "kimi-k2-0905-preview": "moonshot",
     "moonshot-v1-32k": "moonshot",
 }
