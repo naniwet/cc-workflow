@@ -32,8 +32,14 @@ SRC="$1"
 
 # Reject anything not matching the expected state-dir staging path.
 # This blocks symlink races, traversal (../../etc/shadow), and any path
-# that wasn't put there by cc-workflow's own _write_cron_file.
+# that wasn't put there by cc-workflow's own _write_cron_file. Three
+# accepted shapes, matching the three deployment patterns:
+#
+#   /home/<user>/.cc-state/cc-loops.tmp   — full non-root migrate
+#   /root/.cc-state/cc-loops.tmp           — ccw-launched-but-paths-stay-in-/root
+#   /var/lib/<user>/cc-loops.tmp           — distro packagers who want FHS paths
 if [[ ! "$SRC" =~ ^/home/[a-z][a-z0-9_-]*/\.cc-state/cc-loops\.tmp$ ]] \
+   && [[ "$SRC" != "/root/.cc-state/cc-loops.tmp" ]] \
    && [[ ! "$SRC" =~ ^/var/lib/[a-z][a-z0-9_-]*/cc-loops\.tmp$ ]]; then
     echo "install-cc-loops: source path not allowed: $SRC" >&2
     exit 65    # EX_DATAERR

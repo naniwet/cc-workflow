@@ -257,49 +257,72 @@ systemctl restart cc-workflow        # only needed if backend/* changed
 > and you should `sudo -u ccw git pull` so the working tree stays owned
 > by `ccw`. The systemd unit + nginx reload commands stay the same.
 
-## 9. Non-root deployment
+## 9. Switching the backend to a non-root user
 
 By default, the backend runs as `root`. This works for everything except
 `trust=on` workspaces — recent Claude CLI refuses
 `--dangerously-skip-permissions` when invoked as root, so any tool call
-that would normally be auto-approved gets stuck. The fix is to run the
-backend as a dedicated non-root user (`ccw`).
+that would normally be auto-approved gets stuck on a "cannot be used with
+root/sudo" error. The fix is to launch the backend as a dedicated non-root
+user (`ccw`).
 
-The migration is handled by an idempotent script:
+Two flavors of migration are available. **Pick one based on how much you
+want to rearrange:**
+
+### 9a. Keep paths under /root (minimal disruption — recommended)
+
+`ccw` runs the backend, but every config / state / workspace stays at its
+current `/root/...` location. The only system-wide change is `chmod 755 /root`
+so `ccw` can traverse into it. Subfile/subdir perms (.ssh, .bashrc, etc.)
+are untouched.
+
+```bash
+cd /root/projects/cc-workflow
+git pull
+sudo bash scripts/migrate-keep-root-paths.sh
+sudo systemctl restart cc-workflow
+sudo systemctl status cc-workflow     # expect: Active=running, User=ccw
+```
+
+What the script does (idempotent — safe to re-run):
+
+1. Creates user `ccw` with home=/root (or fixes an existing ccw if home is wrong)
+2. `chmod 755 /root` — directory traversal only; file/subdir perms preserved
+3. `chown -R ccw:ccw` on `/root/{.cc-workflow,.cc-state,workspaces,projects/cc-workflow}`
+4. Installs the `install-cc-loops` wrapper to `/usr/local/bin/` (root-owned)
+5. Installs the sudoers grant so `ccw` can invoke the wrapper (`/etc/sudoers.d/cc-workflow`)
+6. Installs the new `cc-workflow.service` (User=ccw, HOME=/root, paths under /root)
+7. Rewrites the USER field in `/etc/cron.d/cc-loops` from root → ccw
+
+Security trade-off: any non-root account on this box can now `stat`
+filenames directly under `/root/` (the directory itself is 0755; file
+contents are still protected by their own perms). On a single-user VPS
+that's fine. On a shared box, prefer §9b.
+
+### 9b. Move everything to /home/ccw (textbook clean — fully isolated)
+
+`ccw` runs the backend AND all config/state/workspace files live under
+`/home/ccw/`. `/root/` stays at its default 0700. More invasive, but doesn't
+require any chmod on system directories.
 
 ```bash
 cd /root/projects/cc-workflow
 git pull
 sudo bash scripts/migrate-to-non-root.sh
 sudo systemctl restart cc-workflow
-sudo systemctl status cc-workflow      # should be "active (running)" as User=ccw
 ```
 
-What it does (see the script source for details):
+The script copies `/root/{.cc-workflow,.cc-state,workspaces}` → `/home/ccw/`,
+re-clones the project to `/home/ccw/cc-workflow`, and otherwise does the same
+sudoers / wrapper / cron-USER-field steps as 9a. After a few days of running
+clean, you can `rm -rf /root/.cc-workflow /root/.cc-state /root/workspaces`
+to reclaim the disk.
 
-1. Creates user `ccw` (home `/home/ccw/`, no login shell required for service use)
-2. Copies `/root/.cc-workflow`, `.cc-state`, and `workspaces` to `/home/ccw/` and chowns them
-3. Re-clones the project to `/home/ccw/cc-workflow` (or pulls latest if already there)
-4. Installs `deploy/cc-workflow.sudoers` to `/etc/sudoers.d/cc-workflow`
-   (grants `ccw` no-password access to ONE command —
-   `/usr/local/bin/install-cc-loops` — so the backend can still atomically
-   replace `/etc/cron.d/cc-loops` despite being non-root)
-5. Installs `scripts/install-cc-loops` to `/usr/local/bin/` (root-owned wrapper
-   that the sudoers grant points at; validates the stage path and uid before
-   running `install(1)`)
-6. Installs the new `cc-workflow.service` (with `User=ccw`)
-7. Rewrites existing cron lines in `/etc/cron.d/cc-loops` so the USER field
-   is `ccw` instead of `root` (otherwise cron would still fire agent-run
-   as root and we'd be back where we started)
+### Back-compat
 
-After verifying everything works for a few days, you can clean up the old
-root paths:
-
-```bash
-sudo rm -rf /root/.cc-workflow /root/.cc-state /root/workspaces /root/projects/cc-workflow
-```
-
-The legacy root install path (User=root, paths under /root/) is still
-supported by the code — `cron_state.py:_write_cron_file` switches on
-`os.geteuid()` and skips the sudo wrapper when it's already root. You
-won't accidentally break a root install by deploying this code.
+The legacy root install path (User=root, all paths under /root/) is still
+supported by the code. `backend/cron_state.py:_write_cron_file` switches
+on `os.geteuid()`: as root, it does a direct `os.replace`; as ccw, it
+shells out via the sudoers wrapper. You won't accidentally break a root
+install by pulling this code — only by replacing the systemd unit and not
+running one of the migration scripts.

@@ -8,35 +8,41 @@ After=network.target
 [Service]
 Type=simple
 
-# Run as dedicated non-root user `ccw` since 2026-05-14. Recent Claude CLI
-# refuses --dangerously-skip-permissions (and bypassPermissions, the
-# equivalent --permission-mode value) when invoked as root, which breaks
-# trust=on workspaces. The non-root user gets:
-#   - sudoers grant for /usr/local/bin/install-cc-loops only (deploy/cc-workflow.sudoers)
-#     so backend/cron_state.py can still write /etc/cron.d/cc-loops
-#   - all state/config under /home/ccw/ instead of /root/
+# Backend launches as the dedicated `ccw` user, but ALL paths still live
+# under /root/. This is the minimal-disruption answer to "Claude CLI
+# refuses --dangerously-skip-permissions on root" since 2026-05-14: we
+# only change the launch user, not the data layout. Pre-requisites:
 #
-# Legacy root install path (still supported by cron_state.py if you have
-# strong reasons to keep root):
-#   User=root
-#   WorkingDirectory=/root/projects/cc-workflow
-#   Environment=HOME=/root
-#   ExecStart=/root/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+#   - User `ccw` exists with home `/root` (useradd -r -d /root -s /bin/bash ccw)
+#   - `/root` mode 0755 (chmod 755 /root) so ccw can traverse into it
+#   - /root/.cc-workflow, /root/.cc-state, /root/workspaces, and
+#     /root/projects/cc-workflow are chowned to ccw:ccw
+#   - /etc/sudoers.d/cc-workflow grants ccw the install-cc-loops wrapper
+#   - cron lines in /etc/cron.d/cc-loops have USER=ccw (not root)
 #
-# Use scripts/migrate-to-non-root.sh to flip an existing root install over.
+# scripts/migrate-keep-root-paths.sh does all of the above idempotently.
+#
+# HOME=/root is intentional — config.py uses Path.home() to find
+# .cc-workflow / .cc-state, and agent-run.sh uses ${HOME}/workspaces.
+# Pointing $HOME at /root keeps every reader on the same paths.
+#
+# Two alternative deployment shapes still supported but not the default:
+#   - Legacy root install:     User=root, no chown / chmod gymnastics
+#   - Full home migrate:       User=ccw, all data under /home/ccw/
+#                              (use scripts/migrate-to-non-root.sh)
 User=ccw
-WorkingDirectory=/home/ccw/cc-workflow
-Environment=HOME=/home/ccw
+WorkingDirectory=/root/projects/cc-workflow
+Environment=HOME=/root
 
 # Project-local venv — Ubuntu 24.04+ blocks system-wide pip (PEP 668).
-# First-time setup (as the ccw user):
-#   python3 -m venv .venv
-#   .venv/bin/pip install fastapi uvicorn pydantic tomli cryptography
+# First-time setup (as the ccw user after chown):
+#   sudo -u ccw python3 -m venv .venv
+#   sudo -u ccw .venv/bin/pip install fastapi uvicorn pydantic tomli cryptography
 # (cryptography is only needed if Feishu Encrypt Key is configured.)
 #
 # Bind 127.0.0.1 — public traffic comes through nginx on :80. HMAC session
 # cookie auth is enforced at the FastAPI layer (backend/auth.py).
-ExecStart=/home/ccw/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+ExecStart=/root/projects/cc-workflow/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
 
 # Restart policy — recover from transient crashes, give up after a real
 # crash loop so journalctl shows something other than an endless retry.
