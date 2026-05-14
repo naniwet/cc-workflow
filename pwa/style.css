@@ -668,6 +668,32 @@ body.is-dragging .ws-col:not(.dragging) {
   color: var(--text-tertiary);
   font-size: var(--text-sm);
 }
+
+/* Cancel button on long-running rows. Pushed to the far right via
+ * margin-left:auto. Small + low-contrast in idle, red on hover so the
+ * "this is destructive" affordance is clear when you're aiming for it
+ * but the button doesn't compete with the row's primary content. */
+.run-cancel-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--t-base), border-color var(--t-base), background var(--t-base);
+}
+.run-cancel-btn:hover {
+  color: var(--accent-red);
+  border-color: var(--accent-red);
+  background: rgba(239, 68, 68, 0.10);
+}
+.run-cancel-btn:disabled { opacity: 0.5; cursor: wait; }
 .row-prompt, .row-output {
   font-size: var(--text-sm);
   padding-left: var(--space-1);

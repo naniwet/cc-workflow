@@ -8,6 +8,7 @@ Routes:
   GET    /                                     redirect → /pwa/  (no auth)
   POST   /run                                  session
   GET    /runs/{task_id}                       session
+  POST   /runs/{task_id}/cancel                session   (SIGTERM running subprocess)
   GET    /sessions                             session
   GET    /workspaces                           session
   POST   /workspaces                           session
@@ -230,6 +231,41 @@ def post_run(req: RunRequest) -> dict:
         permission_mode=ws_settings.permission_mode_for(req.workspace),
     )
     return {"task_id": run_id, "status": "queued"}
+
+
+@app.post("/runs/{task_id}/cancel", dependencies=PROTECT)
+def cancel_run(task_id: str) -> dict:
+    """SIGTERM a running agent-run subprocess.
+
+    The PWA shows a cancel button only for runs that have been 'running'
+    > 5 min (see app.js timeline rendering) — short-runs aren't worth
+    interrupting and the button would be misclick bait. Backend doesn't
+    enforce the 5-min gate; the UI does.
+
+    The kill is sent to the whole process group so claude + any tool
+    subprocesses (npm test, vitest, etc.) all go down. agent-run's
+    EXIT trap then releases its flock slot. The runner thread's
+    proc.communicate() returns shortly after, with a negative exit code
+    (e.g. -15 for SIGTERM), and runs.db finally moves to 'failed'.
+    """
+    row = db.get_run(task_id)
+    if row is None:
+        raise HTTPException(404, {"error": "run not found", "id": task_id})
+    if row.get("status") not in ("running", "queued"):
+        raise HTTPException(
+            409,
+            {
+                "error": "not_cancellable",
+                "msg": f"run is already {row.get('status')!r}, nothing to cancel",
+            },
+        )
+    result = runner.cancel(task_id)
+    if not result.get("ok"):
+        # 409 instead of 500: the situation is "you asked to cancel
+        # something that's not actually running" — caller error, not
+        # server crash. Message tells which sub-case.
+        raise HTTPException(409, {"error": result.get("code"), "msg": result.get("msg")})
+    return result
 
 
 @app.get("/runs/{task_id}", dependencies=PROTECT)

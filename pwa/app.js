@@ -1282,6 +1282,38 @@ function _onFormPickerClick(e) {
 // form-picker work without renderXxx needing to wire its own handlers.
 document.addEventListener('click', _onFormPickerClick);
 
+// Cancel button on long-running rows. Delegated rather than bound per
+// row because rows are re-rendered on every poll; binding individually
+// would either leak or require a binding pass in every renderXxx.
+//
+// The button sits inside the <a class="run-link">, so we must preventDefault
+// AND stopPropagation — otherwise the anchor navigates to run-detail
+// while the cancel API call is in flight, which is confusing UX.
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.run-cancel-btn');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const runId = btn.dataset.runId;
+  if (!runId) return;
+  const short = runId.slice(0, 8);
+  if (!confirm(
+    `取消 run ${short}?\n` +
+    `\n` +
+    `会向该 run 的 agent-run 进程组发 SIGTERM,包括内部 claude + tool 子进程。` +
+    `slot 释放后,该 workspace 可以马上发新 run。`,
+  )) return;
+  btn.disabled = true;
+  try {
+    await api(`/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' });
+    showToast('success', `已 cancel run ${short}`, { ttl: 2200 });
+    refreshAll();
+  } catch (err) {
+    showError(`cancel failed: ${err.message}`);
+    btn.disabled = false;
+  }
+});
+
 // In-menu provider picker: render as a vertical radio-list instead of a
 // native <select>. Native <select> popups are OS-styled (white-on-black
 // looks bad in our dark theme + nested inside a <details> menu is ugly).
@@ -1999,6 +2031,12 @@ async function onApprovalClick(e) {
   }
 }
 
+// Show the Cancel button only after this many seconds of running. Short-
+// running tasks aren't worth interrupting (and the button next to a
+// 30-second healthy run would be misclick bait). Tuned to 5 min based
+// on user feedback after the May 15 stuck-run incident.
+const _CANCEL_BUTTON_THRESHOLD_S = 300;
+
 function runRowHtml(r) {
   const status = r.status || '?';
   // 3-row layout: meta line · prompt preview · output preview.
@@ -2014,6 +2052,20 @@ function runRowHtml(r) {
   const startedAbs = r.started_at
     ? new Date(r.started_at * 1000).toLocaleString()
     : '';
+  // Cancel button: visible only when this run has been 'running' for
+  // longer than the threshold AND there's a real id to send to backend.
+  // The <button> nested inside the <a> is technically invalid HTML
+  // (a-can't-contain-button) but every browser tolerates it; the click
+  // handler uses preventDefault + stopPropagation to keep the cancel
+  // click from navigating to run detail.
+  const nowS = Math.floor(Date.now() / 1000);
+  const elapsedS = r.started_at ? nowS - r.started_at : 0;
+  const showCancel =
+    status === 'running' && elapsedS > _CANCEL_BUTTON_THRESHOLD_S && r.id;
+  const cancelBtn = showCancel
+    ? `<button class="run-cancel-btn" type="button" data-run-id="${esc(r.id)}"
+              title="Cancel this run (SIGTERM)" aria-label="Cancel run">✕</button>`
+    : '';
 
   return `
     <a class="row run-link" href="#runs/${esc(r.id || '')}" title="Click for full output">
@@ -2024,6 +2076,7 @@ function runRowHtml(r) {
         ${r.exit_code != null && r.exit_code !== 0 ? `· exit ${esc(r.exit_code)}` : ''}
         ${r.source ? `· ${esc(r.source)}` : ''}
         ${r.started_at ? `· <span class="row-time" title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
+        ${cancelBtn}
       </div>
       ${prompt ? `<div class="row-prompt">▸ ${esc(prompt)}</div>` : ''}
       ${output ? `<div class="row-output">↳ ${esc(output)}</div>` : ''}
