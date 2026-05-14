@@ -102,6 +102,10 @@ const ICONS = {
   // for this workspace's PWA session). Distinct visual from refresh so
   // users don't confuse "sync skills" with "wipe history".
   rewind:  `<svg ${_S}><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`,
+  // Down-arrow with a horizontal lip — "git pull latest". Visually
+  // distinct from refresh (which is a circular arrow) so the menu's
+  // two "fetch something" actions don't blur together.
+  download: `<svg ${_S}><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><line x1="5" y1="20" x2="19" y2="20"/></svg>`,
   // Trash can — "hard delete this workspace" (rm -rf + clean configs).
   // Distinct from rewind: rewind = "wipe history, keep ws"; trash =
   // "everything goes". Red on hover (see style.css).
@@ -1083,6 +1087,9 @@ function bindWorkspaceColHandlers(root) {
   // Sync skills button per column header. Calls /skills?workspace=X and
   // refreshes localStorage. No re-render needed afterwards — the next
   // _onPromptInput will pick up the new cache.
+  for (const btn of root.querySelectorAll('.ws-pull-latest')) {
+    btn.addEventListener('click', _onPullLatestClick);
+  }
   for (const btn of root.querySelectorAll('.ws-sync-skills')) {
     btn.addEventListener('click', _onSyncSkillsClick);
   }
@@ -1525,6 +1532,27 @@ function effectiveTrust(name) {
 // again, the original lived here; the .ws-trust-toggle CSS rules still
 // apply (just need the button element).
 
+// "Pull latest (git pull)" inside the ⋯ menu — runs `git -C ~/workspaces/<name>
+// pull --ff-only` server-side and surfaces the output (or the failure
+// reason) via toast. fast-forward-only so we never quietly create merge
+// commits without user knowledge.
+async function _onPullLatestClick(e) {
+  const btn = e.currentTarget;
+  const ws = btn.dataset.ws;
+  if (!ws) return;
+  _closeAncestorMenu(btn);
+  btn.disabled = true;
+  try {
+    const r = await api(`/workspaces/${encodeURIComponent(ws)}/pull`, { method: 'POST' });
+    const summary = r?.summary || 'pulled';
+    showToast('success', `${ws}: ${summary}`, { ttl: 3500 });
+  } catch (err) {
+    showError(`pull failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function _onSyncSkillsClick(e) {
   const btn = e.currentTarget;
   const ws = btn.dataset.ws;
@@ -1854,6 +1882,9 @@ function workspaceColHtml(name, data, opts = {}) {
                   aria-label="Toggle trust">
             ${effectiveTrust(name) ? ICONS.unlock : ICONS.lock}
             <span>Trust: ${effectiveTrust(name) ? '<strong>on</strong> · auto-approve' : '<strong>off</strong> · ask first'}</span>
+          </button>
+          <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}">
+            ${ICONS.download} <span>Pull latest (git pull)</span>
           </button>
           <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
             ${ICONS.refresh} <span>Sync skills</span>

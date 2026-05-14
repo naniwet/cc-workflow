@@ -186,6 +186,34 @@ def list_sessions_view() -> dict:
     return {"active": active, "queued": queued, "recent": recent}
 
 
+def fail_stale_runs(*, reason: str) -> list[str]:
+    """Mark all status='running'|'queued' rows as failed. Returns the IDs.
+
+    Called at backend startup — see main._reap_orphan_runs for the
+    invariant ("systemd restart kills the cgroup, so every prior
+    subprocess is dead"). Idempotent: a second call right after the
+    first returns []. exit_code 137 (SIGKILL convention) communicates
+    the cause to anyone reading the run detail.
+    """
+    now = int(time.time())
+    with _conn() as c:
+        ids = [
+            row["id"]
+            for row in c.execute(
+                "SELECT id FROM runs WHERE status IN ('running','queued')"
+            )
+        ]
+        if not ids:
+            return []
+        c.execute(
+            "UPDATE runs SET status='failed', exit_code=137, finished_at=?, "
+            "output=COALESCE(output, '') || ? "
+            "WHERE status IN ('running','queued')",
+            (now, f"\n[reaped at backend startup: {reason}]\n"),
+        )
+    return ids
+
+
 def active_in_workspace(workspace: str) -> list[dict]:
     """Queued + running runs for `workspace`, newest first.
 

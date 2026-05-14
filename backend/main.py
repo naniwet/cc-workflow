@@ -11,6 +11,7 @@ Routes:
   GET    /sessions                             session
   GET    /workspaces                           session
   POST   /workspaces                           session
+  POST   /workspaces/{name}/pull                session   (git pull --ff-only)
   DELETE /workspaces/{name}/session            session   (reset PWA conversation)
   DELETE /workspaces/{name}                    session   (hard delete: rm dir + settings + session)
   GET    /skills                               session   (slash command discovery)
@@ -70,7 +71,35 @@ app = FastAPI(title="cc-workflow", version="0.1.0")
 @app.on_event("startup")
 def _on_startup() -> None:
     db.init()
+    _reap_orphan_runs()
     _verify_agent_run_capabilities()
+
+
+def _reap_orphan_runs() -> None:
+    """Mark any leftover status='running' or 'queued' rows as failed.
+
+    Assumption: when systemd starts the backend, every agent-run
+    subprocess from the previous run is gone (cgroup-kill on stop kills
+    them all). So any 'running' row at startup is by definition stale —
+    its agent-run died without writing a terminal status.
+
+    Without this reap, stale rows occupy the 3-slot flock pool indefinitely
+    (slot lock file is fd-bound to the dead process, so it's actually
+    released, but the runs.db row stays 'running' forever and new submits
+    see "already busy" via the backend's same-workspace concurrency guard).
+    User has to manually `sqlite3 ... UPDATE` otherwise — exactly what
+    this hook is here to prevent.
+    """
+    import logging
+    log = logging.getLogger("cc-workflow")
+    swept = db.fail_stale_runs(reason="orphan: backend restarted while running")
+    if swept:
+        log.warning(
+            "Reaped %d orphan run(s) at startup (status running/queued → failed). "
+            "These were left over from a previous backend instance that didn't "
+            "write a terminal status. IDs: %s",
+            len(swept), ", ".join(swept[:5]) + ("..." if len(swept) > 5 else ""),
+        )
 
 
 def _verify_agent_run_capabilities() -> None:
@@ -356,6 +385,86 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
         data.pop(name, None)
     ws_settings.save(data)
     return current
+
+
+@app.post("/workspaces/{name}/pull", dependencies=PROTECT)
+def pull_workspace(name: str) -> dict:
+    """Run `git pull --ff-only` inside ~/workspaces/<name>.
+
+    Fast-forward-only on purpose: surfacing a merge conflict via a
+    silent merge commit would be much worse than the user seeing "your
+    branch has diverged, deal with it via ssh". Same path constraints
+    as DELETE /workspaces/{name} — name is validated against the
+    discovered workspace list, no traversal.
+
+    Returns:
+      { ok: True, workspace, summary, stdout, stderr }
+    The PWA surfaces `summary` in the success toast; stdout/stderr are
+    available for debug if the user clicks through to the run.
+    """
+    # Path-traversal + existence guard. Reuse the discover helper so this
+    # endpoint can't be tricked into running git outside ~/workspaces/.
+    from . import ui_cards
+    known = set(ui_cards._discover_workspaces())
+    if name not in known:
+        raise HTTPException(404, {"error": "workspace not found", "name": name})
+
+    target = config.WORKSPACES_DIR / name
+    if not (target / ".git").exists():
+        raise HTTPException(
+            400,
+            {"error": "not a git repo (no .git/ inside workspace)", "name": name},
+        )
+
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(target), "pull", "--ff-only"],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, {"error": "git pull timed out (60s)"})
+    except OSError as e:
+        raise HTTPException(500, {"error": f"git not runnable: {e}"})
+
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        raise HTTPException(
+            400,
+            {
+                "error": "git_pull_failed",
+                "msg": stderr or stdout or f"git pull exit {proc.returncode}",
+                "stdout": stdout,
+                "stderr": stderr,
+            },
+        )
+
+    # git pull's success output is multi-line; pull the most informative
+    # one-liner for the toast. Typical cases:
+    #   "Already up to date." → that exact string
+    #   "Updating <sha>..<sha>\n Fast-forward\n ... files changed ..." → keep the "Fast-forward" line
+    summary = "Already up to date."
+    for line in stdout.splitlines():
+        if "Already up to date" in line:
+            summary = line.strip()
+            break
+        if line.lstrip().startswith(("Updating ", "Fast-forward", "From ")):
+            summary = line.strip()
+            # Don't break — let later "X files changed" overwrite if present
+    # If stdout had "Updating" + "X files changed", prefer the latter for
+    # the toast since it's more informative.
+    for line in stdout.splitlines():
+        if "file" in line and "changed" in line:
+            summary = line.strip()
+            break
+    return {
+        "ok": True,
+        "workspace": name,
+        "summary": summary,
+        "stdout": stdout,
+        "stderr": stderr,
+    }
 
 
 @app.delete("/workspaces/{name}/session", dependencies=PROTECT)
