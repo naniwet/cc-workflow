@@ -1,6 +1,16 @@
-"""3-round orchestration: R1 (4 sequential) → R2 (4 sequential) → R3 (整理员).
+"""Roundtable orchestration: R1 (4 sequential) → 1 or 2 critique rounds
+(4 sequential each) → synth.
 
-Ported from AgentRoundtable's debate.py; logic unchanged.
+Originally a 3-round port from AgentRoundtable. Generalized 2026-05-14
+to support an optional extra critique round (the "deep dive" round) —
+empirical finding from scripts/experiment-multi-round.py was that a
+SECOND critique round with a different prompt shape (deep-dive instead
+of fresh steel-man) genuinely extracts new content (most notably the
+'收回 / 修正' shape: a persona conceding + introducing a new framing).
+
+critique_rounds = 1   → current behavior. R2 alone, then synth.
+critique_rounds = 2   → R2 (steel-man + attack) + R3 (deep-dive critique),
+                        then synth. Adds 4 LLM calls (~45-60s) per session.
 
 Persistence order matters: write to disk FIRST, then fire callback, then
 update the in-memory Session. If anything between disk and memory crashes,
@@ -66,6 +76,59 @@ R1 其他三人的回答:
 - **评价的是观点内容,不是说话人**。"我的人设和你对立所以反对你" 不算理由,会被判废。"""
 
 
+def build_r3_critique_prompt(
+    question: str,
+    r1_all: dict[str, str],
+    r2_others: dict[str, str],
+    my_r2: str,
+) -> str:
+    """Deep-dive critique prompt — used when critique_rounds=2.
+
+    Sourced from the experiment script (scripts/experiment-multi-round.py)
+    that empirically showed this shape extracts new content (especially the
+    'concede + reframe' path), where naively re-running build_r2_user_prompt
+    just paraphrased R2. The persona is shown both rounds of context plus
+    its OWN R2 (so it can avoid repeating itself), and steered toward one
+    of three high-value actions: respond to attacks, deepen a divide,
+    or retract.
+
+    'judged void' (会被判废) is the actual instruction that pushed the LLM
+    out of paraphrase mode in the experiment — leaving it in.
+    """
+    r1_block = "\n\n".join(f"- **{n}**: {c}" for n, c in r1_all.items())
+    r2_block = "\n\n".join(f"- **{n}**: {c}" for n, c in r2_others.items())
+    return f"""问题:
+{question}
+
+R1 四人初次回答(含你自己,作 context):
+
+{r1_block}
+
+R2 其他三人对 R1 的评论:
+
+{r2_block}
+
+你自己在 R2 说过(不要重复):
+
+{my_r2}
+
+---
+
+这是**第 3 轮 critique**。**禁止重复**你在 R2 已经说过的论点。
+
+请做以下任一(共 **≤ 300 字**),选最让你 itch 的那个:
+
+(a) **回应别人对你 R1/R2 的攻击或 steel-man** — 反驳 / 承认 / 修正
+(b) **挖一个 R2 没人深挖的具体分歧** — 把它说清楚
+(c) **收回你 R2 的某个观点** — 看了别人 R2 反思后明确承认错
+
+约束:
+- 不允许 "都有道理"、"各有优劣"
+- 不允许把别人观点改写得比原话弱再攻击
+- **评价的是观点内容,不是说话人**
+- **第 3 轮的存在意义就是逼你说新东西**,重复 R2 内容会被判废"""
+
+
 def run_session(
     question: str,
     roles: list[Role],
@@ -74,19 +137,39 @@ def run_session(
     session_path: Path,
     *,
     role_model_overrides: Optional[dict[str, str]] = None,
+    critique_rounds: int = 1,
     on_turn: Optional[Callable[[AgentTurn], None]] = None,
     clock: Callable[[], float] = time.time,
 ) -> Session:
-    """role_model_overrides: map role.name → model name. Missing roles fall
+    """Run the roundtable end-to-end. Returns the completed Session.
+
+    role_model_overrides: map role.name → model name. Missing roles fall
     back to that role's preferred_model. Empty dict / None = pure defaults.
-    Validated by the caller (main.py) against MODEL_ENDPOINTS — we trust it
-    here. Role frozen dataclass stays untouched; we resolve per-call."""
+    Validated by the caller (main.py) against MODEL_ENDPOINTS — trusted here.
+    Role frozen dataclass stays untouched; we resolve per-call.
+
+    critique_rounds: 1 (default) or 2.
+      1 = R2 (steel-man + attack on R1) → synth. 9 LLM calls total.
+      2 = R2 + R3 (deep-dive critique with 'don't repeat' guard) → synth.
+          13 LLM calls total, +~45s wall clock.
+    Values ≥ 3 caller's responsibility to reject — debate.py doesn't enforce.
+
+    Round numbering on AgentTurn:
+      - R1 answer turns:   round=1, type="answer"
+      - critique turns:    round=2 (first critique), round=3 (deep-dive)
+      - synth turn:        round = critique_rounds + 2
+                           (N=1 → round=3, preserving the legacy jsonl shape;
+                            N=2 → round=4, distinct from R3 critique turns)
+    Synthesizer prompt itself doesn't care about round numbers — it walks
+    turns by `t.type`. See synth.build_r3_user_prompt for the transcript
+    assembly that's now round-agnostic.
+    """
     overrides = role_model_overrides or {}
 
     def model_for(role: Role) -> str:
         return overrides.get(role.name) or role.preferred_model
 
-    session = Session(question=question, started_at=clock())
+    session = Session(question=question, started_at=clock(), critique_rounds=critique_rounds)
     write_meta(session_path, session)
 
     def _record(turn: AgentTurn) -> None:
@@ -98,13 +181,13 @@ def run_session(
                 pass
         session.turns.append(turn)
 
-    # --- Round 1 ---------------------------------------------------------- #
+    # --- Round 1: initial answers (every persona, no context but the question) #
     for role in roles:
         user_prompt = build_r1_user_prompt(question)
         content = model_fn(model_for(role), role.system_prompt, user_prompt, role.temperature)
         _record(AgentTurn(round=1, role=role.name, type="answer", content=content, ts=clock()))
 
-    # --- Round 2 ---------------------------------------------------------- #
+    # --- Round 2: steel-man + attack on R1 others ------------------------- #
     r1_by_role = {t.role: t.content for t in session.turns if t.round == 1}
     for role in roles:
         others = {name: c for name, c in r1_by_role.items() if name != role.name}
@@ -112,11 +195,27 @@ def run_session(
         content = model_fn(model_for(role), role.system_prompt, user_prompt, role.temperature)
         _record(AgentTurn(round=2, role=role.name, type="critique", content=content, ts=clock()))
 
-    # --- Round 3 ---------------------------------------------------------- #
+    # --- Round 3: deep-dive critique (optional) --------------------------- #
+    if critique_rounds >= 2:
+        r2_by_role = {t.role: t.content for t in session.turns if t.round == 2}
+        for role in roles:
+            others_r2 = {n: c for n, c in r2_by_role.items() if n != role.name}
+            my_r2 = r2_by_role.get(role.name, "")
+            user_prompt = build_r3_critique_prompt(
+                question=question,
+                r1_all=r1_by_role,
+                r2_others=others_r2,
+                my_r2=my_r2,
+            )
+            content = model_fn(model_for(role), role.system_prompt, user_prompt, role.temperature)
+            _record(AgentTurn(round=3, role=role.name, type="critique", content=content, ts=clock()))
+
+    # --- Synth: 整理员 consolidates all critique rounds --------------------- #
+    synth_round = critique_rounds + 2
     synth_text = synthesize(
         question, session.turns, synthesizer, model_fn,
         model_override=overrides.get(synthesizer.name),
     )
-    _record(AgentTurn(round=3, role=synthesizer.name, type="synth", content=synth_text, ts=clock()))
+    _record(AgentTurn(round=synth_round, role=synthesizer.name, type="synth", content=synth_text, ts=clock()))
 
     return session

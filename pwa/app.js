@@ -2379,6 +2379,13 @@ function renderRoundtablesView() {
           <textarea name="question" required rows="3"
             placeholder="例:个人 side project 一开始就上严格 TDD,还是先 spike?"></textarea>
         </label>
+        <div class="rt-rounds-row">
+          <label class="rt-rounds-label">辩论轮数</label>
+          <select name="critique_rounds" class="rt-rounds-select">
+            <option value="1">1 轮(默认 · 9 调用 · ~90s)</option>
+            <option value="2">2 轮(深挖 · 13 调用 · ~2min)</option>
+          </select>
+        </div>
         <details class="rt-model-config" data-details-id="rt-model-config">
           <summary>🎛 模型配置(默认即可)</summary>
           <div class="rt-model-config-body" id="rt-model-config-slot">
@@ -2386,7 +2393,7 @@ function renderRoundtablesView() {
           </div>
         </details>
         <p class="muted" style="font-size:11px;margin:0">
-          约 1-2 分钟出结果(9 个 LLM 调用串行)。结果落在 <code>~/.cc-state/roundtables/</code>。
+          结果落在 <code>~/.cc-state/roundtables/</code>;完成后 R3 推送回原聊天(飞书发起时)。
         </p>
         <button type="submit">开始辩论</button>
       </form>
@@ -2413,11 +2420,14 @@ function _roundtableListRow(r) {
   const when = r.started_at
     ? new Date(r.started_at * 1000).toLocaleString()
     : '';
+  // turns_expected: 9 for critique_rounds=1, 13 for critique_rounds=2.
+  // Old sessions without the field in their meta fall back to 9 via backend.
+  const expected = r.turns_expected || 9;
   const progress = status === 'done'
     ? '✓ 完成'
     : status === 'error'
       ? '✗ 出错'
-      : `${r.turns_done || 0} / 9 轮`;
+      : `${r.turns_done || 0} / ${expected} 轮`;
   return `
     <div class="rt-row">
       <a class="rt-row-link" href="#roundtables/${encodeURIComponent(r.id)}">
@@ -2447,11 +2457,17 @@ async function onCreateRoundtable(e) {
   // the pre-feature traffic.
   const overrides = _loadRtRoleModels();
 
+  // Critique rounds: only send when non-default (= 2). Backend defaults
+  // to 1 if the field is absent, keeping the wire payload minimal and
+  // pre-feature traffic byte-identical.
+  const rounds = parseInt(fd.critique_rounds || '1', 10);
+
   const btn = form.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = '开始中…';
   try {
     const body = { question: fd.question };
     if (Object.keys(overrides).length > 0) body.role_models = overrides;
+    if (rounds === 2) body.critique_rounds = 2;
     const r = await api('/roundtables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2515,25 +2531,43 @@ async function renderRoundtableDetailView(id, opts = {}) {
 
 const _ROLE_ORDER = ['极简派', '场景派', '借鉴派', '悲观派'];
 
+// Round labels — kept in sync with synth.py's _ROUND_LABELS by convention.
+// Adding a 4th critique round here is purely cosmetic; the orchestration
+// caps at 2 today.
+const _RT_ROUND_LABELS = {
+  1: 'Round 1 — 初次回答',
+  2: 'Round 2 — Steel-man + Attack',
+  3: 'Round 3 — 深挖 / 收回 / 回应',
+};
+
 function paintRoundtableDetail(id, row) {
-  const turnsByRound = { 1: {}, 2: {} };
+  // Group every non-synth turn by round. We don't hardcode {1,2} anymore —
+  // critique_rounds=2 sessions have R3 critique turns (round=3, type=critique)
+  // that need their own grid block.
+  const critiqueRounds = row.critique_rounds || 1;
+  const turnsByRound = {};
+  for (let r = 1; r <= critiqueRounds + 1; r++) turnsByRound[r] = {};
   for (const t of row.turns || []) {
-    if (t.round === 1 || t.round === 2) {
+    if (t.type === 'synth') continue;    // synth is handled by row.r3 below
+    if (turnsByRound[t.round]) {
       turnsByRound[t.round][t.role] = t.content;
     }
   }
+
   const r3 = row.r3;
   const status = row.status || 'queued';
   const when = row.started_at
     ? new Date(row.started_at * 1000).toLocaleString()
     : '';
+  const expected = row.turns_expected || 9;
+  const turnsDone = row.turns?.length || 0;
 
   const errorBlock = row.error
     ? `<div class="rt-error">⚠ ${esc(row.error)}</div>`
     : '';
 
-  // R3 first (the meat for decision-makers); R1/R2 below for context.
-  const r3Block = r3 ? `
+  // 整理员 综合 first (the decision-grade output); critique rounds below.
+  const synthBlock = r3 ? `
     <section class="rt-r3">
       <h2>整理员综合</h2>
       ${_rtSection('共识点', r3.parsed['共识点'])}
@@ -2547,12 +2581,18 @@ function paintRoundtableDetail(id, row) {
   ` : (status === 'error' ? '' : `
     <section class="rt-r3 rt-r3-pending">
       <h2>整理员综合</h2>
-      <p class="muted">R1 + R2 共 8 轮跑完后,整理员会给你 <strong>共识点 / 分歧轴 / 判断题</strong>。当前 ${esc(row.turns?.length || 0)} / 9 轮。</p>
+      <p class="muted">共 ${esc(expected)} 轮跑完后,整理员会给你 <strong>共识点 / 分歧轴 / 判断题</strong>。当前 ${esc(turnsDone)} / ${esc(expected)} 轮。</p>
     </section>
   `);
 
-  const r1Cells = _ROLE_ORDER.map((name) => _rtCell(name, turnsByRound[1][name])).join('');
-  const r2Cells = _ROLE_ORDER.map((name) => _rtCell(name, turnsByRound[2][name])).join('');
+  // Render one block per round that has any content (so partial sessions
+  // show what's done so far). Loops R1 → R(critiqueRounds+1).
+  const roundBlocks = [];
+  for (let r = 1; r <= critiqueRounds + 1; r++) {
+    const cells = _ROLE_ORDER.map((name) => _rtCell(name, turnsByRound[r][name])).join('');
+    const label = _RT_ROUND_LABELS[r] || `Round ${r}`;
+    roundBlocks.push(_rtRoundBlock(label, cells));
+  }
 
   $('view').innerHTML = `
     <p><a href="#roundtables" class="back-link">← Roundtable</a></p>
@@ -2560,13 +2600,12 @@ function paintRoundtableDetail(id, row) {
     <div class="rt-meta">
       ${statusTag(status === 'done' ? 'done' : status === 'error' ? 'failed' : 'running')}
       ${when ? `<span class="muted">· ${esc(when)}</span>` : ''}
-      <span class="muted">· ${esc(row.turns?.length || 0)} / 9 轮</span>
+      <span class="muted">· ${esc(turnsDone)} / ${esc(expected)} 轮</span>
     </div>
     ${errorBlock}
     <div class="rt-detail">
-      ${r3Block}
-      ${_rtRoundBlock('Round 1 — 初次回答', r1Cells)}
-      ${_rtRoundBlock('Round 2 — Steel-man + Attack', r2Cells)}
+      ${synthBlock}
+      ${roundBlocks.join('')}
     </div>
   `;
 }

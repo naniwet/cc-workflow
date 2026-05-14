@@ -50,6 +50,7 @@ def write_meta(session_path: Path, session: Session) -> None:
         "_meta": True,
         "question": session.question,
         "started_at": session.started_at,
+        "critique_rounds": session.critique_rounds,
         "version": SCHEMA_VERSION,
     }
     with session_path.open("w", encoding="utf-8") as f:
@@ -74,7 +75,11 @@ def read_session(session_path: Path) -> Session:
     if not head.get("_meta"):
         raise ValueError(f"missing meta line in session file: {session_path}")
 
-    session = Session(question=head["question"], started_at=head["started_at"])
+    session = Session(
+        question=head["question"],
+        started_at=head["started_at"],
+        critique_rounds=head.get("critique_rounds", 1),    # legacy jsonl default
+    )
     for line in lines[1:]:
         rec = json.loads(line)
         session.turns.append(

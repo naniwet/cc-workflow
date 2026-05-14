@@ -1592,6 +1592,28 @@ pre {
   word-break: break-word;
 }
 
+/* "辩论轮数" inline row in the new-roundtable form — a label + a thin
+   native <select>. Native is fine here because: (a) there are only 2
+   options, (b) the select isn't nested inside a dark menu like the
+   workspace ⋯ where the system popup looked foreign. Inherits dark
+   styling from the global `input, select, textarea` rule. */
+.rt-rounds-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rt-rounds-label {
+  flex: 0 0 auto;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: 0;    /* override the form-level <label> indent */
+}
+.rt-rounds-select {
+  flex: 1;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
 /* Per-role model override block — collapsible <details> inside the new-
  * roundtable form. Default collapsed; opens to 5 role pickers (4 personas
  * + 1 synthesizer). Each picker is itself a <details> that, when expanded,

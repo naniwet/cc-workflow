@@ -40,30 +40,24 @@ def submit(
     question: str,
     *,
     role_models: dict[str, str] | None = None,
+    critique_rounds: int = 1,
     on_complete: Optional[OnCompleteFn] = None,
 ) -> Path:
     """Kick off a roundtable session in a background thread.
 
     role_models: optional per-role model override. Map role name → model
     name. Caller (main.py) is responsible for validating against
-    MODEL_ENDPOINTS — we just pass through. Unknown role names are
-    no-op (debate.run_session falls back to each role's preferred_model).
+    MODEL_ENDPOINTS — we just pass through.
+
+    critique_rounds: 1 (default) or 2. See debate.run_session docstring.
+    Caller is responsible for clamping — we just pass through.
 
     on_complete: optional callback fired when the worker thread finishes
-    (success or failure). Receives the session_path. Used by im_feishu to
-    push the R3 result back to the originating Feishu chat — the adapter
-    re-reads the jsonl itself to decide what message to send (success card
-    vs failure text).
+    (success or failure). Receives the session_path.
 
     NB: callbacks DON'T survive backend restart. If the worker thread is
-    killed mid-debate (process exit), no callback fires. Users who care
-    can find the session in /roundtables anyway — jsonl is the source of
-    truth, callback is just opportunistic push.
-
-    Synchronously:
-      - Compute the session_path (used as the public session id)
-      - Write the meta line so GET /roundtables/{id} works immediately
-      - Spawn the worker thread
+    killed mid-debate, no callback fires. jsonl is still the source of
+    truth — callback is just opportunistic push.
 
     Returns the session_path. Caller can derive the id via path.stem.
     """
@@ -73,11 +67,15 @@ def submit(
     path = session_path_for(question, started_at, sessions_dir)
     # Write meta synchronously so GET /roundtables/{id} can find the row
     # immediately, before the worker thread has progressed at all.
-    write_meta(path, Session(question=question, started_at=started_at))
+    write_meta(path, Session(
+        question=question,
+        started_at=started_at,
+        critique_rounds=critique_rounds,
+    ))
 
     t = threading.Thread(
         target=_execute,
-        args=(question, path, dict(role_models or {}), on_complete),
+        args=(question, path, dict(role_models or {}), critique_rounds, on_complete),
         name=f"roundtable-{path.stem}",
         daemon=True,
     )
@@ -89,15 +87,16 @@ def _execute(
     question: str,
     session_path: Path,
     role_models: dict[str, str],
+    critique_rounds: int,
     on_complete: Optional[OnCompleteFn],
 ) -> None:
-    """Run the 3-round debate end-to-end. Any error is written to the
-    session jsonl as a synthetic __error__ turn so the PWA can show it.
+    """Run the debate end-to-end. Any error is written to the session
+    jsonl as a synthetic __error__ turn so the PWA can show it.
 
     on_complete fires in a `finally` — so subscribers see both happy and
     sad paths, and a broken callback can't poison the next session (we
-    swallow exceptions from it on principle: it's an opportunistic push,
-    failures shouldn't cascade)."""
+    swallow its exceptions: it's an opportunistic push, failures shouldn't
+    cascade)."""
     try:
         run_session(
             question=question,
@@ -106,6 +105,7 @@ def _execute(
             model_fn=call_model,
             session_path=session_path,
             role_model_overrides=role_models,
+            critique_rounds=critique_rounds,
         )
     except ModelError as e:
         # Expected failure mode (provider down, rate limit exhausted,

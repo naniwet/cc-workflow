@@ -40,3 +40,8 @@ class Session:
     question: str
     started_at: float
     turns: list[AgentTurn] = field(default_factory=list)
+    # How many critique rounds were configured for this session. 1 = legacy
+    # (R2 alone). 2 = R2 + R3 deep-dive. Stored in the meta line so PWA can
+    # compute the right "x/N turns" progress fraction. Old jsonl files
+    # don't carry this; read_session defaults to 1 for back-compat.
+    critique_rounds: int = 1

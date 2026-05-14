@@ -16,6 +16,15 @@ from .model import ModelFn
 
 SECTION_HEADERS: tuple[str, str, str] = ("共识点", "分歧轴", "判断题")
 
+# Round labels for the transcript handed to 整理员. Unknown rounds get a
+# generic fallback in build_r3_user_prompt — keeps the prompt extensible
+# without needing to update this dict every time debate.py adds a round.
+_ROUND_LABELS: dict[int, str] = {
+    1: "Round 1 — 初次回答",
+    2: "Round 2 — Steel-man + Attack",
+    3: "Round 3 — 深挖 / 收回 / 回应",
+}
+
 
 # --------------------------------------------------------------------------- #
 # R3 user prompt                                                              #
@@ -23,23 +32,27 @@ SECTION_HEADERS: tuple[str, str, str] = ("共识点", "分歧轴", "判断题")
 
 
 def build_r3_user_prompt(question: str, turns: list[AgentTurn]) -> str:
-    """Compose the user message handed to the 整理员 in R3.
+    """Compose the user message handed to the 整理员.
 
-    Turns are grouped by round (R1 then R2), and within a round shown in the order
-    they appear in `turns`.
+    Round-agnostic: walks every non-synth turn grouped by round, in
+    ascending round order. This lets the orchestrator add a 3rd critique
+    round (or more in the future) without touching synth.
+
+    Synth turns are filtered out — they're the output we're about to
+    produce, not part of the debate transcript the integrator sees.
     """
-    r1 = [t for t in turns if t.round == 1]
-    r2 = [t for t in turns if t.round == 2]
+    non_synth = [t for t in turns if t.type != "synth"]
+    rounds_in_order = sorted({t.round for t in non_synth})
 
-    def _format_block(round_label: str, ts: list[AgentTurn]) -> str:
+    def _label(r: int) -> str:
+        return _ROUND_LABELS.get(r, f"Round {r}")
+
+    def _format_block(r: int) -> str:
+        ts = [t for t in non_synth if t.round == r]
         body = "\n\n".join(f"**{t.role}**:\n{t.content}" for t in ts)
-        return f"### {round_label}\n\n{body}"
+        return f"### {_label(r)}\n\n{body}"
 
-    blocks = []
-    if r1:
-        blocks.append(_format_block("Round 1 — 初次回答", r1))
-    if r2:
-        blocks.append(_format_block("Round 2 — Steel-man + Attack", r2))
+    blocks = [_format_block(r) for r in rounds_in_order]
     transcript = "\n\n".join(blocks)
 
     return f"""问题:
@@ -47,7 +60,7 @@ def build_r3_user_prompt(question: str, turns: list[AgentTurn]) -> str:
 
 ---
 
-四个角色的 R1 + R2 轨迹:
+四个角色的辩论轨迹:
 
 {transcript}
 

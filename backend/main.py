@@ -653,6 +653,11 @@ class NewRoundtableRequest(BaseModel):
     # Missing roles fall back to that role's preferred_model in roles.py.
     # Validated server-side against MODEL_ENDPOINTS — see create_roundtable.
     role_models: Optional[dict[str, str]] = None
+    # Number of critique rounds. 1 = current behavior (R2 only).
+    # 2 = R2 + R3 deep-dive (empirically validated worth shipping;
+    #     adds ~45s wall clock per session). Higher values rejected —
+    #     N≥3 hasn't been validated and is likely to produce padded output.
+    critique_rounds: int = Field(default=1, ge=1, le=2)
 
 
 def _roundtable_session_summary(path: Path) -> dict:
@@ -667,18 +672,23 @@ def _roundtable_session_summary(path: Path) -> dict:
     except (OSError, json.JSONDecodeError):
         return {
             "id": path.stem, "question": "(unreadable)",
-            "started_at": 0, "turns_done": 0, "status": "error",
+            "started_at": 0, "turns_done": 0, "turns_expected": 9, "status": "error",
         }
-    # Status inference: 9 turns expected; if __error__ line is present
-    # we'd need to read the body to detect — keep summary cheap and let
-    # the detail endpoint expose the precise error.
+    # Expected turn count depends on critique_rounds:
+    #   N=1 → 4 (R1) + 4 (R2) + 1 (synth) = 9
+    #   N=2 → 4 (R1) + 4 (R2) + 4 (R3) + 1 (synth) = 13
+    # Legacy jsonl (no critique_rounds in meta) defaults to N=1 → 9.
+    critique_rounds = head.get("critique_rounds", 1)
+    turns_expected = 4 + 4 * critique_rounds + 1
     turns_done = rest_count
-    status = "done" if turns_done >= 9 else ("running" if turns_done > 0 else "queued")
+    status = "done" if turns_done >= turns_expected else ("running" if turns_done > 0 else "queued")
     return {
         "id": path.stem,
         "question": head.get("question", ""),
         "started_at": head.get("started_at", 0),
         "turns_done": turns_done,
+        "turns_expected": turns_expected,
+        "critique_rounds": critique_rounds,
         "status": status,
     }
 
@@ -744,7 +754,11 @@ def create_roundtable(req: NewRoundtableRequest) -> dict:
                     "error": f"unknown model: {model_name!r}",
                     "known": sorted(roundtable_model.MODEL_ENDPOINTS),
                 })
-    path = roundtable_runner.submit(req.question.strip(), role_models=req.role_models)
+    path = roundtable_runner.submit(
+        req.question.strip(),
+        role_models=req.role_models,
+        critique_rounds=req.critique_rounds,
+    )
     return {"id": path.stem, "status": "queued", "question": req.question}
 
 
@@ -782,11 +796,14 @@ def get_roundtable(session_id: str) -> dict:
         r3 = {"raw": raw, "parsed": parse_synthesis(raw)}
     status = "done" if r3_turns else ("error" if error_turns else
               ("running" if normal_turns else "queued"))
+    turns_expected = 4 + 4 * session.critique_rounds + 1
     return {
         "id": session_id,
         "question": session.question,
         "started_at": session.started_at,
         "status": status,
+        "critique_rounds": session.critique_rounds,
+        "turns_expected": turns_expected,
         "turns": [
             {"round": t.round, "role": t.role, "type": t.type, "content": t.content, "ts": t.ts}
             for t in normal_turns
