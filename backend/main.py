@@ -860,7 +860,10 @@ async def feishu_card_callback(request: Request) -> dict:
 # 2026-05-14 — the PWA is the sole UI now. Visiting / redirects to /pwa/.
 # Not PROTECT-gated: the /pwa/ static layer is public anyway (no secrets
 # in the shell), and the login page lives under it.
-@app.get("/", include_in_schema=False)
+# GET + HEAD both — health-check tools (curl -sI, monitoring scrapers,
+# load balancers) typically send HEAD; without explicit HEAD support
+# FastAPI returns 405.
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 def _root() -> RedirectResponse:
     return RedirectResponse(url="/pwa/", status_code=307)
 
