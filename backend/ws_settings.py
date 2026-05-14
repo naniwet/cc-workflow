@@ -4,7 +4,8 @@ Schema:
     {
       "<workspace-name>": {
         "provider": "deepseek",     # optional, mutable via PUT settings
-        "engine":   "claude"        # set at create time, IMMUTABLE thereafter
+        "engine":   "claude",       # set at create time, IMMUTABLE thereafter
+        "trust":    true            # optional, mutable; bypasses tool approval
       },
       ...
     }
@@ -12,10 +13,12 @@ Schema:
 Fields:
     provider — soft config. Switched anytime via PUT /workspaces/{name}/settings.
                None or absent = fall back to global config.toml provider.
-    engine   — bound to the workspace at creation. claude or codex. No PUT
-               endpoint can change it: to switch engines, delete + recreate
-               the workspace. Older workspaces that predate this field fall
-               back to DEFAULT_ENGINE.
+    engine   — bound to the workspace at creation. Only "claude" is supported
+               since 2026-05-14 (codex was removed; see README). Field still
+               written so older workspaces remain readable; engine_for falls
+               back to DEFAULT_ENGINE for entries that predate this field.
+    trust    — per-workspace tool-approval bypass. True → claude runs with
+               --permission-mode bypassPermissions (no [Approve][Deny] prompts).
 
 Why a module of its own:
     main.py (REST handlers) and im_feishu.py (Feishu webhook +
@@ -35,7 +38,6 @@ from . import config
 _PATH = config.CCW_DIR / "workspaces.json"
 
 # Workspaces created before the "engine" field existed fall back to claude.
-# Anyone wanting codex on an existing workspace recreates it.
 DEFAULT_ENGINE = "claude"
 
 
@@ -87,8 +89,6 @@ def trust_for(workspace: str) -> bool:
     When False, the default `acceptEdits` is used — Edit/Write auto-approved,
     others fall through to "please approve" text in headless mode.
 
-    (The codex-forces-true short-circuit was removed 2026-05-14 along with
-    codex engine support. See README "engine 现状".)
     """
     ws = (load().get(workspace) or {}).get("trust")
     if isinstance(ws, bool):

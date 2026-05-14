@@ -11,12 +11,15 @@
 
 ## 它能干什么
 
-- **PWA**(手机/PC 浏览器都能装):4 列 Workspaces 视图 + Tasks(cron)视图,实时看每个 workspace 的 agent 运行状态
-- **飞书集成**:在群里 `@bot daily-digest 总结一下昨天的 commit` 就能触发,执行完结果以飞书卡片回到群里
-- **Linux cron Loop**:每天 9 点拉代码、每小时巡检 PR、隔半小时跑测试都行
-- **多 provider**:通过 ccswitch-style providers.json 可切到 DeepSeek / Kimi 等 Anthropic 兼容端点(codex 引擎已下线,详见 README 末尾"已知限制")
+- **PWA**(手机/PC 浏览器都能装):3 个 tab — **Workspaces**(每个 workspace 一条时间线 + 输入框)/ **Tasks**(cron loop 列表)/ **圆桌**(多 agent 辩论)
+- **飞书集成**:在群里 `@bot daily-digest 总结一下昨天的 commit` 就能触发,执行完结果以飞书卡片回到群里;`/use` `/where` `/ws` `/sessions` `/loops` `/run` 6 个 slash 命令
+- **Linux cron Loop**:每天 9 点拉代码、每小时巡检 PR、隔半小时跑测试都行;PWA 上每个 loop 也能手动点 **Run now**
+- **多 provider**:通过 ccswitch-style providers.json 可切到 DeepSeek / Kimi 等 Anthropic 兼容端点
 - **每 workspace 独立配置**:provider(可改)+ trust(可改;开启后跳过工具审批)
 - **工具审批**(可选):Claude 想跑 Bash / WebFetch 时 PWA 弹 `[Approve] [Deny]`,审批通过才执行(走 Claude Code PreToolUse hook)
+- **Slash 命令自动补全**(PWA):在输入框打 `/` 弹出当前 workspace 所有 skill(project + user + plugin 三层来源),Tab 补全
+- **DIY 自动 compact**:长对话接近 context 上限时,agent-run 自动调用 9 段式 summary prompt(基于 Claude Code `/compact` 反向工程),清旧 session,新 session 以 summary 续——transparent,你不会感知。撞坏了也有手动 **Reset session** 按钮兜底
+- **圆桌会议**(从 [AgentRoundtable](https://github.com/wet-/AgentRoundtable) 移植):4 角色(极简派 / 场景派 / 借鉴派 / 悲观派)+ 1 个整理员,对一个决策级问题辩论 3 轮,输出 **共识点 / 分歧轴 / 判断题**。让你做决定,不替你做决定。
 
 ---
 
@@ -31,18 +34,21 @@
         ┌──────────────────────────────────────────────────────┐
         │  FastAPI gateway  (backend/main.py + 8765 端口)       │
         │  - 鉴权: HMAC 签名 session cookie                     │
-        │  - /run /loops /workspaces /approvals /im/feishu/*    │
-        └─────────────────────────┬────────────────────────────┘
-                                  │ subprocess
-                                  ▼
-        ┌──────────────────────────────────────────────────────┐
-        │  agent-run.sh  (Claude / Codex 多引擎包装 + 并发锁)  │
-        │  - PreToolUse hook → /approvals/internal/* 长轮询      │
-        │  - 写状态到 ~/.cc-state/{runs,jobs,locks,logs}        │
-        └──────────────────────────────────────────────────────┘
-                                  ▲
-                                  │ 同样的执行路径
-                                  │
+        │  - /run /loops /workspaces /roundtables /skills        │
+        │    /approvals /im/feishu/*                            │
+        └────────┬───────────────────────────┬─────────────────┘
+                 │ subprocess                │ in-process HTTP
+                 ▼                           ▼
+   ┌─────────────────────────────┐  ┌────────────────────────┐
+   │  agent-run.sh (claude 包装) │  │  roundtable runner     │
+   │  + flock 并发锁 + 工具审批  │  │  4 角色 × 3 轮 LLM 调用 │
+   │  + DIY auto-compact         │  │  → ~/.cc-state/         │
+   │  + session resume           │  │     roundtables/*.jsonl │
+   │  → ~/.cc-state/{runs,jobs,  │  │  (DeepSeek + Kimi 直 v1) │
+   │     locks,logs}             │  └────────────────────────┘
+   └──────────────▲──────────────┘
+                  │ 同样的执行路径
+                  │
         ┌──────────────────────────────────────────────────────┐
         │  Linux cron  (/etc/cron.d/cc-loops)                  │
         │  每个 cron loop 都是一个 agent-run.sh 调用            │
@@ -172,9 +178,17 @@ cc-workflow/
 │   ├── cron_state.py             #   cron file 读写 + jobs/*.json
 │   ├── ws_settings.py            #   per-workspace provider/engine/trust
 │   ├── approvals.py              #   工具审批 in-memory 队列 + 长轮询
-│   ├── im_feishu.py              #   飞书 webhook + 卡片回复
+│   ├── im_feishu.py              #   飞书 webhook + 卡片回复 + slash 命令
 │   ├── ui_cards.py               #   Card 抽象(渲染中间层)
-│   └── llm.py                    #   后端直调 LLM(parse-nl 用)
+│   ├── skills.py                 #   slash command 扫描 (.claude/commands)
+│   ├── llm.py                    #   后端直调 LLM(parse-nl 用)
+│   └── roundtable/               #   圆桌会议(第三 tab)— 移植自 AgentRoundtable
+│       ├── roles.py              #     4 个 persona prompt + 整理员(产品 IP)
+│       ├── debate.py             #     R1/R2/R3 三轮 orchestrator
+│       ├── synth.py              #     R3 整理员 prompt + 解析
+│       ├── model.py              #     stdlib urllib OpenAI-compat client
+│       ├── runner.py             #     in-process thread launcher
+│       └── data.py / io.py       #     dataclasses + jsonl 持久化
 ├── pwa/                          # 单页前端(原生 JS,无 build)
 │   ├── index.html  app.js  style.css
 │   ├── login.html                #   /auth/login 登录页

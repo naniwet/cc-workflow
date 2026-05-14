@@ -5,7 +5,7 @@ Routes:
   POST   /auth/login                           PUBLIC (sets session cookie)
   POST   /auth/logout                          PUBLIC (clears session cookie)
   GET    /auth/me                              session   (returns current username)
-  GET    /                                     session   (Phase 1 simple page)
+  GET    /                                     redirect → /pwa/  (no auth)
   POST   /run                                  session
   GET    /runs/{task_id}                       session
   GET    /sessions                             session
@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -855,16 +855,14 @@ async def feishu_card_callback(request: Request) -> dict:
     return parsed
 
 
-# ---------- Phase 1 ugly trigger page (PRD §6.0) ----------
-# GET / is the only public entry — browser prompts basic auth, then the
-# HTML's fetch() calls reuse the same credentials for all protected APIs.
-# No /static mount: index.html is the sole asset (no external CSS/JS/images).
-_INDEX_HTML = config.REPO_ROOT / "backend" / "static" / "index.html"
-
-
-@app.get("/", include_in_schema=False, dependencies=PROTECT)
-def _root() -> FileResponse:
-    return FileResponse(_INDEX_HTML)
+# ---------- Root redirect → PWA ----------
+# The Phase 1 minimalist HTML at backend/static/index.html was deleted
+# 2026-05-14 — the PWA is the sole UI now. Visiting / redirects to /pwa/.
+# Not PROTECT-gated: the /pwa/ static layer is public anyway (no secrets
+# in the shell), and the login page lives under it.
+@app.get("/", include_in_schema=False)
+def _root() -> RedirectResponse:
+    return RedirectResponse(url="/pwa/", status_code=307)
 
 
 # ---------- Phase 2 PWA-lite (P0-6a shell; views land in P0-6b/c) ----------

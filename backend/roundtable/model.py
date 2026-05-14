@@ -3,9 +3,9 @@
 Diverges from upstream AgentRoundtable's model.py:
   - No `openai` SDK dependency — uses stdlib urllib (matches backend/llm.py's
     pattern). Cost: ~50 fewer lines of dependency surface.
-  - Endpoint config comes from ~/.cc-workflow/providers.json#openai_endpoints
-    (shared with codex CLI via codex_profiles[X].endpoint references — same
-    DeepSeek key used in two places before is now stored once).
+  - Endpoint config comes from ~/.cc-workflow/providers.json#openai_endpoints.
+    Each entry is {base_url, api_key} for an OpenAI-compatible /v1 endpoint
+    (DeepSeek / Moonshot etc).
   - Model-name → endpoint mapping in the MODEL_ENDPOINTS table below.
     Adding a new model name is a code change (matches the upstream "code
     is the registry" design choice).
@@ -74,9 +74,6 @@ MODEL_ENDPOINTS: dict[str, str] = {
 
 def _load_endpoint(name: str) -> dict:
     """Resolve providers.json#openai_endpoints.<name> → {base_url, api_key}.
-
-    Shared schema with codex_profiles' endpoint references — same DeepSeek
-    key fills both the codex path and the roundtable path.
 
     Raises ModelBadRequestError if the endpoint isn't configured (so the
     user gets a clean error in the PWA rather than a network error 60s later).
