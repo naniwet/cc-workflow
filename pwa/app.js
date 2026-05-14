@@ -1190,13 +1190,22 @@ function _providerOptionsHtml(selected, includeDefault) {
 // One click = switch (vs select's 2-click open-then-pick).
 function _providerRadioListHtml(name, wsProvider) {
   const list = lastData.providers || [];
-  const defaultLabel = lastData.globalProvider
-    ? `Default · ${esc(lastData.globalProvider)}`
+  const globalDefault = lastData.globalProvider;
+  const defaultLabel = globalDefault
+    ? `Default · ${esc(globalDefault)}`
     : 'Default';
   const rows = [];
   // The "" value means "no per-ws override; use config.toml default".
   rows.push(_providerRadioRowHtml(name, '', defaultLabel, !wsProvider));
   for (const p of list) {
+    // Skip the row that's identical to the Default option in behavior.
+    // Picking "Default" with globalProvider=deepseek vs. picking "deepseek"
+    // explicitly produces the exact same wire effect — listing both is
+    // confusing visual noise. Exception: when THIS workspace is explicitly
+    // pinned to globalDefault (the "I want to lock to this provider even
+    // if I change my global default later" path), we still surface the
+    // row so the user can see the pin and unpin it via the Default row.
+    if (p === globalDefault && p !== wsProvider) continue;
     rows.push(_providerRadioRowHtml(name, p, esc(p), p === wsProvider));
   }
   return rows.join('');
@@ -2055,8 +2064,16 @@ function paintRunDetail(id, row) {
   const startedAt = row.started_at
     ? new Date(row.started_at * 1000).toLocaleString()
     : '';
+  // Back link points to the run's own workspace detail page when we know
+  // it (~always, except for the rare orphan run whose workspace was
+  // deleted), so the user comes back to where they were instead of the
+  // overview. Falls through to the overview for the orphan case.
+  const backHref = row.workspace
+    ? `#workspaces/${encodeURIComponent(row.workspace)}`
+    : '#workspaces';
+  const backLabel = row.workspace ? `← ${esc(row.workspace)}` : '← Workspaces';
   $('view').innerHTML = `
-    <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
+    <p><a href="${backHref}" class="back-link">${backLabel}</a></p>
     <h1>Run <code>${esc(id.slice(0, 8))}</code></h1>
     <div class="run-meta">
       ${statusTag(status)}
