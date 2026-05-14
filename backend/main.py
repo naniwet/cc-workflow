@@ -686,8 +686,10 @@ def get_roundtable(session_id: str) -> dict:
         error: str | null,
       }
     """
-    # Validate id shape against our slug regex to avoid path traversal.
-    if not re.match(r"^[A-Za-z0-9._\-]+$", session_id):
+    # Validate id shape — slug generation in io.py allows Unicode word chars
+    # (so Chinese question titles flow through to filenames), so this
+    # validator must too. Reject only the path-traversal markers: `/` and `..`.
+    if "/" in session_id or ".." in session_id or session_id.startswith("."):
         raise HTTPException(400, {"error": "bad session id"})
     path = config.ROUNDTABLES_DIR / f"{session_id}.jsonl"
     if not path.is_file():
@@ -725,7 +727,8 @@ def delete_roundtable(session_id: str) -> dict:
     """Remove a session file. No running-thread tracking — if you delete
     while a session is in flight, the worker's next append_turn will
     silently re-create the file (acceptable for single-user)."""
-    if not re.match(r"^[A-Za-z0-9._\-]+$", session_id):
+    # Same Unicode-tolerant guard as GET — see comment there.
+    if "/" in session_id or ".." in session_id or session_id.startswith("."):
         raise HTTPException(400, {"error": "bad session id"})
     path = config.ROUNDTABLES_DIR / f"{session_id}.jsonl"
     if not path.is_file():
