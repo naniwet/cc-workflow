@@ -272,13 +272,18 @@ def list_codex_providers() -> list[str]:
     different from the one shown for a claude workspace — the keys here are
     consumed by agent-run.sh's setup_codex_provider, not setup_provider.
 
-    Filter: include only profiles with non-empty `env` OR a `base_url` —
-    everything else is a placeholder that can't actually run.
+    Filter: include profiles that actually have something agent-run can
+    consume. Three shapes count as "configured":
+      - `endpoint`  (new endpoint-ref shape, references openai_endpoints)
+      - `base_url`  (legacy inline custom-endpoint shape)
+      - non-empty `env`  (env-only shape, e.g. default "openai" with
+                         just OPENAI_API_KEY set)
+    Everything else is a placeholder that can't actually run.
     """
     cprofiles = _load_providers_json().get("codex_profiles") or {}
     return sorted(
         name for name, p in cprofiles.items()
-        if (p.get("env") or {}) or p.get("base_url")
+        if p.get("endpoint") or p.get("base_url") or (p.get("env") or {})
     )
 
 
