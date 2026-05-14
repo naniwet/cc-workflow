@@ -1,6 +1,6 @@
 # cc-workflow — 设计文档目录
 
-> ⚠ **这些是历史设计文档**。系统当前如何工作请看仓库根目录的 [`README.md`](../README.md)。
+> ⚠ **这些是历史设计文档**。系统当前如何工作请看仓库根目录的 [`README.md`](../../README.md)。
 >
 > 01-04 记录的是 Phase 1/2 开工前的规划 + T+0 brief,部分内容(尤其鉴权模型、
 > 工具审批路径、per-workspace 配置)已经在实施过程中演化。保留它们是为了
@@ -36,13 +36,18 @@
 
 平时分开跑,**遇到架构问题 / PRD 不清楚 / 想加新需求**时回 Cowork。
 
-## 已确认的关键决策
+## 已确认的关键决策(**当前实际状态,不是 v1.5 计划**)
 
-- 单用户、4 repo、不设 API 硬上限(软告警)、禁止 push main、不启用 Cloud Routines
+> ⚠ 部分决策在实施期间偏离了 v1.5 PRD。下表已更新到现实。完整偏离对照见 `01-prd.md` 附录 A。
+
+- 单用户、**workspaces 动态注册**(`workspaces.json`,不再硬编码 4 repo)、不设 API 硬上限(软告警)、禁止 push main、不启用 Cloud Routines
 - 不依赖 OpenClaw,用 Linux cron + 自建 FastAPI gateway
-- 飞书 + 钉钉(将来)用适配器形态,可加 Slack/Telegram
-- 5 引擎: Claude / Codex / GPT / DeepSeek / Kimi,通过 agent-run 抽象
-- 多 agent 模式默认 devils-advocate(3 agent),P1 实施
-- 守护进程数 ≤ 2,总代码量 ≤ 1500 行
+- 飞书已上线;**钉钉 / Slack 通过 `ui_cards.py` 抽象层将来可加**
+- **唯一引擎: Claude** (`claude` CLI)。Codex 已下线(2026-05-14,见根目录 README "已知限制");DeepSeek / Kimi 作为 Anthropic-compat backend 经 `providers.json` 接入,**不是独立 engine**
+- **圆桌会议(多 agent)已在 P0 完成**(从 `AgentRoundtable` 移植),不是 P1
+- **鉴权模型**: HMAC 签名 session cookie(30 天)— 不是 Basic auth
+- **工具审批**: PreToolUse hook → backend 长轮询 → PWA 弹按钮(per-workspace `trust` toggle 可全跳过)
+- **DIY auto-compact**: 长对话接近 context 上限时自动 9 段式 summary,清旧 session 续新 session
+- 守护进程数 = 2(cc-workflow.service + cron);**总代码量 ~2000 行**(高于 v1.5 预算的 1500)
 
 完整决策演进见 `01-prd.md` 附录 A。

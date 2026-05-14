@@ -1,5 +1,14 @@
 # 个人 AI 工作流系统 — 方案文档
 
+> ⚠ **历史文档警示**:
+> 这是 Phase 1/2 开工前的设计 PRD。Phase 1+2 完成后,**实际实现与本 PRD 在多处偏离**——尤其鉴权模型(Basic → HMAC)、工具审批(后加)、圆桌会议(从 P1 提前到 P0)、Codex 引擎(已下线)、workspaces(从硬编码 4 个改为动态注册)。
+>
+> **系统当前如何工作请看仓库根目录 [`README.md`](../../README.md)**。本文档保留是为了:
+> 1. 记录"为什么"(decisions + trade-offs 仍准确)
+> 2. 看决策的演进(附录 A 实施偏离对照)
+>
+> 想加新需求或理解架构 → 先读 README.md,**再回来读这里看 trade-off 历史**。
+
 ## 0. TL;DR
 
 把手机变成 Claude Code(以及未来 Codex / GPT / DeepSeek / Kimi)的远程信号器。**phone 触发,server 干活,push 通知**。3 层:
@@ -539,3 +548,27 @@ T+5d          E2E 测试 (场景 A/B/C) + buffer
 - 新增 P0-8 可靠性(备份 / 日志轮转 / worktree 清理 / 服务自启)
 - 多 agent 详细设计移到 `future/multi-agent-design.md`,P0 不实施
 - 时间估算改为依赖序(T+0、T+0.5d、T+1d ...),不用日历日
+
+---
+
+## 附录 B. 实施期间的偏离(v1.5 PRD vs 实际,2026-05-14 截止)
+
+Phase 1+2 完成后,实际实现与本 PRD 偏离的关键点:
+
+| 维度 | v1.5 PRD 计划 | 实际实现 | 偏离原因 |
+|---|---|---|---|
+| **鉴权模型** | HTTP Basic auth(P0-3) | **HMAC 签名 session cookie(30 天)** | Quark / 微信内置浏览器对 `WWW-Authenticate` 处理不一致,Phase 2 后期换 |
+| **CSRF token** | P0-7d 子项,double-submit | **整体取消** | HMAC session cookie 模型下不需要;PWA 同源 + 飞书签名校验已足够 |
+| **Codex 引擎** | P0-1 best-effort,P1-1 深度集成 | **2026-05-14 完全下线**,只 Claude | codex-cli 0.130+ 废弃 `wire_api=chat`,DeepSeek/Kimi 不支持 `/v1/responses`,结构性不可用 |
+| **Engine 抽象** | 5 引擎(claude/codex/gpt/ds/kimi)| **仅 Claude 是 engine;DeepSeek/Kimi 通过 `providers.json` 做 Anthropic-compat backend** | engine ≠ provider,二者实际是不同抽象层 |
+| **Workspaces** | 硬编码 4 repo | **`workspaces.json` 动态注册**,PWA 上可加 | 4 repo 写死太僵硬,加新项目要改代码不可接受 |
+| **per-workspace 配置** | 无 | **新增**:provider / trust toggle 落到 `workspaces.json` | 不同 repo 要用不同 provider / 不同审批策略 |
+| **圆桌会议(multi-agent)** | P1-3 | **P0 已完成**,移植自 [AgentRoundtable](https://github.com/wet-/AgentRoundtable) | "圆桌"是用户深度场景,实施时一并交付价值更高 |
+| **工具审批** | 未规划 | **新增**:`scripts/cc-approve-hook.sh` PreToolUse hook + `backend/approvals.py` 长轮询 + PWA `[Approve] [Deny]` 按钮 | trust toggle 不开时需要可控审批,补漏 |
+| **DIY auto-compact** | 未规划 | **新增**:agent-run 检测 `input_tokens > 阈值` → 9 段式 summary → 续 session | Claude Code `/compact` 是 TUI-only,headless 撞 context 上限会崩 |
+| **PWA 视图数量** | 2 视图(Workspaces + Tasks) | **3 视图**(+ 圆桌) | 圆桌从 P1 提前到 P0 |
+| **Slash 命令数量** | 4 (`/sessions /loops /run /templates`) | **6**(`/use /where /ws /sessions /loops /run`) | 多 workspace + auto-compact 需要更多控制命令 |
+| **代码量** | ≤ 1500 行 | **~2000 行** | 圆桌 + 审批 + auto-compact + per-ws 配置 都是 P0 后期加的真功能 |
+| **PWA 缓存** | cache-only sw | **网络优先,失败回落缓存** | 开发期间频繁发布,缓存优先会导致用户看不到新 UI |
+
+完整决策回溯见仓库根目录 `README.md` 的 **"当前架构关键决策"** 表。

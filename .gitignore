@@ -21,3 +21,11 @@ secrets.toml
 providers.json
 .cc-workflow/
 .cc-state/
+
+# Local Claude Code workspace state (settings.local.json captures the
+# user's machine-specific allowlist with absolute paths; skills under
+# .claude/skills/ are project-private experiments).
+.claude/
+
+# Misc local scratch dirs — never project artifacts.
+packages/

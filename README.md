@@ -1,8 +1,29 @@
 # cc-workflow
 
+> **English TL;DR** *(中文版见下方)*
+>
+> A personal AI-workflow gateway. Your phone (PWA) or Feishu group sends a
+> prompt; a single FastAPI service on a small VPS runs `claude` (Claude Code
+> CLI) inside the right git workspace; results come back as a streaming
+> timeline in the PWA and as a Feishu card in chat. Linux `cron` triggers the
+> same execution path for hands-off recurring loops. A third tab runs an
+> in-process "roundtable" — four prompted personas debate a decision-grade
+> question across 3 rounds, then a synthesizer summarizes consensus and
+> remaining splits.
+>
+> Single-user, single-machine. Daemons: just the FastAPI service + system
+> `cron`. No Redis / Celery / ORM / build step. ~2k LOC of Python + vanilla
+> JS. Tested on Ubuntu 22.04 / 24.04 (4C8G is plenty). MIT licensed —
+> intended as a reference implementation for your own self-hosted setup, not
+> as a multi-tenant SaaS.
+>
+> Start at [`deploy/INSTALL.md`](deploy/INSTALL.md).
+
+---
+
 > 个人 AI 工作流系统:**手机当信号器,服务器当执行引擎**。
 >
-> 在 PWA 或飞书里发指令 → 服务器跑 Claude Code / Codex → 结果回推。
+> 在 PWA 或飞书里发指令 → 服务器跑 Claude Code → 结果回推。
 > Linux cron 可定时触发同样的执行路径(无人值守 loop)。
 
 单用户、单机、4C8G 云服务器够用。代码量约 2000 行(Python + 原生 JS,无 build step)。
@@ -11,7 +32,7 @@
 
 ## 它能干什么
 
-- **PWA**(手机/PC 浏览器都能装):3 个 tab — **Workspaces**(每个 workspace 一条时间线 + 输入框)/ **Tasks**(cron loop 列表)/ **圆桌**(多 agent 辩论)
+- **PWA**(手机/PC 浏览器都能装):3 个 tab — **Workspaces**(每个 workspace 一条时间线 + 输入框)/ **Tasks**(cron loop 列表)/ **Roundtable**(多 agent 辩论)
 - **飞书集成**:在群里 `@bot daily-digest 总结一下昨天的 commit` 就能触发,执行完结果以飞书卡片回到群里;`/use` `/where` `/ws` `/sessions` `/loops` `/run` 6 个 slash 命令
 - **Linux cron Loop**:每天 9 点拉代码、每小时巡检 PR、隔半小时跑测试都行;PWA 上每个 loop 也能手动点 **Run now**
 - **多 provider**:通过 ccswitch-style providers.json 可切到 DeepSeek / Kimi 等 Anthropic 兼容端点
@@ -201,10 +222,10 @@ cc-workflow/
 │   ├── INSTALL.md                #   ← 完整部署文档
 │   ├── cc-workflow.service       #   systemd unit
 │   └── nginx.conf                #   反向代理 + 静态 /pwa/ 服务
-└── docs/                         # 设计文档(历史 + 架构)
-    ├── 01-prd.md                 #   PRD(why)
-    ├── 02-dev-plan.md            #   开发计划(原始 P0-1 → P0-8)
-    ├── 03-test-plan.md           #   测试 playbook
+└── docs/archive/                 # 历史设计文档(why & 决策回溯,非当前架构)
+    ├── 01-prd.md                 #   原始 PRD
+    ├── 02-dev-plan.md            #   原始开发计划(P0-1 → P0-8)
+    ├── 03-test-plan.md           #   原始测试 playbook
     ├── 04-handoff.md             #   T+0 给实现方的 brief
     └── future/                   #   P1 未实现的设计(multi-agent 等)
 ```
@@ -242,7 +263,7 @@ cc-workflow/
 | **PWA 缓存策略** | service worker 网络优先,失败回落缓存 | 频繁发布的开发工具,用户拉新代码就该看到新 UI;缓存只在离线时兜底 |
 | **长对话 context 管理** | DIY auto-compact(agent-run 检测 input_tokens > 阈值时,跑 9 段式 summary prompt,清旧 session,新 session 以 summary 开场)+ PWA 手动 reset 按钮 | Claude Code 的 `/compact` 是 TUI-only,headless 不可用。Prompt 模板基于 Piebald-AI 社区反向工程版本(非 Anthropic 官方)。阈值默认 150k,可在 `config.toml` 改 `compact_threshold_tokens`。 |
 
-完整决策演进:[docs/01-prd.md 附录 A](docs/01-prd.md)。
+完整决策演进:[docs/archive/01-prd.md 附录 A/B](docs/archive/01-prd.md)。
 
 ---
 
@@ -252,24 +273,22 @@ cc-workflow/
 |---|---|---|
 | **README.md(本文)** | 当前架构 + 怎么用 | 首次接触 / 日常 reference |
 | [deploy/INSTALL.md](deploy/INSTALL.md) | 完整部署 step-by-step | 第一次装,或装新机器 |
-| [docs/01-prd.md](docs/01-prd.md) | PRD:why、goals、非目标、决策史 | 想加新需求前 / 想理解为什么是这样 |
-| [docs/02-dev-plan.md](docs/02-dev-plan.md) | 原始开发计划(Phase 1/2/3) | 想看模块切分 / 接口契约的历史定义 |
-| [docs/03-test-plan.md](docs/03-test-plan.md) | 测试 playbook | 改了某模块、想知道该跑什么 |
-| [docs/04-handoff.md](docs/04-handoff.md) | T+0 给实现方的 brief | 历史文档,新人不需读 |
-| [docs/future/](docs/future/) | P1+ 未实现的设计 | 准备做 multi-agent 等 P1 功能时 |
+| [docs/archive/](docs/archive/) | 历史设计文档(PRD / dev-plan / test-plan / handoff / future) | 想理解某个决策**为什么**当时那样定 / 想看 P1 未实现的设计 |
 
-注:01-04 都是**历史设计文档**。系统当前如何工作以本 README 为准。
+注:`docs/archive/` 是**历史快照**,实施期间有偏离(见 archive 内每个文件顶部的"历史文档警示")。系统当前如何工作以本 README 为准。
 
 ---
 
-## 状态
+## 状态 & 范围
 
-- **Phase 1 + Phase 2 完成**:agent-run + FastAPI gateway + PWA + 飞书 + cron loop + 工具审批 + 多 workspace 配置 + 移动端 UI 全部上线
-- **Phase 3 部分**:HTTPS / 自动备份 / 日志轮转 — 见 INSTALL.md §7 选做
-- **未做(P1)**:Web Push / 圆桌会议(多 agent 协同)/ Slack 适配 / 钉钉适配
+- 当前**单用户、单机**已稳定运行;接口、PWA、cron loop、工具审批、圆桌、auto-compact 都在用
+- Ubuntu 22.04 / 24.04 上验证过;4C8G VPS 跑得轻松
+- **不打算做的事**:多租户、SSO、kubernetes 化、SaaS 化、Cloud Routines 集成。这是一份给"想自己 host 一套类似工作流"的人的参考实现,不是 SaaS 产品
 
 —
 
 ## License
 
-私用项目,未声明许可证。如果你要 fork 自用,**先和我聊一下**——我希望避免它被装到不适合的多用户场景上。
+MIT — 见 [LICENSE](LICENSE)。
+
+注:这是个**单人自用工具**。代码本身按 MIT 开放,但作者**不主动接 PR / issue / 多用户支持请求**。鼓励你 fork 自己改、不用问;有 bug 就在自己 fork 修。本项目对你最有用的姿势是当"参考实现"读,不是当"上游依赖"用。

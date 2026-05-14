@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# agent-run — multi-engine agent wrapper (P0-1).
-# Contract: docs/02-dev-plan.md §4.1
+# agent-run — Claude Code CLI wrapper (was P0-1).
+# Original interface contract: docs/archive/02-dev-plan.md §4.1
+# (Note: implementation has evolved past the original contract; see file body.)
 #
 set -euo pipefail
 

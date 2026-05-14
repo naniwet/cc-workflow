@@ -1,5 +1,13 @@
 # Dev Plan — P0 实施
 
+> ⚠ **历史文档警示**:
+> 这是开工前的实施计划。Phase 1+2 已完成,**实际实现的文件清单 / 接口契约 / Phase 2 顺序 都与本文档偏离**:
+> - **多了**: `backend/approvals.py` `backend/auth.py` `backend/llm.py` `backend/skills.py` `backend/ws_settings.py` `backend/roundtable/*` `pwa/login.html` `scripts/cc-approve-hook.sh`
+> - **少了**: `backend/csrf.py`(改为 HMAC auth)、原 `backend/push.py`(从未实现)
+> - **变了**: 鉴权 Basic → HMAC session cookie;workspaces 从硬编码 4 个改为 `workspaces.json` 动态;auto-compact / 圆桌 等新增功能
+>
+> **看代码当真,看本文档当历史**。仓库根目录 [`README.md`](../../README.md) 是当前架构 source of truth。
+
 > ⚠ **历史文档 — 本文件是 Phase 1/2 开工前的实施计划**。
 > Phase 1/2 实施过程中部分接口契约和模块边界已经演化(尤其鉴权、工具审批、
 > per-workspace 配置)。**系统当前如何工作以仓库根目录的 [`/README.md`](../../README.md)

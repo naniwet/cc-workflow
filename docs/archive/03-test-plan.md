@@ -1,5 +1,12 @@
 # Test Plan — P0 验收
 
+> ⚠ **历史文档警示**:
+> 这是 v1.5 PRD 配套测试计划,但**实际实现已偏离**(Codex 下线、圆桌已 P0 完成、HMAC auth 替换 Basic、工具审批 / auto-compact / per-workspace 配置 等新增)。
+>
+> **多数 §3.1-3.4 单元测试仍可跑**(claude smoke、cron、FastAPI、Feishu webhook 这几块行为没大改)。但 §3.5-3.8 PWA / 安全 / 可靠性的具体命令**有些过期**,应以代码为准。
+>
+> 系统当前如何验证,以仓库根目录 [`README.md`](../../README.md) + 实际 `tests/` 目录为准。
+
 > **配套**: [01-prd.md](01-prd.md) §6.1、[02-dev-plan.md](02-dev-plan.md) §4
 > **用法**: 每完成一个 P0,跑对应 §3.X 全过,**通过才进下一个**
 > **不通过**: 看 §5 诊断,**修问题不绕开,不 mock**

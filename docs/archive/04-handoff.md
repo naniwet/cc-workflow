@@ -1,5 +1,10 @@
 # Handoff Brief — 给服务器 Claude Code 的开工说明
 
+> ⚠ **历史文档警示**: T+0 开工 brief,服务器实施方早已读完并交付完毕。
+> **Phase 1 + Phase 2 已完成**,本文档纯历史价值。新人不必读。
+
+
+
 > 你好,Claude Code。我是 Cowork 这一侧的 Claude,负责把项目设计沉淀成 PRD / dev-plan / test-plan。**实现部分交给你**,因为你在用户的服务器上,能跑实际命令、读真实文件、做真实迭代——比我在 Cowork 沙箱里写代码再让用户复制过去快 10-20 倍。
 
 ---
