@@ -1047,8 +1047,13 @@ function bindWorkspaceColHandlers(root) {
   for (const btn of root.querySelectorAll('.ws-delete-workspace')) {
     btn.addEventListener('click', _onDeleteWorkspaceClick);
   }
+  // Native <select> (new-workspace form) still uses the old change handler.
   for (const sel of root.querySelectorAll('.provider-inline')) {
     sel.addEventListener('change', onProviderInlineChange);
+  }
+  // In-menu radio-style provider switcher (per-ws ⋯ dropdown).
+  for (const btn of root.querySelectorAll('.ws-menu-radio')) {
+    btn.addEventListener('click', _onProviderRadioClick);
   }
   for (const b of root.querySelectorAll('.ws-trust-toggle')) {
     b.addEventListener('click', onTrustToggleClick);
@@ -1118,6 +1123,8 @@ function bindOverviewHandlers() {
 // providers.json#profiles (the only supported engine since codex was
 // removed 2026-05-14).
 function _providerOptionsHtml(selected, includeDefault) {
+  // Still used by the new-workspace form (which is a native <select>
+  // inside a wider <form>, where native styling looks fine).
   const list = lastData.providers || [];
   const opts = [];
   if (includeDefault) {
@@ -1128,6 +1135,35 @@ function _providerOptionsHtml(selected, includeDefault) {
     opts.push(`<option value="${esc(p)}"${p === selected ? ' selected' : ''}>${esc(p)}</option>`);
   }
   return opts.join('');
+}
+
+// In-menu provider picker: render as a vertical radio-list instead of a
+// native <select>. Native <select> popups are OS-styled (white-on-black
+// looks bad in our dark theme + nested inside a <details> menu is ugly).
+// One click = switch (vs select's 2-click open-then-pick).
+function _providerRadioListHtml(name, wsProvider) {
+  const list = lastData.providers || [];
+  const defaultLabel = lastData.globalProvider
+    ? `Default · ${esc(lastData.globalProvider)}`
+    : 'Default';
+  const rows = [];
+  // The "" value means "no per-ws override; use config.toml default".
+  rows.push(_providerRadioRowHtml(name, '', defaultLabel, !wsProvider));
+  for (const p of list) {
+    rows.push(_providerRadioRowHtml(name, p, esc(p), p === wsProvider));
+  }
+  return rows.join('');
+}
+
+function _providerRadioRowHtml(name, value, label, selected) {
+  const dotClass = selected ? 'ws-radio-dot is-selected' : 'ws-radio-dot';
+  const rowClass = selected ? 'ws-menu-radio is-selected' : 'ws-menu-radio';
+  return `<button class="${rowClass}" type="button"
+                  data-ws="${esc(name)}" data-value="${esc(value)}"
+                  aria-label="Use provider ${esc(value || 'default')}">
+    <span class="${dotClass}"></span>
+    <span class="ws-radio-label">${label}</span>
+  </button>`;
 }
 
 // ---------- PC drag-to-reorder ----------
@@ -1460,6 +1496,35 @@ async function onTrustToggleClick(e) {
   }
 }
 
+async function _onProviderRadioClick(e) {
+  const btn = e.currentTarget;
+  const name = btn.dataset.ws;
+  if (!name) return;
+  // Already-selected row — no-op, but still close menu so user feels the click.
+  if (btn.classList.contains('is-selected')) {
+    _closeAncestorMenu(btn);
+    return;
+  }
+  const provider = btn.dataset.value || null;    // "" → null = clear override
+  btn.disabled = true;
+  try {
+    await api(`/workspaces/${encodeURIComponent(name)}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider }),
+    });
+    // Close menu so the freshly-saved state is visible (refreshAll re-renders
+    // the column header below, including the read-only provider label).
+    _closeAncestorMenu(btn);
+    showToast('success', `${name}: provider → ${provider || 'default'}`, { ttl: 1800 });
+    refreshAll();
+  } catch (err) {
+    showError(`save provider failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function onProviderInlineChange(e) {
   const sel = e.target;
   const name = sel.dataset.workspace;
@@ -1613,12 +1678,10 @@ function workspaceColHtml(name, data, opts = {}) {
       <details class="ws-actions-menu">
         <summary class="ws-actions-trigger" aria-label="More actions">${ICONS.more}</summary>
         <div class="ws-actions-menu-body">
-          <label class="ws-menu-row">
-            <span class="muted">Provider</span>
-            <select class="provider-inline" data-workspace="${esc(name)}">
-              ${providerOptions}
-            </select>
-          </label>
+          <div class="ws-menu-section">
+            <span class="ws-menu-section-label">Provider</span>
+            ${_providerRadioListHtml(name, wsProvider)}
+          </div>
           <button class="ws-trust-toggle ws-menu-item" type="button"
                   data-ws="${esc(name)}" data-trusted="${effectiveTrust(name) ? '1' : '0'}"
                   aria-label="Toggle trust">
