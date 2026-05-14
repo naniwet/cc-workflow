@@ -1398,11 +1398,31 @@ async function _onSyncSkillsClick(e) {
 
 // Close the nearest ancestor <details class="ws-actions-menu"> if any.
 // Called after destructive actions (sync/reset/delete) inside the
-// mobile menu so the menu doesn't stay open over the toast.
+// menu so it doesn't stay open over the toast.
+//
+// Also clears the snapshot entry — without this, restoreDrafts() would
+// re-open the menu on the very next polling refresh because the snapshot
+// captured `open=true` before this close happened.
 function _closeAncestorMenu(el) {
   const det = el?.closest?.('details.ws-actions-menu');
-  if (det) det.open = false;
+  if (!det) return;
+  det.open = false;
+  if (det.dataset.detailsId) delete detailsOpen[det.dataset.detailsId];
 }
+
+// Native <details> doesn't close on outside-click — once you open it,
+// it stays open until you click <summary> again. For dropdown-menu UX
+// users expect "click anywhere else to dismiss" (and it doubles as a
+// way to switch between two open menus on PC). Bound once at module
+// load; click bubbles from any user click on the page.
+document.addEventListener('click', (e) => {
+  for (const det of document.querySelectorAll('details.ws-actions-menu[open]')) {
+    if (!det.contains(e.target)) {
+      det.open = false;
+      if (det.dataset.detailsId) delete detailsOpen[det.dataset.detailsId];
+    }
+  }
+});
 
 async function _onDeleteWorkspaceClick(e) {
   const btn = e.currentTarget;
@@ -1675,7 +1695,7 @@ function workspaceColHtml(name, data, opts = {}) {
     <div class="ws-meta-mobile">
       ${providerLabel}
       ${engineChip}
-      <details class="ws-actions-menu">
+      <details class="ws-actions-menu" data-details-id="ws-menu-${esc(name)}">
         <summary class="ws-actions-trigger" aria-label="More actions">${ICONS.more}</summary>
         <div class="ws-actions-menu-body">
           <div class="ws-menu-section">
