@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Optional
 
 from .. import config
 from . import roles as roles_mod
@@ -26,10 +28,19 @@ from .model import ModelError, call_model
 from .data import Session
 
 
+OnCompleteFn = Callable[[Path], None]
+"""Callback signature: receives the session jsonl path. Fired EXACTLY ONCE
+per submit() call, regardless of success/failure — the caller is expected
+to re-read the jsonl to decide what happened (look for type='synth' = done,
+role='__error__' = failed). Kept narrow so we don't leak Session internals
+to subscribers (e.g. the Feishu adapter)."""
+
+
 def submit(
     question: str,
     *,
     role_models: dict[str, str] | None = None,
+    on_complete: Optional[OnCompleteFn] = None,
 ) -> Path:
     """Kick off a roundtable session in a background thread.
 
@@ -37,6 +48,17 @@ def submit(
     name. Caller (main.py) is responsible for validating against
     MODEL_ENDPOINTS — we just pass through. Unknown role names are
     no-op (debate.run_session falls back to each role's preferred_model).
+
+    on_complete: optional callback fired when the worker thread finishes
+    (success or failure). Receives the session_path. Used by im_feishu to
+    push the R3 result back to the originating Feishu chat — the adapter
+    re-reads the jsonl itself to decide what message to send (success card
+    vs failure text).
+
+    NB: callbacks DON'T survive backend restart. If the worker thread is
+    killed mid-debate (process exit), no callback fires. Users who care
+    can find the session in /roundtables anyway — jsonl is the source of
+    truth, callback is just opportunistic push.
 
     Synchronously:
       - Compute the session_path (used as the public session id)
@@ -55,7 +77,7 @@ def submit(
 
     t = threading.Thread(
         target=_execute,
-        args=(question, path, dict(role_models or {})),
+        args=(question, path, dict(role_models or {}), on_complete),
         name=f"roundtable-{path.stem}",
         daemon=True,
     )
@@ -63,9 +85,19 @@ def submit(
     return path
 
 
-def _execute(question: str, session_path: Path, role_models: dict[str, str]) -> None:
+def _execute(
+    question: str,
+    session_path: Path,
+    role_models: dict[str, str],
+    on_complete: Optional[OnCompleteFn],
+) -> None:
     """Run the 3-round debate end-to-end. Any error is written to the
-    session jsonl as a synthetic __error__ turn so the PWA can show it."""
+    session jsonl as a synthetic __error__ turn so the PWA can show it.
+
+    on_complete fires in a `finally` — so subscribers see both happy and
+    sad paths, and a broken callback can't poison the next session (we
+    swallow exceptions from it on principle: it's an opportunistic push,
+    failures shouldn't cascade)."""
     try:
         run_session(
             question=question,
@@ -81,3 +113,9 @@ def _execute(question: str, session_path: Path, role_models: dict[str, str]) -> 
         write_error_marker(session_path, f"model error: {type(e).__name__}: {e}")
     except Exception as e:  # noqa: BLE001 — last-ditch, never lose the error
         write_error_marker(session_path, f"unexpected: {type(e).__name__}: {e}")
+    finally:
+        if on_complete is not None:
+            try:
+                on_complete(session_path)
+            except Exception:    # noqa: BLE001 — broken callback must not poison the thread
+                pass

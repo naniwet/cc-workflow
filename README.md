@@ -273,6 +273,7 @@ cc-workflow/
 |---|---|---|
 | **README.md(本文)** | 当前架构 + 怎么用 | 首次接触 / 日常 reference |
 | [deploy/INSTALL.md](deploy/INSTALL.md) | 完整部署 step-by-step | 第一次装,或装新机器 |
+| [docs/feishu-usage.md](docs/feishu-usage.md) | 飞书端完整使用说明(slash 命令清单 / 触发 / 圆桌推送 / 排错) | 配好飞书集成后,日常使用查询 |
 | [docs/archive/](docs/archive/) | 历史设计文档(PRD / dev-plan / test-plan / handoff / future) | 想理解某个决策**为什么**当时那样定 / 想看 P1 未实现的设计 |
 
 注:`docs/archive/` 是**历史快照**,实施期间有偏离(见 archive 内每个文件顶部的"历史文档警示")。系统当前如何工作以本 README 为准。

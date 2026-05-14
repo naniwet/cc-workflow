@@ -223,8 +223,17 @@ def _handle_message(payload: dict) -> dict:
         handled = _handle_slash(m.group(1).lower(), m.group(2).strip(), chat_id)
         if handled is not None:
             return handled
-        # Unknown slash falls through to LLM — the user gets a response
-        # instead of silent ignore.
+        # Unknown slash — tip the user about /help instead of falling through
+        # to the LLM. Typo'd commands like "/sesions" shouldn't burn an LLM
+        # call; users who really mean a literal "/X" as part of a prompt can
+        # rephrase. This is a behavior change from the original Phase-1
+        # design (which fell through to LLM); we accept the inconvenience
+        # because /help discoverability is more valuable than LLM-fallback.
+        reply_to_chat(
+            chat_id,
+            f"未识别的命令: /{m.group(1)}\n试试 /help 看支持的命令。",
+        )
+        return {"ok": True, "slash": m.group(1), "unknown": True}
 
     workspace, prompt = _resolve_workspace(chat_id, text)
     return {
@@ -239,22 +248,72 @@ def _handle_message(payload: dict) -> dict:
     }
 
 
+_HELP_TEXT = """\
+cc-workflow 飞书命令清单:
+
+▸ 触发 agent
+  @bot <prompt>                      用 workspace 默认(/use 设的或 [feishu].default_workspace)
+  @bot [workspace] <prompt>          临时换 workspace 跑这一条
+  同一聊天连续发,自动续 Claude session(session_key = feishu-<chat_id>)
+
+▸ Workspace 管理
+  /ws  (或 /workspaces)              列所有 workspace + engine/provider/trust
+  /use <workspace>                   把这个聊天的默认 workspace 改成 <workspace>
+  /where                             查当前默认 workspace
+
+▸ 历史 / 卡片
+  /sessions                          最近 + active 的 run 卡片
+  /loops                             所有 cron loop 列表
+  /run                               手动填表单触发一次 run(workspace + prompt)
+
+▸ Cron loop 操作
+  /loops run <name>                  立即跑一次该 loop(不动调度)
+  /loops pause <name>                暂停该 loop(cron 不再触发)
+  /loops resume <name>               恢复
+
+▸ 圆桌(多 agent 辩论)
+  /rt                                列最近 5 场圆桌(状态 + 问题)
+  /rt <问题>                          新开一场,~1-2min 后我把 R3 整理员结果发回这里
+
+▸ 帮助
+  /help                              再次看这条清单
+
+提示:命令不区分大小写。圆桌完成 / run 完成的结果都会主动回到原聊天。
+"""
+
+
 def _handle_slash(cmd: str, rest: str, chat_id: str) -> Optional[dict]:
     """Dispatch a slash command. Returns:
-      dict  — handled (skip the run-intent path; reply has already been sent)
-      None  — unknown command (caller falls through to LLM)
+      dict  — handled (reply already sent — caller stops here)
+      None  — unknown command (caller decides what to do; current policy
+              is to reply with a /help tip rather than fall through to LLM)
     """
     from . import ui_cards                    # lazy: avoid potential import order issues
 
+    # /help — list every supported command. Always works, even if other
+    # subsystems are broken.
+    if cmd == "help":
+        reply_to_chat(chat_id, _HELP_TEXT)
+        return {"ok": True, "slash": "help"}
+
     # Card-rendering slashes — wrap a Card factory and send via reply_card.
+    # /loops is NOT in this dict because it now takes subcommands
+    # (run/pause/resume) — handled separately below.
     cards = {
         "sessions": ui_cards.sessions_card,
-        "loops": ui_cards.loops_card,
         "run": ui_cards.run_form_card,
     }
     if cmd in cards:
         reply_card(chat_id, cards[cmd]())
         return {"ok": True, "card_reply": True, "slash": cmd}
+
+    # /loops — list (no args) or run|pause|resume (with args).
+    if cmd == "loops":
+        return _handle_loops_command(rest, chat_id)
+
+    # /rt — list recent 5 (no args) or new session (with question as args).
+    if cmd == "rt":
+        return _handle_rt_command(rest, chat_id)
 
     # /use <workspace> — set this chat's default workspace. Persists across
     # backend restart in ~/.cc-workflow/feishu_chats.json.
@@ -321,6 +380,223 @@ def _handle_slash(cmd: str, rest: str, chat_id: str) -> Optional[dict]:
         return {"ok": True, "slash": "ws", "count": len(names)}
 
     return None
+
+
+# ---------- /loops subcommand handlers ----------
+
+
+def _handle_loops_command(rest: str, chat_id: str) -> dict:
+    """Dispatch `/loops` and `/loops <action> <name>`. Empty rest → list card.
+
+    Subcommands {run, pause, resume} talk to cron_state / runner directly
+    (not via HTTP) — same data path as the PWA-side /loops/{name}/* endpoints
+    in main.py, just without the FastAPI handler shell.
+    """
+    from . import ui_cards
+    parts = rest.strip().split(maxsplit=1) if rest else []
+    if not parts:
+        # No args — preserve existing list-card behavior.
+        reply_card(chat_id, ui_cards.loops_card())
+        return {"ok": True, "card_reply": True, "slash": "loops"}
+
+    action = parts[0].lower()
+    target = parts[1].strip() if len(parts) > 1 else ""
+
+    if action == "run":
+        return _loops_run(target, chat_id)
+    if action in ("pause", "resume"):
+        return _loops_toggle(target, enabled=(action == "resume"), chat_id=chat_id)
+
+    reply_to_chat(
+        chat_id,
+        f"未识别的 loops 操作: {action!r}\n"
+        f"支持: /loops run|pause|resume <name>。/loops 看列表,/help 看全部命令。",
+    )
+    return {"ok": True, "slash": "loops", "unknown_action": action}
+
+
+def _loops_run(name: str, chat_id: str) -> dict:
+    """Fire one immediate run of an existing cron loop. Mirrors
+    main.py:run_loop_now exactly — same lookup, same submit() args."""
+    if not name:
+        reply_to_chat(chat_id, "用法: /loops run <name>")
+        return {"ok": True, "slash": "loops", "missing_arg": True}
+    from . import cron_state, db, runner, ws_settings
+    jobs = cron_state.list_jobs()
+    job = next((j for j in jobs if j.get("name") == name), None)
+    if job is None:
+        reply_to_chat(chat_id, f"找不到 loop: {name}\n/loops 看完整列表。")
+        return {"ok": True, "slash": "loops", "not_found": True}
+    workspace = job.get("workspace")
+    prompt = job.get("prompt")
+    engine = job.get("engine") or ws_settings.engine_for(workspace or "")
+    if not workspace or not prompt:
+        reply_to_chat(
+            chat_id,
+            f"loop {name} 的 cron 行配置不完整。建议在 PWA 上 Delete 后重建。",
+        )
+        return {"ok": True, "slash": "loops", "bad_spec": True}
+    run_id = db.new_run_id()
+    runner.submit(
+        run_id=run_id,
+        workspace=workspace,
+        prompt=prompt,
+        engine=engine,
+        session_key=name,            # align with cron-fired runs (same session)
+        source="feishu",
+        provider=ws_settings.provider_for(workspace),
+        permission_mode=ws_settings.permission_mode_for(workspace),
+    )
+    reply_to_chat(
+        chat_id,
+        f"✓ {name} 已立即触发(run_id={run_id})。结果回这里 / 也可 /sessions 查。",
+    )
+    return {"ok": True, "slash": "loops", "ran": name, "run_id": run_id}
+
+
+def _loops_toggle(name: str, *, enabled: bool, chat_id: str) -> dict:
+    """Pause/resume a loop. Wraps cron_state.set_enabled."""
+    if not name:
+        action_word = "resume" if enabled else "pause"
+        reply_to_chat(chat_id, f"用法: /loops {action_word} <name>")
+        return {"ok": True, "slash": "loops", "missing_arg": True}
+    from . import cron_state
+    job = cron_state.set_enabled(name, enabled)
+    if job is None:
+        reply_to_chat(chat_id, f"找不到 loop: {name}\n/loops 看列表。")
+        return {"ok": True, "slash": "loops", "not_found": True}
+    verb = "已恢复" if enabled else "已暂停"
+    reply_to_chat(chat_id, f"✓ {name} {verb}")
+    return {"ok": True, "slash": "loops", "name": name, "enabled": enabled}
+
+
+# ---------- /rt (roundtable) command handlers ----------
+
+
+def _handle_rt_command(rest: str, chat_id: str) -> dict:
+    """Dispatch `/rt` (list) and `/rt <question>` (start new session).
+
+    Question is taken verbatim from `rest` — multi-line supported (the
+    upstream _SLASH_RE uses DOTALL). No subcommand syntax (no `/rt new ...`
+    or `/rt list`) — matches the `/use` design: empty arg = read, non-empty
+    arg = write/create.
+    """
+    question = rest.strip() if rest else ""
+    if not question:
+        return _rt_list(chat_id)
+    return _rt_new(question, chat_id)
+
+
+def _rt_list(chat_id: str) -> dict:
+    """List up to 5 recent roundtable sessions as plain text."""
+    paths = sorted(config.ROUNDTABLES_DIR.glob("*.jsonl"), reverse=True)[:5] \
+        if config.ROUNDTABLES_DIR.is_dir() else []
+    if not paths:
+        reply_to_chat(chat_id, "暂无圆桌历史。\n开一场: /rt <问题>")
+        return {"ok": True, "slash": "rt", "count": 0}
+    from .roundtable.io import read_session
+    lines = [f"最近 {len(paths)} 场圆桌:"]
+    for p in paths:
+        try:
+            sess = read_session(p)
+        except (ValueError, OSError):
+            lines.append(f"  ⚠ {p.stem}  (jsonl 读不出)")
+            continue
+        first_line = (sess.question or "").split("\n")[0][:60]
+        if any(t.type == "synth" for t in sess.turns):
+            mark = "✓"
+        elif any(t.role == "__error__" for t in sess.turns):
+            mark = "✗"
+        else:
+            mark = "…"
+        lines.append(f"  {mark} {p.stem}  {first_line}")
+    lines.append("")
+    lines.append("开新一场: /rt <问题>")
+    reply_to_chat(chat_id, "\n".join(lines))
+    return {"ok": True, "slash": "rt", "count": len(paths)}
+
+
+def _rt_new(question: str, chat_id: str) -> dict:
+    """Kick off a roundtable, register an on_complete callback that pushes
+    the R3 result back to *this* chat. Errors during submit (e.g. missing
+    providers.json) reply inline; mid-debate errors arrive via the callback
+    just like the success path does."""
+    from .roundtable import runner as rt_runner
+
+    def _on_done(session_path):
+        _push_rt_result(session_path, chat_id)
+
+    try:
+        path = rt_runner.submit(question, on_complete=_on_done)
+    except Exception as e:    # noqa: BLE001 — submit() shouldn't raise but be defensive
+        reply_to_chat(chat_id, f"圆桌启动失败: {type(e).__name__}: {e}")
+        return {"ok": False, "slash": "rt", "error": str(e)}
+
+    reply_to_chat(
+        chat_id,
+        f"✓ 圆桌已开 · ID {path.stem}\n"
+        f"4 角色 × R1+R2 + 整理员 R3,约 1-2 分钟。\n"
+        f"完成后我把 R3 整理员结果发回这里;失败也会通知你。",
+    )
+    return {"ok": True, "slash": "rt", "id": path.stem}
+
+
+def _push_rt_result(session_path, chat_id: str) -> None:
+    """Roundtable runner's on_complete callback. Reads the jsonl, sends
+    R3 markdown card on success, failure text on error. NEVER raises —
+    a broken push must not break the runner thread (we already swallow
+    in runner._execute's finally, but defense in depth)."""
+    try:
+        from .roundtable.io import read_session
+        session = read_session(session_path)
+    except Exception as e:    # noqa: BLE001
+        try:
+            reply_to_chat(chat_id, f"⚠ 圆桌 {session_path.stem} 完成但 jsonl 读不出: {e}")
+        except Exception:    # noqa: BLE001
+            pass
+        return
+
+    synth_turns = [t for t in session.turns if t.type == "synth"]
+    error_turns = [t for t in session.turns if t.role == "__error__"]
+
+    if synth_turns:
+        # Send R3 as a markdown card so共识点/分歧轴/判断题 标题渲染漂亮.
+        from . import ui_cards
+        q = (session.question or "(无题)").split("\n")[0][:80]
+        pwa_link = _pwa_roundtable_url(session_path.stem)
+        link_line = f"\n\n[在 PWA 看完整 R1/R2 transcript]({pwa_link})" if pwa_link else ""
+        body = f"**问题**\n{q}\n\n---\n\n{synth_turns[-1].content}{link_line}"
+        card = ui_cards.Card(
+            title=f"🎙 圆桌 R3 · {session_path.stem}",
+            sections=(ui_cards.Section(kind="text", content=body),),
+        )
+        try:
+            reply_card(chat_id, card)
+        except Exception as e:    # noqa: BLE001
+            # Fallback to plain text if card rendering / send fails.
+            reply_to_chat(chat_id, f"圆桌 R3 ({session_path.stem}):\n\n{synth_turns[-1].content}")
+    elif error_turns:
+        try:
+            reply_to_chat(chat_id, f"✗ 圆桌 {session_path.stem} 失败:\n{error_turns[-1].content}")
+        except Exception:    # noqa: BLE001
+            pass
+    else:
+        try:
+            reply_to_chat(
+                chat_id,
+                f"⚠ 圆桌 {session_path.stem} 状态异常(没 R3 也没 error)\n/rt 查列表。",
+            )
+        except Exception:    # noqa: BLE001
+            pass
+
+
+def _pwa_roundtable_url(roundtable_id: str) -> Optional[str]:
+    """PWA URL for a roundtable detail. Returns None if pwa_base_url not set
+    in secrets.toml[feishu] — caller omits the link line in that case."""
+    base = _secrets().get("pwa_base_url")
+    if not base or not isinstance(base, str):
+        return None
+    return f"{base.rstrip('/')}/pwa/#roundtables/{roundtable_id}"
 
 
 def _load_chat_ws() -> dict:
