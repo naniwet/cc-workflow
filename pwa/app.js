@@ -22,6 +22,51 @@ const esc = (s) =>
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
   );
 
+// Minimal markdown renderer — covers what Claude actually emits ~95% of
+// the time: **bold**, *italic*, ## headings, - bullets, ``` fenced code,
+// `inline code`. Deliberately NOT a full spec (no links / images / tables /
+// blockquotes / ordered lists) — keeps the implementation under 40 lines
+// of regex without the corner-case zoo that a real parser inherits. When
+// something real breaks, add the specific pattern; don't reach for marked.js.
+//
+// Strategy: pull code blocks out first (so their contents don't trigger
+// inline patterns), then esc the rest, then walk the inline / block
+// patterns in dependency order (code before bold before italic; lists
+// before paragraphs).
+function renderMarkdown(s) {
+  if (!s) return '';
+  const blocks = [];
+  let h = String(s).replace(/```[a-zA-Z0-9_+-]*\n?([\s\S]*?)```/g, (_, code) => {
+    blocks.push(code);
+    return `\x00CB${blocks.length - 1}\x00`;
+  });
+  h = esc(h);
+  h = h.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  h = h.replace(/\*\*([^\n*]+)\*\*/g, '<strong>$1</strong>');
+  h = h.replace(/(^|[^*])\*([^\n*]+)\*(?!\*)/g, '$1<em>$2</em>');
+  h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  h = h.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // Bullet groups: run of `- foo` lines → one <ul>.
+  h = h.replace(/(?:^[*-] .+\n?)+/gm, (block) => {
+    const items = block.split('\n').filter(l => /^[*-] /.test(l));
+    return '<ul>' + items.map(l => `<li>${l.slice(2)}</li>`).join('') + '</ul>\n';
+  });
+  // Restore fenced code blocks BEFORE paragraph-wrapping, so the wrap
+  // step sees a real <pre> at the line start and skips it (vs. wrapping
+  // the sentinel placeholder in <p>, which would produce <p><pre>...</pre></p>).
+  h = h.replace(/\x00CB(\d+)\x00/g, (_, i) =>
+    `<pre class="md-code"><code>${esc(blocks[i])}</code></pre>`);
+  // Paragraph wrap. Split on blank lines; wrap non-block parts in <p>.
+  h = h.split(/\n{2,}/).map(part => {
+    const t = part.trim();
+    if (!t) return '';
+    if (/^<(h\d|ul|ol|pre|blockquote|p)/.test(t)) return t;
+    return `<p>${t.replace(/\n/g, '<br>')}</p>`;
+  }).filter(Boolean).join('\n');
+  return h;
+}
+
 // ---------- inline SVG icon set (lucide-style 24px line icons) ----------
 // All icons share the same stroke / linecap / linejoin attrs so they look
 // consistent regardless of where they're embedded. CSS sets the actual
@@ -846,7 +891,9 @@ async function syncSkillsFor(workspace) {
 // Tab/Enter/Esc/Arrow events.
 function _onPromptInput(e) {
   const ta = e.currentTarget;
-  if (_isMobileViewport) return;
+  // Slash autocomplete works on mobile too (was gated off here for fear of
+  // keyboard overlap, but in practice the popup positions above the textarea
+  // and stays above the soft keyboard fine).
   const cursor = ta.selectionStart;
   const before = ta.value.substring(0, cursor);
   const m = before.match(_SLASH_TRIGGER_RE);
@@ -1878,6 +1925,13 @@ async function onTriggerSubmit(e) {
     });
     form.reset();
     clearDraft(form.dataset.formId);
+    // Blur the textarea before kicking off the refresh — render() has a
+    // guard that bails when an INPUT/TEXTAREA is focused (to avoid tearing
+    // DOM out from under a typist), and submit doesn't clear focus on its
+    // own. Without this blur, the refresh that follows form submit
+    // wouldn't repaint the timeline → new run wouldn't appear until the
+    // user clicked away from the textarea.
+    form.querySelector('textarea')?.blur();
     refreshAll();
   } catch (err) {
     showError(`trigger failed: ${err.message}`);
@@ -2016,7 +2070,7 @@ function paintRunDetail(id, row) {
     <h3>Prompt</h3>
     <pre>${esc(row.prompt || '')}</pre>
     <h3>Output</h3>
-    <pre>${esc(row.output || '(empty)')}</pre>
+    <div class="md-output">${row.output ? renderMarkdown(row.output) : '<p class="muted">(empty)</p>'}</div>
   `;
 }
 

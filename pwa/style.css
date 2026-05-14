@@ -1024,6 +1024,60 @@ label {
 }
 .run-meta code { color: var(--accent-blue); font-family: var(--font-mono); }
 
+/* Markdown rendering for run-detail Output section. Style headings,
+ * lists, inline code, and fenced code blocks so Claude's typical output
+ * (** bold **, ## h2, - bullets, ``` code ```) reads naturally. Mostly
+ * inherits from body color/font; just sets sensible spacing.
+ */
+.md-output {
+  font-size: var(--text-md);
+  line-height: var(--lh-relaxed);
+  color: var(--text-primary);
+  word-break: break-word;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-2) 0;
+}
+.md-output > *:first-child { margin-top: 0; }
+.md-output > *:last-child { margin-bottom: 0; }
+.md-output h1, .md-output h2, .md-output h3 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.md-output h1 { font-size: var(--text-xl); }
+.md-output h2 { font-size: var(--text-lg); }
+.md-output h3 { font-size: var(--text-md); }
+.md-output p { margin: var(--space-2) 0; }
+.md-output ul { margin: var(--space-2) 0; padding-left: var(--space-5); }
+.md-output li { margin: 2px 0; }
+.md-output strong { color: var(--text-primary); font-weight: 600; }
+.md-output em { color: var(--text-primary); font-style: italic; }
+.md-output code {
+  background: var(--bg-elevated);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.92em;
+  font-family: var(--font-mono);
+  color: var(--accent-blue);
+}
+.md-output pre.md-code {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  margin: var(--space-2) 0;
+}
+.md-output pre.md-code code {
+  background: transparent;
+  padding: 0;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
 pre {
   background: var(--bg-surface);
   padding: var(--space-3) var(--space-4);
