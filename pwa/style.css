@@ -1012,6 +1012,16 @@ label {
   transition: color var(--t-base);
 }
 .back-link:hover { color: var(--text-primary); }
+/* Mobile already has the bottom-nav as the primary navigation surface;
+ * an in-page "← Workspaces" link in the page header is visually redundant
+ * and steals a row of screen real estate. Hide it on narrow viewports.
+ * Trade-off: run-detail's back link (which points at the specific workspace
+ * detail page, not the overview) also disappears — that one deep-nav path
+ * is reachable via the browser back button. If that becomes painful, add
+ * a per-page floating back button instead of unhiding this row. */
+@media (max-width: 768px) {
+  .back-link { display: none; }
+}
 
 .run-meta {
   font-size: var(--text-sm);
