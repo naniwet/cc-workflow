@@ -2270,7 +2270,14 @@ async function ensureRoundtableModels() {
 // Render the 5 role rows inside the <details> model-config block. Reads
 // from _rtModelsCache + localStorage. Called twice in the lifecycle: once
 // optimistically if cache is hot, once after async fetch otherwise. Both
-// paths bind the change handler — idempotent.
+// paths bind the click handler — idempotent.
+//
+// Visual design: shared with the workspace ⋯ menu's provider picker —
+// reuses .ws-menu-radio / .ws-radio-dot / .ws-radio-label classes verbatim
+// so dark-theme consistency is structural, not a per-feature CSS pass.
+// Each role is wrapped in its own <details> so we don't dump 25 radios
+// (5 roles × 5 models) into the form at once — collapsed-by-default, the
+// summary row shows the current pick, click to expand for the radio list.
 function _populateRtModelConfig() {
   const slot = document.getElementById('rt-model-config-slot');
   if (!slot) return;
@@ -2280,46 +2287,67 @@ function _populateRtModelConfig() {
   }
   const { models, roles } = _rtModelsCache;
   const saved = _loadRtRoleModels();
-  slot.innerHTML = roles.map((r) => {
-    const current = saved[r.name] || r.default_model;
-    const opts = models.map((m) => {
-      const sel = m.name === current ? ' selected' : '';
-      return `<option value="${esc(m.name)}"${sel}>${esc(m.name)}  ·  ${esc(m.endpoint)}</option>`;
-    }).join('');
-    const kindHint = r.kind === 'synthesizer'
-      ? '<span class="muted rt-model-role-kind">(整理员)</span>'
-      : '';
-    return `
-      <div class="rt-model-row">
-        <span class="rt-model-role">${esc(r.name)} ${kindHint}</span>
-        <select class="rt-model-select" data-role="${esc(r.name)}" data-default="${esc(r.default_model)}">
-          ${opts}
-        </select>
-      </div>
-    `;
-  }).join('') + `
+  slot.innerHTML = roles.map((r) => _renderRoleModelPicker(r, models, saved)).join('') + `
     <button type="button" class="rt-model-reset-all">↩ 全部恢复默认</button>
   `;
-  for (const sel of slot.querySelectorAll('.rt-model-select')) {
-    sel.addEventListener('change', _onRtModelSelectChange);
+  for (const btn of slot.querySelectorAll('.rt-role-radio')) {
+    btn.addEventListener('click', _onRtModelRadioClick);
   }
   slot.querySelector('.rt-model-reset-all')?.addEventListener('click', _onRtModelResetAll);
 }
 
-function _onRtModelSelectChange(e) {
-  const sel = e.currentTarget;
-  const role = sel.dataset.role;
-  const val = sel.value;
-  const dflt = sel.dataset.default;
+function _renderRoleModelPicker(role, models, savedOverrides) {
+  const current = savedOverrides[role.name] || role.default_model;
+  const currentEndpoint = (models.find((m) => m.name === current) || {}).endpoint || '';
+  const kindHint = role.kind === 'synthesizer'
+    ? '<span class="muted rt-role-kind">(整理员)</span>'
+    : '';
+  const isOverride = current !== role.default_model;
+  const radios = models.map((m) => {
+    const selected = m.name === current;
+    const rowClass = selected ? 'ws-menu-radio rt-role-radio is-selected' : 'ws-menu-radio rt-role-radio';
+    const dotClass = selected ? 'ws-radio-dot is-selected' : 'ws-radio-dot';
+    return `
+      <button type="button" class="${rowClass}"
+              data-role="${esc(role.name)}"
+              data-value="${esc(m.name)}"
+              data-default="${esc(role.default_model)}">
+        <span class="${dotClass}"></span>
+        <span class="ws-radio-label">${esc(m.name)}  ·  ${esc(m.endpoint)}</span>
+      </button>
+    `;
+  }).join('');
+  return `
+    <details class="rt-role-picker">
+      <summary class="rt-role-summary">
+        <span class="rt-role-name">${esc(role.name)} ${kindHint}</span>
+        <span class="rt-role-current ${isOverride ? 'is-override' : ''}">
+          ${esc(current)} · ${esc(currentEndpoint)}
+        </span>
+      </summary>
+      <div class="rt-role-radio-list">${radios}</div>
+    </details>
+  `;
+}
+
+function _onRtModelRadioClick(e) {
+  const btn = e.currentTarget;
+  const role = btn.dataset.role;
+  const val = btn.dataset.value;
+  const dflt = btn.dataset.default;
   const saved = _loadRtRoleModels();
   if (val === dflt) delete saved[role];   // back to default = remove override
   else saved[role] = val;
   _saveRtRoleModels(saved);
+  // Full re-render so:
+  //   - the picked role's <details> snaps back to collapsed (the new DOM
+  //     defaults to closed) and shows the new pick in the summary row
+  //   - the selected dot is repainted on the right radio
+  _populateRtModelConfig();
 }
 
 function _onRtModelResetAll() {
   _saveRtRoleModels({});
-  // Re-render the rows so every select snaps back to its default.
   _populateRtModelConfig();
   showToast('info', '已恢复全部默认', { ttl: 1200 });
 }
@@ -2411,17 +2439,13 @@ async function onCreateRoundtable(e) {
   const form = e.target;
   const fd = Object.fromEntries(new FormData(form).entries());
 
-  // Collect per-role model overrides from the live selects. Only roles where
-  // the picked value differs from the default ship in the POST — backend
-  // treats absent roles as "use roles.py preferred_model". This keeps the
-  // wire payload minimal and makes the default path indistinguishable from
-  // pre-feature traffic for the backend.
-  const overrides = {};
-  for (const sel of form.querySelectorAll('select.rt-model-select')) {
-    if (sel.value && sel.value !== sel.dataset.default) {
-      overrides[sel.dataset.role] = sel.value;
-    }
-  }
+  // Per-role model overrides live in localStorage (only non-default values
+  // are stored — flipping back to default deletes the key). So _loadRtRoleModels
+  // is already the wire shape: an object with ONLY the roles whose pick
+  // differs from roles.py's preferred_model. Backend treats absent roles
+  // as "use default", so the default path produces the same payload as
+  // the pre-feature traffic.
+  const overrides = _loadRtRoleModels();
 
   const btn = form.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = '开始中…';

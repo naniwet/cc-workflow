@@ -1593,9 +1593,10 @@ pre {
 }
 
 /* Per-role model override block — collapsible <details> inside the new-
- * roundtable form. Default collapsed; opens to 5 rows (4 personas + 1
- * synthesizer), each role name on the left, native dark select on the
- * right (dark theming already inherits from the global input/select rule).
+ * roundtable form. Default collapsed; opens to 5 role pickers (4 personas
+ * + 1 synthesizer). Each picker is itself a <details> that, when expanded,
+ * shows a .ws-menu-radio list — reusing the workspace ⋯-menu radio styling
+ * for dark-theme consistency (one organism, one CSS surface).
  */
 .rt-model-config { margin: 0; }
 .rt-model-config > summary {
@@ -1612,33 +1613,74 @@ pre {
 .rt-model-config-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-1);
   padding: var(--space-3);
   background: var(--bg-canvas);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   margin-top: var(--space-2);
 }
-.rt-model-row {
+
+/* One role picker = collapsed summary (role name + current pick) +
+   expanded radio list. Self-contained <details>, so opening one doesn't
+   collapse another — but the JS re-renders on selection, which naturally
+   collapses everything (the new DOM defaults to closed). Fine UX:
+   "click → pick → done" without a stale half-open row sitting around. */
+.rt-role-picker {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.rt-role-picker > summary {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-}
-.rt-model-role {
-  flex: 0 0 auto;
-  min-width: 90px;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
   font-size: var(--text-sm);
+}
+.rt-role-picker > summary::-webkit-details-marker { display: none; }
+.rt-role-picker > summary::after {
+  content: '▾';
+  color: var(--text-tertiary);
+  font-size: 10px;
+  margin-left: var(--space-1);
+  transition: transform var(--t-base);
+}
+.rt-role-picker[open] > summary::after { transform: rotate(180deg); }
+.rt-role-picker > summary:hover { background: var(--bg-elevated); }
+.rt-role-picker[open] > summary { background: var(--bg-elevated); }
+
+.rt-role-name {
+  flex: 0 0 auto;
+  min-width: 70px;
   color: var(--text-primary);
 }
-.rt-model-role-kind {
+.rt-role-kind {
   font-size: var(--text-micro);
   margin-left: var(--space-1);
 }
-.rt-model-select {
+.rt-role-current {
   flex: 1;
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2);
+  text-align: right;
+  font-size: var(--text-micro);
+  color: var(--text-tertiary);
 }
+.rt-role-current.is-override { color: var(--accent-blue); }
+
+.rt-role-radio-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-canvas);
+}
+
 .rt-model-reset-all {
   align-self: flex-start;
   background: transparent;
@@ -1647,15 +1689,18 @@ pre {
   font-size: var(--text-micro);
   padding: 2px var(--space-2);
   border-radius: var(--radius-sm);
+  margin-top: var(--space-2);
 }
 .rt-model-reset-all:hover {
   border-color: var(--accent-blue);
   color: var(--accent-blue);
 }
-/* Narrow screens — stack role label above the select to free up width */
+
+/* Narrow screens — let the role-summary's "current pick" wrap underneath
+   the role name if needed, instead of squishing it into 30px. */
 @media (max-width: 480px) {
-  .rt-model-row { flex-direction: column; align-items: stretch; gap: var(--space-1); }
-  .rt-model-role { min-width: 0; }
+  .rt-role-picker > summary { flex-wrap: wrap; }
+  .rt-role-current { flex: 1 0 100%; text-align: left; }
 }
 
 /* R1/R2 grid — 4 roles side-by-side on wide screens, stack on narrow */
