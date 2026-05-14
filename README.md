@@ -180,7 +180,7 @@ PWA → Tasks → `New cron loop`。两种填法:
 | **`profiles`** | Anthropic-compat | `claude` CLI(通过 agent-run.sh)、`backend/llm.py` |
 | **`openai_endpoints`** | OpenAI-compat | Roundtable(`backend/roundtable/model.py` 直接 HTTP) |
 
-每 workspace 可以在列头下拉里独立选 provider —— PWA 显示 `profiles` 的 keys。Roundtable 的 4 个角色硬编码在 `roles.py` 里(借鉴派用 Kimi,其他三个 + 整理员用 DeepSeek),不通过 PWA 切。
+每 workspace 可以在列头下拉里独立选 provider —— PWA 显示 `profiles` 的 keys。Roundtable 的 4 个角色 + 整理员的 model 名硬编码在 `roles.py` 里(当前 4 角色 + 整理员都用 DeepSeek),不通过 PWA 切。原始设计中借鉴派可切到 Kimi 做跨模型实验,`roles.py` 注释里写了恢复方法。
 
 **想用 Anthropic 原生 OAuth**(本地 `claude login`):在 `profiles` 加一条 `"claude": { "env": {} }`(空 env),再在 `config.toml` 设 `provider = "claude"`。agent-run 看到名字是 claude/anthropic 就跳过 env 注入。默认模板不预置——大部分用户用 DeepSeek/Kimi 兼容端点。
 

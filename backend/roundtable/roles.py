@@ -102,14 +102,18 @@ SCENARIO = Role(
 
 PRECEDENT = Role(
     name="借鉴派",
-    # AgentRoundtable §2 D 多模型实验:借鉴派切到 Kimi(K2,中文母语 + 通用知识广度)
-    # 假设:借鉴派需要"横跨数据库/OS/分布式的系统设计史",Kimi 中文圈案例覆盖更广
-    # 退回方法:改回 "deepseek-chat" 即可,provider 注册表不动
+    # 默认与其他三派一致,使用 deepseek-chat 单源跑通。
     #
-    # Model bumped 2026-05-14 to kimi-k2.6 (current top model per Kimi docs;
-    # 256k context, function calling). Older name kimi-k2-0905-preview also
-    # mapped in MODEL_ENDPOINTS as a deprecated alias.
-    preferred_model="kimi-k2.6",
+    # 历史:AgentRoundtable §2 D 多模型实验把借鉴派切到 Kimi(K2,中文母语 +
+    # 通用知识广度;假设是"借鉴派需要横跨数据库/OS/分布式的系统设计史,
+    # Kimi 中文圈案例覆盖更广")。2026-05-14 退回 deepseek-chat 单源,因为
+    # Kimi key 经常出 401,而跨模型视角对实际辩论质量的提升尚未验证。
+    #
+    # 想恢复跨模型实验:改回 "kimi-k2.6"(或其他 MODEL_ENDPOINTS 里登记过
+    # 的 key),并确认 providers.json#openai_endpoints.moonshot.api_key 是
+    # 有效的 Moonshot/Kimi API key(平台:platform.moonshot.cn 或
+    # platform.kimi.com,二者已合并)。
+    preferred_model="deepseek-chat",
     system_prompt="""你是借鉴派,一位工程师。你信奉:
 
 - 成熟系统积累了无数血泪经验,大概率比你聪明
