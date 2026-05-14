@@ -1787,10 +1787,7 @@ pre {
   color: var(--accent-red);
 }
 
-/* The legacy .ws-provider inline row (the PC layout) is hidden on
-   mobile — we render .ws-meta-mobile instead. (The branch is in JS,
-   so technically only one form is ever in the DOM. But future code
-   that accidentally adds both should still degrade gracefully.) */
-@media (max-width: 768px) {
-  .ws-provider:not(.ws-meta-mobile) { display: none; }
-}
+/* The .ws-provider inline row was the PC-only fallback. As of 2026-05-14
+   the universal layout is .ws-meta-mobile (the name is now misleading —
+   it's used on both PC + mobile). Leave the .ws-provider class rules
+   above intact; nothing references them in current renderers but harmless. */

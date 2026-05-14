@@ -1121,7 +1121,7 @@ function _providerOptionsHtml(selected, includeDefault) {
   const list = lastData.providers || [];
   const opts = [];
   if (includeDefault) {
-    const label = `(use global default${lastData.globalProvider ? `: ${esc(lastData.globalProvider)}` : ''})`;
+    const label = lastData.globalProvider ? `default · ${esc(lastData.globalProvider)}` : 'default';
     opts.push(`<option value=""${selected ? '' : ' selected'}>${label}</option>`);
   }
   for (const p of list) {
@@ -1336,18 +1336,11 @@ function effectiveTrust(name) {
   return !!lastData.globalDefaultTrust;
 }
 
-function trustToggleHtml(name) {
-  const trusted = effectiveTrust(name);
-  const icon = trusted ? ICONS.unlock : ICONS.lock;
-  const tip = trusted
-    ? '工具已自动批准 (bypassPermissions). 点击改回 ask.'
-    : '工具需要批准 (acceptEdits). 点击改成自动 (慎用).';
-  const classes = ['ws-trust-toggle'];
-  if (trusted) classes.push('is-trusted');
-  return `<button class="${classes.join(' ')}" type="button"
-                  data-ws="${esc(name)}" data-trusted="${trusted ? '1' : '0'}"
-                  title="${esc(tip)}" aria-label="Toggle trust">${icon}</button>`;
-}
+// trustToggleHtml() removed 2026-05-14 — the trust toggle now lives
+// inside the per-workspace ⋯ menu as a wide text-labeled button rendered
+// inline in workspaceColHtml. If you ever want an inline icon-only toggle
+// again, the original lived here; the .ws-trust-toggle CSS rules still
+// apply (just need the button element).
 
 async function _onSyncSkillsClick(e) {
   const btn = e.currentTarget;
@@ -1593,72 +1586,52 @@ function workspaceColHtml(name, data, opts = {}) {
     : `<span class="ws-meta-provider muted">(default${lastData.globalProvider ? `: ${esc(lastData.globalProvider)}` : ''})</span>`;
   const engineChip = `<span class="ws-engine" data-engine="${esc(wsEngine)}" title="Engine (immutable post-create)">${esc(wsEngine)}</span>`;
 
-  // Action buttons — same DOM classes whether they live inline (PC) or
-  // inside the mobile menu, so existing event binding keeps working.
-  // The .ws-menu-item modifier is the CSS hook for "stretch + label inside menu".
-  const trustBtn = trustToggleHtml(name);
-  const syncBtn = `<button class="ws-sync-skills" type="button" data-ws="${esc(name)}"
-                          title="Sync slash-command skills (扫盘并写入本地缓存)"
-                          aria-label="Sync skills">${ICONS.refresh}</button>`;
-  const resetBtn = `<button class="ws-reset-session" type="button" data-ws="${esc(name)}"
-                           title="Reset conversation"
-                           aria-label="Reset session">${ICONS.rewind}</button>`;
-  const deleteBtn = `<button class="ws-delete-workspace" type="button" data-ws="${esc(name)}"
-                            title="Delete workspace (rm -rf 目录 + 清配置 + 清 session)"
-                            aria-label="Delete workspace">${ICONS.trash}</button>`;
-
-  let providerEngineBlock;
-  if (_isMobileViewport) {
-    // Mobile: read-only state above + ⋯ menu with full controls.
-    // Inside the menu, buttons get .ws-menu-item to render as wide
-    // text-labeled rows; the provider select gets a labeled row.
-    providerEngineBlock = `
-      <div class="ws-meta-mobile">
-        ${providerLabel}
-        ${engineChip}
-        <details class="ws-actions-menu">
-          <summary class="ws-actions-trigger" aria-label="More actions">${ICONS.more}</summary>
-          <div class="ws-actions-menu-body">
-            <label class="ws-menu-row">
-              <span class="muted">Provider</span>
-              <select class="provider-inline" data-workspace="${esc(name)}">
-                ${providerOptions}
-              </select>
-            </label>
-            <button class="ws-trust-toggle ws-menu-item" type="button"
-                    data-ws="${esc(name)}" data-trusted="${effectiveTrust(name) ? '1' : '0'}"
-                    aria-label="Toggle trust">
-              ${effectiveTrust(name) ? ICONS.unlock : ICONS.lock}
-              <span>Trust: ${effectiveTrust(name) ? '<strong>on</strong> · auto-approve' : '<strong>off</strong> · ask first'}</span>
-            </button>
-            <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
-              ${ICONS.refresh} <span>Sync skills</span>
-            </button>
-            <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}">
-              ${ICONS.rewind} <span>Reset conversation</span>
-            </button>
-            <button class="ws-delete-workspace ws-menu-item ws-menu-item-danger" type="button" data-ws="${esc(name)}">
-              ${ICONS.trash} <span>Delete workspace</span>
-            </button>
-          </div>
-        </details>
-      </div>
-    `;
-  } else {
-    // PC: existing inline row — provider dropdown + engine chip + 4 icon buttons.
-    providerEngineBlock = `
-      <div class="ws-provider">
-        <select class="provider-inline" data-workspace="${esc(name)}" title="LLM provider for this workspace">
-          ${providerOptions}
-        </select>
-        ${engineChip}
-        ${trustBtn}
-        ${syncBtn}
-        ${resetBtn}
-        ${deleteBtn}
-      </div>
-    `;
-  }
+  // Universal layout (PC + mobile share this — PC's earlier inline row
+  // also wrapped when the column is narrow + the global-default placeholder
+  // is verbose). Layout:
+  //   [provider read-only label]  [engine chip]               [⋯ trigger]
+  //                                                            └─ menu body:
+  //                                                               Provider <select>
+  //                                                               🔓 Trust: on/off
+  //                                                               🔄 Sync skills
+  //                                                               ⏪ Reset conversation
+  //                                                               🗑 Delete workspace
+  // The 4 destructive/setting actions all live inside ⋯; the surface
+  // shows only state. Trust is in the menu (was inline on PC before) —
+  // that's a 1-extra-click regression accepted in exchange for a clean
+  // header that doesn't wrap.
+  const providerEngineBlock = `
+    <div class="ws-meta-mobile">
+      ${providerLabel}
+      ${engineChip}
+      <details class="ws-actions-menu">
+        <summary class="ws-actions-trigger" aria-label="More actions">${ICONS.more}</summary>
+        <div class="ws-actions-menu-body">
+          <label class="ws-menu-row">
+            <span class="muted">Provider</span>
+            <select class="provider-inline" data-workspace="${esc(name)}">
+              ${providerOptions}
+            </select>
+          </label>
+          <button class="ws-trust-toggle ws-menu-item" type="button"
+                  data-ws="${esc(name)}" data-trusted="${effectiveTrust(name) ? '1' : '0'}"
+                  aria-label="Toggle trust">
+            ${effectiveTrust(name) ? ICONS.unlock : ICONS.lock}
+            <span>Trust: ${effectiveTrust(name) ? '<strong>on</strong> · auto-approve' : '<strong>off</strong> · ask first'}</span>
+          </button>
+          <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
+            ${ICONS.refresh} <span>Sync skills</span>
+          </button>
+          <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}">
+            ${ICONS.rewind} <span>Reset conversation</span>
+          </button>
+          <button class="ws-delete-workspace ws-menu-item ws-menu-item-danger" type="button" data-ws="${esc(name)}">
+            ${ICONS.trash} <span>Delete workspace</span>
+          </button>
+        </div>
+      </details>
+    </div>
+  `;
 
   return `
     <div class="ws-col ${extraClass}" data-ws="${esc(name)}">
