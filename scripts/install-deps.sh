@@ -119,27 +119,14 @@ else
       }
     }
   },
-  "codex_profiles": {
-    "openai": {
-      "env": { "OPENAI_API_KEY": "<api-key>" }
-    },
-    "deepseek-codex": {
-      "env": { "DEEPSEEK_API_KEY": "<api-key>" },
-      "base_url": "https://api.deepseek.com/v1",
-      "env_key": "DEEPSEEK_API_KEY",
-      "wire_api": "chat",
-      "model": "deepseek-chat"
-    }
+  "openai_endpoints": {
+    "openai":   { "base_url": "https://api.openai.com/v1",   "api_key": "<api-key>", "wire_api": "responses" },
+    "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key": "<api-key>", "wire_api": "chat" },
+    "moonshot": { "base_url": "https://api.moonshot.cn/v1", "api_key": "<api-key>", "wire_api": "chat" }
   },
-  "roundtable_endpoints": {
-    "deepseek": {
-      "base_url": "https://api.deepseek.com/v1",
-      "api_key": "<api-key>"
-    },
-    "moonshot": {
-      "base_url": "https://api.moonshot.cn/v1",
-      "api_key": "<api-key>"
-    }
+  "codex_profiles": {
+    "openai":         { "endpoint": "openai",   "model": "gpt-5-codex" },
+    "deepseek-codex": { "endpoint": "deepseek", "model": "deepseek-chat" }
   }
 }
 JSON

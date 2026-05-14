@@ -133,7 +133,7 @@ PWA → Tasks → `New cron loop`。两种填法:
 
 ### 5. 多 provider
 
-`~/.cc-workflow/providers.json` 两段并列:`profiles`(claude)+ `codex_profiles`(codex):
+`~/.cc-workflow/providers.json` **按协议分段**(不是按 feature):
 
 ```json
 {
@@ -142,29 +142,36 @@ PWA → Tasks → `New cron loop`。两种填法:
     "deepseek": { "env": { "ANTHROPIC_BASE_URL": "...", "ANTHROPIC_AUTH_TOKEN": "sk-..." } },
     "kimi":     { "env": { "ANTHROPIC_BASE_URL": "...", "ANTHROPIC_API_KEY":  "sk-..." } }
   },
+  "openai_endpoints": {
+    "openai":   { "base_url": "https://api.openai.com/v1",   "api_key": "sk-...", "wire_api": "responses" },
+    "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "wire_api": "chat" },
+    "moonshot": { "base_url": "https://api.moonshot.cn/v1", "api_key": "sk-...", "wire_api": "chat" }
+  },
   "codex_profiles": {
-    "openai":         { "env": { "OPENAI_API_KEY": "sk-..." } },
-    "deepseek-codex": {
-      "env": { "DEEPSEEK_API_KEY": "sk-..." },
-      "base_url": "https://api.deepseek.com/v1",
-      "env_key":  "DEEPSEEK_API_KEY",
-      "wire_api": "chat",
-      "model":    "deepseek-chat"
-    }
+    "openai":         { "endpoint": "openai",   "model": "gpt-5-codex" },
+    "deepseek-codex": { "endpoint": "deepseek", "model": "deepseek-chat" }
   }
 }
 ```
 
-每 workspace 可以在列头的下拉里独立选 provider —— PWA 会根据这个 ws 的 engine 显示对应那段的 keys。
+3 段各自的语义:
 
-**关于 claude 段**:
-- `claude` profile 不带 token(用 Anthropic 原生 OAuth),只能本地 `claude login` 后被 agent-run 使用,不能从后端驱动——所以不出现在 PWA dropdown 里。
+| 段 | 协议 | 消费方 | 形状 |
+|---|---|---|---|
+| **`profiles`** | Anthropic-compat | `claude` CLI(通过 agent-run.sh 的 `setup_provider`)、`backend/llm.py` | 每个 profile 是一组 env vars(ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 等),agent-run 调 claude 前 export 进环境 |
+| **`openai_endpoints`** | OpenAI-compat | Roundtable(直接 HTTP)、codex CLI(通过 codex_profiles 引用) | `{base_url, api_key, wire_api}`。同一 endpoint 被两个 feature 共享,**key 只填一次** |
+| **`codex_profiles`** | codex 专用配置 | codex CLI(`setup_codex_provider` 生成 `~/.cc-state/codex-home/config.toml`) | `{endpoint: <openai_endpoints 的 key>, model: <model 名>}`。endpoint 字段是引用,实际 URL/key 来自 openai_endpoints |
 
-**关于 codex 段**:
-- 只有 `env` 的 profile(如 `openai`):agent-run 只 export 那些 env vars,codex CLI 用自己的内置默认
-- 同时带 `base_url + env_key + wire_api + model` 的 profile(如 `deepseek-codex`):agent-run 在每次 run 前生成临时 `~/.cc-state/codex-home/config.toml`,把 `$CODEX_HOME` 指过去,然后给 `codex exec` 加 `--profile <name>` 标志
-- 你自己交互式用的 `~/.codex/` 完全不动
-- **兼容性提醒**:非 OpenAI 端点对 codex 的 function calling / tool use 协议支持参差不齐。简单文本 prompt 多半能跑;agent-style 操作(改文件、跑 shell)可能在 wire-api 层卡住。先用 OpenAI 直连跑通,再考虑切便宜端点。
+每 workspace 可以在列头的下拉里独立选 provider —— PWA 根据这个 ws 的 engine 显示对应那段的 keys(claude → profiles,codex → codex_profiles,不会混)。
+
+**关于 `claude` profile**:不带 token(用 Anthropic 原生 OAuth),只能本地 `claude login` 后被 agent-run 使用,不能从后端驱动——所以不出现在 PWA dropdown 里。
+
+**关于 codex 的 endpoint 引用模式**:
+- `codex_profiles.deepseek-codex.endpoint = "deepseek"` → agent-run 查 `openai_endpoints.deepseek.{base_url, api_key, wire_api}`,生成 codex config.toml,export `OPENAI_API_KEY=<api_key>` 作为运行时 env。
+- 你自己交互式用的 `~/.codex/` 完全不动(我们用独立的 `~/.cc-state/codex-home/`)。
+- 老版本(2026-05-14 之前)的 inline `codex_profiles.<name>.{env, base_url, env_key, wire_api, model}` 形状仍兼容——agent-run 检测到没有 `endpoint` 字段时,会走 legacy 分支。
+
+**兼容性提醒**:非 OpenAI 端点(deepseek / moonshot 等)对 codex 的 function calling / tool use 协议支持参差不齐。简单文本 prompt 多半能跑;agent-style 操作(改文件、跑 shell)可能在 wire-api 层卡住。先用 OpenAI 直连跑通,再考虑切便宜端点。
 
 ---
 

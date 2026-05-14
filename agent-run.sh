@@ -181,24 +181,33 @@ setup_provider() {
 
 # codex peer of setup_provider. Reads providers.json's codex_profiles section
 # and prepares a managed CODEX_HOME at ~/.cc-state/codex-home/ so we don't
-# clobber the user's interactive ~/.codex/. Two shapes supported:
+# clobber the user's interactive ~/.codex/.
 #
-#   1. env-only profile (e.g. "openai"):
-#        { "env": { "OPENAI_API_KEY": "sk-..." } }
-#      → just export env, codex uses its built-in defaults.
+# Two profile shapes supported:
 #
-#   2. custom-endpoint profile (e.g. "deepseek-codex"):
-#        { "env": { "DEEPSEEK_API_KEY": "..." },
-#          "base_url": "...", "env_key": "DEEPSEEK_API_KEY",
-#          "wire_api": "chat", "model": "deepseek-chat" }
-#      → write a [model_providers.<name>] + [profiles.<name>] block into
-#        $CODEX_HOME/config.toml and set CODEX_PROFILE=<name> so run_codex
-#        passes `--profile <name>` to codex exec.
+#   A. Endpoint-reference (new, DRY — shares config with roundtable):
+#        codex_profiles.<name> = { "endpoint": "deepseek", "model": "..." }
+#      → look up openai_endpoints[<endpoint>].{base_url, api_key, wire_api}
+#      → export OPENAI_API_KEY=<api_key> (codex's standard env var name)
+#      → write codex config.toml using base_url + env_key=OPENAI_API_KEY + wire_api
 #
-# Caveat: non-OpenAI codex endpoints support tool-use to varying degrees.
-# Simple prompts probably work; complex agent flows may fail at the wire-api
-# level. We bridge the config plumbing — making the model itself behave is
-# upstream's problem.
+#   B. Inline (legacy, pre-2026-05-14):
+#        codex_profiles.<name> = { "env": {...}, "base_url": "...",
+#                                   "env_key": "...", "wire_api": "...", "model": "..." }
+#      → export env, write codex config.toml using inline fields
+#
+#   C. env-only profile (e.g. default "openai"):
+#        codex_profiles.<name> = { "env": { "OPENAI_API_KEY": "sk-..." } }
+#      → just export env, codex uses its built-in default base_url.
+#
+# Why support all three: A is the cleanest going forward, but B is what users
+# upgrading from May 2026 already have in their providers.json. C remains
+# valid for the default openai.com path where you don't need any URL override.
+#
+# Caveat (unchanged): non-OpenAI codex endpoints support tool-use to varying
+# degrees. Simple prompts probably work; complex agent flows may fail at the
+# wire-api level. We bridge the config plumbing — making the model itself
+# behave is upstream's problem.
 CODEX_HOME_DIR="${STATE_DIR}/codex-home"
 CODEX_PROFILE=""
 setup_codex_provider() {
@@ -208,13 +217,53 @@ setup_codex_provider() {
     profile="$(ccw_provider_name)"
     [[ -z "$profile" ]] && profile="openai"
 
-    # If the profile name doesn't exist under codex_profiles, fall back to
-    # codex defaults silently — the user may have picked a name only valid
-    # for claude (e.g. "deepseek" without the "-codex" suffix).
+    # Silently fall back to codex defaults if the profile name doesn't exist
+    # under codex_profiles (e.g. user picked a name only valid for claude).
     jq -e --arg p "$profile" '.codex_profiles[$p]' "$PROVIDERS_FILE" >/dev/null 2>&1 || return 0
 
-    # Export env vars (typically just the API key). Same placeholder check
-    # as setup_provider — refuse to run with <api-key> literals.
+    # Branch on schema shape. `endpoint` field present → Shape A (ref).
+    # Otherwise existing inline fields apply (Shape B/C).
+    local has_endpoint
+    has_endpoint="$(jq -r --arg p "$profile" '.codex_profiles[$p] | has("endpoint")' "$PROVIDERS_FILE")"
+
+    if [[ "$has_endpoint" == "true" ]]; then
+        # --- Shape A: endpoint reference ---
+        local ep_name base_url api_key wire_api model
+        ep_name="$(jq -r --arg p "$profile" '.codex_profiles[$p].endpoint' "$PROVIDERS_FILE")"
+        # Resolve the endpoint from openai_endpoints (the shared block).
+        jq -e --arg e "$ep_name" '.openai_endpoints[$e]' "$PROVIDERS_FILE" >/dev/null 2>&1 \
+            || die "$EX_USAGE" "codex_profile '$profile' references endpoint '$ep_name' which is missing from openai_endpoints — edit $PROVIDERS_FILE"
+        base_url="$(jq -r --arg e "$ep_name" '.openai_endpoints[$e].base_url // ""' "$PROVIDERS_FILE")"
+        api_key="$( jq -r --arg e "$ep_name" '.openai_endpoints[$e].api_key  // ""' "$PROVIDERS_FILE")"
+        wire_api="$(jq -r --arg e "$ep_name" '.openai_endpoints[$e].wire_api // "chat"' "$PROVIDERS_FILE")"
+        model="$(   jq -r --arg p "$profile" '.codex_profiles[$p].model // "gpt-5-codex"' "$PROVIDERS_FILE")"
+        [[ -n "$base_url" && -n "$api_key" ]] \
+            || die "$EX_USAGE" "openai_endpoints['$ep_name'] missing base_url or api_key — edit $PROVIDERS_FILE"
+        if [[ "$api_key" =~ ^\<.*\>$ ]]; then
+            die "$EX_USAGE" "openai_endpoints['$ep_name'].api_key is still a placeholder ($api_key) — edit $PROVIDERS_FILE"
+        fi
+        # Standardize on OPENAI_API_KEY for codex's env_key — single name,
+        # set per-run, doesn't collide with the user's interactive shell.
+        export "OPENAI_API_KEY=$api_key"
+        mkdir -p "$CODEX_HOME_DIR"
+        cat > "$CODEX_HOME_DIR/config.toml" <<EOF
+# Auto-generated by agent-run.sh from ~/.cc-workflow/providers.json — do not edit.
+# Regenerated on every run. To customize, edit codex_profiles + openai_endpoints.
+[model_providers.$profile]
+base_url = "$base_url"
+env_key  = "OPENAI_API_KEY"
+wire_api = "$wire_api"
+
+[profiles.$profile]
+model           = "$model"
+model_provider  = "$profile"
+EOF
+        export CODEX_HOME="$CODEX_HOME_DIR"
+        CODEX_PROFILE="$profile"
+        return 0
+    fi
+
+    # --- Shape B / C: legacy inline (env + optional base_url/env_key/wire_api/model) ---
     local key val
     while IFS=$'\t' read -r key val; do
         [[ -z "$key" ]] && continue
@@ -225,8 +274,6 @@ setup_codex_provider() {
     done < <(jq -r --arg p "$profile" \
         '.codex_profiles[$p].env // {} | to_entries[] | "\(.key)\t\(.value)"' "$PROVIDERS_FILE")
 
-    # If base_url is set, generate $CODEX_HOME/config.toml + remember profile
-    # name for the --profile flag in run_codex.
     local has_base
     has_base="$(jq -r --arg p "$profile" '.codex_profiles[$p] | has("base_url")' "$PROVIDERS_FILE")"
     if [[ "$has_base" == "true" ]]; then
@@ -236,9 +283,6 @@ setup_codex_provider() {
         wire_api="$(jq -r --arg p "$profile" '.codex_profiles[$p].wire_api // "chat"' "$PROVIDERS_FILE")"
         env_key="$( jq -r --arg p "$profile" '.codex_profiles[$p].env_key  // "OPENAI_API_KEY"' "$PROVIDERS_FILE")"
         model="$(   jq -r --arg p "$profile" '.codex_profiles[$p].model    // "gpt-5-codex"' "$PROVIDERS_FILE")"
-        # Overwrite (not append) so stale entries from a prior profile don't
-        # accumulate. Single source of truth = providers.json + the active
-        # profile, regenerated each run.
         cat > "$CODEX_HOME_DIR/config.toml" <<EOF
 # Auto-generated by agent-run.sh from ~/.cc-workflow/providers.json — do not edit.
 # Regenerated on every run. To customize, edit codex_profiles in providers.json.

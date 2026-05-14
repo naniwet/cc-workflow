@@ -2,14 +2,13 @@
 
 Diverges from upstream AgentRoundtable's model.py:
   - No `openai` SDK dependency — uses stdlib urllib (matches backend/llm.py's
-    pattern). Cost: ~50 fewer lines of dependency surface. Trade-off: we
-    re-implement the retry / error classification logic in plain Python.
-  - Endpoint config comes from ~/.cc-workflow/providers.json#roundtable_endpoints
-    (NOT env vars DEEPSEEK_API_KEY / MOONSHOT_API_KEY). One config file
-    per-cc-workflow install, same source of truth as claude/codex profiles.
-  - Same model-name → endpoint mapping in the MODEL_ENDPOINTS table below
-    (we keep this in code, not config — adding a new model name is a code
-    change; this matches the upstream "code is the registry" design choice).
+    pattern). Cost: ~50 fewer lines of dependency surface.
+  - Endpoint config comes from ~/.cc-workflow/providers.json#openai_endpoints
+    (shared with codex CLI via codex_profiles[X].endpoint references — same
+    DeepSeek key used in two places before is now stored once).
+  - Model-name → endpoint mapping in the MODEL_ENDPOINTS table below.
+    Adding a new model name is a code change (matches the upstream "code
+    is the registry" design choice).
 
 Retry: 3 attempts with 0.5/1/2s backoffs on transient errors (timeout,
 connection drop, 429, 5xx). 4xx is permanent. Empty output is permanent.
@@ -69,29 +68,34 @@ MODEL_ENDPOINTS: dict[str, str] = {
 
 
 def _load_endpoint(name: str) -> dict:
-    """Resolve providers.json#roundtable_endpoints.<name> → {base_url, api_key}.
-    Raises ModelBadRequestError if the endpoint isn't configured (so the user
-    gets a clean error in the PWA rather than a network error 60s later)."""
+    """Resolve providers.json#openai_endpoints.<name> → {base_url, api_key}.
+
+    Shared schema with codex_profiles' endpoint references — same DeepSeek
+    key fills both the codex path and the roundtable path.
+
+    Raises ModelBadRequestError if the endpoint isn't configured (so the
+    user gets a clean error in the PWA rather than a network error 60s later).
+    """
     try:
         data = json.loads(config.PROVIDERS_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         raise ModelBadRequestError(f"providers.json unreadable: {e}")
-    endpoints = data.get("roundtable_endpoints") or {}
+    endpoints = data.get("openai_endpoints") or {}
     ep = endpoints.get(name)
     if not ep:
         raise ModelBadRequestError(
-            f"roundtable_endpoints.{name!r} missing in providers.json — "
+            f"openai_endpoints.{name!r} missing in providers.json — "
             f"add a {{ base_url, api_key }} block"
         )
     base_url = (ep.get("base_url") or "").rstrip("/")
     api_key = ep.get("api_key") or ""
     if not base_url or not api_key:
         raise ModelBadRequestError(
-            f"roundtable_endpoints.{name!r} missing base_url or api_key"
+            f"openai_endpoints.{name!r} missing base_url or api_key"
         )
     if api_key.startswith("<") and api_key.endswith(">"):
         raise ModelBadRequestError(
-            f"roundtable_endpoints.{name!r}.api_key is still a placeholder "
+            f"openai_endpoints.{name!r}.api_key is still a placeholder "
             f"({api_key}) — fill the real key in providers.json"
         )
     return {"base_url": base_url, "api_key": api_key}
