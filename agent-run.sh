@@ -642,28 +642,35 @@ ${PROMPT}"
 }
 
 run_codex() {
-    # codex CLI (https://github.com/openai/codex) has a different surface from
-    # Claude Code — translate Claude's semantics where possible, fail loudly
-    # where there's no equivalent:
+    # codex CLI (https://github.com/openai/codex) flag surface verified
+    # against codex-cli 0.130.0 (`codex exec --help`):
     #
-    #   --json                       JSONL event stream → log only; we
-    #                                 don't parse it (final-text path below).
-    #   --output-last-message <path> Clean final assistant text to a file
-    #                                 (avoids parsing JSON for the reply).
-    #   -a never                     Never TTY-prompt for approval — we run
-    #                                 headless, a prompt would hang.
-    #   -s workspace-write           Sandbox: read all + write only inside
-    #                                 WORKDIR; no network egress. (codex's
-    #                                 only granularity. PreToolUse-style
-    #                                 hooks don't exist upstream — see
-    #                                 issue #8923 / #3817.)
+    #   --dangerously-bypass-approvals-and-sandbox
+    #                                Skip all approval prompts AND run
+    #                                without sandbox restrictions. The
+    #                                "no prompts" half is essential — we
+    #                                run headless, a TTY prompt would hang.
+    #                                The "no sandbox" half is the price
+    #                                in this codex version: 0.130.0 has
+    #                                no middle ground between "ask every
+    #                                time" and "no prompts + no sandbox".
+    #                                The backend forces trust=true for
+    #                                engine=codex workspaces, so the user
+    #                                has opted into this security model.
     #   --skip-git-repo-check        We've already validated WORKDIR is a
-    #                                 git repo at arg-parse time.
+    #                                git repo at arg-parse time.
+    #   --profile <CODEX_PROFILE>    Set by setup_codex_provider when a
+    #                                custom-endpoint profile is active.
     #
-    # PERMISSION_MODE is intentionally ignored here — claude's
-    # acceptEdits/bypassPermissions vocabulary doesn't map. Backend enforces
-    # engine=codex → trust=true at workspace-create time, so the user has
-    # already opted into "auto-approve everything" by picking this engine.
+    # NOT used (removed when verified absent from 0.130.0):
+    #   -a never               (no --ask-for-approval flag at this version)
+    #   --output-last-message  (not implemented; we capture stdout directly)
+    #   --json                 (would turn stdout into JSONL; we want plain
+    #                           text for the final reply)
+    #
+    # PERMISSION_MODE is intentionally ignored — claude's vocabulary
+    # doesn't map. Engine=codex → trust=true at workspace creation makes
+    # the security model explicit.
     #
     # Session resume:
     # We can't fetch session_id from --json output (upstream issue #8923),
@@ -692,21 +699,26 @@ run_codex() {
         cmd+=(resume --last)
     fi
     [[ -n "$CODEX_PROFILE" ]] && cmd+=(--profile "$CODEX_PROFILE")
-    cmd+=(--json --output-last-message "$out" -a never -s workspace-write --skip-git-repo-check "$PROMPT")
+    cmd+=(--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "$PROMPT")
+    # codex exec without --json writes the final assistant message to stdout
+    # (per https://developers.openai.com/codex/noninteractive). Progress
+    # goes to stderr — keep it in the day log for debugging without
+    # contaminating the captured reply.
     (
         cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" "${cmd[@]}"
-    ) >>"$log" 2>&1 || rc=$?
+    ) >"$out" 2>>"$log" || rc=$?
+    # Mirror stdout to the log too, for easier debugging.
+    cat "$out" >>"$log" 2>/dev/null || true
     if [[ $rc -eq 124 ]]; then rm -f "$out"; die "$EX_TIMEOUT" "codex timeout (${TIMEOUT_SECONDS}s)"; fi
     if [[ $rc -ne 0 ]]; then  rm -f "$out"; die "$EX_ENGINE_FAIL" "codex exit=$rc (log: $log)"; fi
     # First-run success → drop the marker so the next call resumes. If codex
     # state gets wiped externally (e.g. ~/.codex/ deleted), the resume call
     # will fail loudly with EX_ENGINE_FAIL — user can clear our marker by
-    # hand. We don't auto-recover because silently dropping conversation
-    # context would be more surprising than an explicit error.
+    # hand.
     mkdir -p "$marker_dir"
     touch "$marker"
     # Emit the final assistant text so the outer OUTPUT="$(run_codex)" captures
-    # it. codex writes plain text (no JSON wrapping) to --output-last-message.
+    # it. With no --json flag, codex's stdout is plain text.
     cat "$out" 2>/dev/null || true
     rm -f "$out"
 }

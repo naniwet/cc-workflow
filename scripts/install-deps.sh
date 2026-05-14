@@ -23,18 +23,33 @@ else
 fi
 
 # ---------- codex CLI ----------
-# C1+ (May 2026): codex is no longer best-effort. agent-run's run_codex uses
-# real flags (--json / -o / -a never / -s workspace-write) and a workspace
-# created with engine=codex actually routes through here. Install it
-# unconditionally so users picking codex in the PWA don't hit "command not
-# found". Auth on headless server is via OPENAI_API_KEY (or CODEX_API_KEY) —
-# user fills that into providers.json or shell env separately.
+# C1+ (May 2026): codex is no longer best-effort. agent-run's run_codex calls
+# codex non-interactively and a workspace created with engine=codex actually
+# routes through here. Install it unconditionally so users picking codex in
+# the PWA don't hit "command not found".
+#
+# The /usr/local/bin/codex symlink is essential: npm's global install
+# typically lands under ~/.npm-global/bin or similar, which IS NOT in
+# systemd's default PATH. cc-workflow.service runs as a systemd unit, so
+# without the symlink agent-run subprocess fails with exit 127 (timeout
+# wrapper reports "No such file or directory"). /usr/local/bin is in
+# systemd's default PATH on Ubuntu, so a symlink there fixes it.
 if have codex; then
     log "codex: $(codex --version 2>/dev/null || codex --help 2>&1 | head -1)"
 else
     have npm || { err "npm missing — install Node.js first (see claude install step above)"; exit 1; }
     log "installing @openai/codex..."
     sudo npm install -g @openai/codex
+fi
+
+# Ensure /usr/local/bin/codex symlink exists (systemd PATH visibility).
+if [[ ! -e /usr/local/bin/codex ]]; then
+    if have codex; then
+        sudo ln -sf "$(command -v codex)" /usr/local/bin/codex
+        log "linked /usr/local/bin/codex → $(command -v codex)"
+    else
+        warn "codex not on PATH after install — manually: sudo ln -sf <path> /usr/local/bin/codex"
+    fi
 fi
 
 # ---------- jq ----------
