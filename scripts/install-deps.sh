@@ -23,34 +23,10 @@ else
 fi
 
 # ---------- codex CLI ----------
-# C1+ (May 2026): codex is no longer best-effort. agent-run's run_codex calls
-# codex non-interactively and a workspace created with engine=codex actually
-# routes through here. Install it unconditionally so users picking codex in
-# the PWA don't hit "command not found".
-#
-# The /usr/local/bin/codex symlink is essential: npm's global install
-# typically lands under ~/.npm-global/bin or similar, which IS NOT in
-# systemd's default PATH. cc-workflow.service runs as a systemd unit, so
-# without the symlink agent-run subprocess fails with exit 127 (timeout
-# wrapper reports "No such file or directory"). /usr/local/bin is in
-# systemd's default PATH on Ubuntu, so a symlink there fixes it.
-if have codex; then
-    log "codex: $(codex --version 2>/dev/null || codex --help 2>&1 | head -1)"
-else
-    have npm || { err "npm missing — install Node.js first (see claude install step above)"; exit 1; }
-    log "installing @openai/codex..."
-    sudo npm install -g @openai/codex
-fi
-
-# Ensure /usr/local/bin/codex symlink exists (systemd PATH visibility).
-if [[ ! -e /usr/local/bin/codex ]]; then
-    if have codex; then
-        sudo ln -sf "$(command -v codex)" /usr/local/bin/codex
-        log "linked /usr/local/bin/codex → $(command -v codex)"
-    else
-        warn "codex not on PATH after install — manually: sudo ln -sf <path> /usr/local/bin/codex"
-    fi
-fi
+# Removed 2026-05-14: codex-cli 0.130+ dropped wire_api=chat, breaking
+# DeepSeek/Kimi support. See README "engine 现状". If/when upstream
+# allows non-OpenAI providers again, restore the install block from
+# git history (commit f15d830 has it).
 
 # ---------- jq ----------
 if have jq; then
@@ -132,15 +108,14 @@ else
     }
   },
   "openai_endpoints": {
-    "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key": "<api-key>", "wire_api": "chat" },
-    "moonshot": { "base_url": "https://api.moonshot.cn/v1", "api_key": "<api-key>", "wire_api": "chat" }
-  },
-  "codex_profiles": {
-    "deepseek": { "endpoint": "deepseek", "model": "deepseek-chat" },
-    "kimi":     { "endpoint": "moonshot", "model": "kimi-k2.6" }
+    "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key": "<api-key>" },
+    "moonshot": { "base_url": "https://api.moonshot.cn/v1", "api_key": "<api-key>" }
   }
 }
 JSON
+# openai_endpoints is consumed by roundtable's model.py (third PWA tab).
+# wire_api removed from template since codex is gone — roundtable uses
+# /v1/chat/completions universally and doesn't need that field.
 fi
 chmod 0600 "$PROVIDERS_FILE"
 log "providers.json: 0600"

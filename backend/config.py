@@ -27,11 +27,6 @@ JOBS_DIR = STATE_DIR / "jobs"
 # save_session_id(). Read by both agent-run (for --resume) and backend's
 # DELETE /workspaces/{name}/session (to clear an over-long session).
 SESSIONS_FILE = STATE_DIR / "sessions.json"
-# codex marker dir — touched after first codex run per (workspace, session_key)
-# so subsequent runs use `codex exec resume --last`. Same delete endpoint
-# clears both this and the claude session_id.
-CODEX_SESSIONS_DIR = STATE_DIR / "codex-sessions"
-
 # Roundtable (multi-agent debate) jsonl storage. Each session is one
 # <slug>.jsonl with a meta header + 9 turn lines. Static — backend
 # scans this dir for the list view, reads one file for the detail view.

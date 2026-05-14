@@ -222,7 +222,6 @@ let lastData = {
   sessions: { active: [], queued: [], recent: [] },
   loops: [],
   providers: [],                        // claude profiles (providers.json#profiles)
-  codexProviders: [],                   // codex profiles (providers.json#codex_profiles)
   wsSettings: {},                       // name → {provider?, engine?, trust?}
   globalProvider: '',                   // config.toml's provider field
   roundtables: [],                      // list summaries from GET /roundtables
@@ -230,16 +229,11 @@ let lastData = {
 
 async function refreshAll() {
   try {
-    const [ws, sess, lp, providers, codexProviders, cfg, approvals, roundtables] = await Promise.all([
+    const [ws, sess, lp, providers, cfg, approvals, roundtables] = await Promise.all([
       api('/workspaces'),
       api('/sessions'),
       api('/loops'),
       api('/providers'),
-      // /providers/codex is a separate fetch on purpose — the dropdown shown
-      // for a codex workspace consumes a different list (codex_profiles)
-      // than the claude one. .catch returns [] so older backends that don't
-      // expose it still render claude dropdowns correctly.
-      api('/providers/codex').catch(() => []),
       api('/config'),
       api('/approvals/pending').catch(() => []),   // graceful: backend may not have it yet
       // /roundtables = list summaries for the 3rd tab. Cheap (no per-turn
@@ -260,7 +254,6 @@ async function refreshAll() {
       sessions: sess,
       loops: lp,
       providers,
-      codexProviders: Array.isArray(codexProviders) ? codexProviders : [],
       wsSettings: Object.fromEntries(settingsList),
       globalProvider: cfg?.provider || '',
       globalDefaultTrust: !!cfg?.default_trust,
@@ -567,8 +560,7 @@ function renderDesktopOverview() {
   const layout = effectiveLayout(allNames);
 
   // Initial provider list assumes engine=claude (the form's default selection).
-  // _wireCodexNewWsLock re-renders this dropdown when the user flips engine.
-  const newWsProviderOptions = _providerOptionsHtml('claude', '', true);
+  const newWsProviderOptions = _providerOptionsHtml('', true);
 
   // Render: alternating row-gap + row. The trailing gap (after the last
   // row) is a drop target for "create new row at the bottom".
@@ -603,18 +595,11 @@ function renderDesktopOverview() {
       <form data-form-id="new-ws">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
           placeholder="repo-name (alphanum / . _ -)" required></label>
-        <div class="form-row">
-          <label>provider <select name="provider">${newWsProviderOptions}</select></label>
-          <label>engine
-            <select name="engine">
-              <option value="claude">claude</option>
-              <!-- codex 暂从 PWA 隐藏:codex-cli 0.130+ 废弃了 wire_api=chat,
-                   DeepSeek/Kimi 没有 /v1/responses 端点。后端代码保留,
-                   想用 codex 的话手动改 workspaces.json 或等上游修复。
-                   详见根目录 README. -->
-            </select>
-          </label>
-        </div>
+        <label>provider <select name="provider">${newWsProviderOptions}</select></label>
+        <!-- engine 字段固定为 claude(codex 已下线 2026-05-14;原因见 README "engine 现状")。
+             保留 hidden input 是为了后端 NewWorkspaceRequest 的 engine 字段满足 Pydantic
+             Literal["claude"] 验证。 -->
+        <input type="hidden" name="engine" value="claude">
         <label class="inline-check">
           <input type="checkbox" name="trust" ${lastData.globalDefaultTrust ? 'checked' : ''}>
           Auto-approve all tools (trust this workspace — Bash / git / WebFetch / etc. won't ask for permission)
@@ -730,9 +715,7 @@ function renderMobileOverview() {
     `;
   }).join('');
 
-  // Initial dropdown assumes engine=claude; _wireCodexNewWsLock swaps it
-  // when the user changes engine.
-  const newWsProviderOptions = _providerOptionsHtml('claude', '', true);
+  const newWsProviderOptions = _providerOptionsHtml('', true);
 
   $('view').innerHTML = `
     <h1>Workspaces</h1>
@@ -741,18 +724,11 @@ function renderMobileOverview() {
       <form data-form-id="new-ws">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
           placeholder="repo-name (alphanum / . _ -)" required></label>
-        <div class="form-row">
-          <label>provider <select name="provider">${newWsProviderOptions}</select></label>
-          <label>engine
-            <select name="engine">
-              <option value="claude">claude</option>
-              <!-- codex 暂从 PWA 隐藏:codex-cli 0.130+ 废弃了 wire_api=chat,
-                   DeepSeek/Kimi 没有 /v1/responses 端点。后端代码保留,
-                   想用 codex 的话手动改 workspaces.json 或等上游修复。
-                   详见根目录 README. -->
-            </select>
-          </label>
-        </div>
+        <label>provider <select name="provider">${newWsProviderOptions}</select></label>
+        <!-- engine 字段固定为 claude(codex 已下线 2026-05-14;原因见 README "engine 现状")。
+             保留 hidden input 是为了后端 NewWorkspaceRequest 的 engine 字段满足 Pydantic
+             Literal["claude"] 验证。 -->
+        <input type="hidden" name="engine" value="claude">
         <label class="inline-check">
           <input type="checkbox" name="trust" ${lastData.globalDefaultTrust ? 'checked' : ''}>
           Auto-approve all tools (trust)
@@ -770,7 +746,6 @@ function renderMobileOverview() {
 
   const newWsForm = $('view').querySelector('form[data-form-id="new-ws"]');
   newWsForm?.addEventListener('submit', onAddWorkspace);
-  _wireCodexNewWsLock(newWsForm);
 }
 
 // Bind handlers that exist on every .ws-col-rendering view (PC overview,
@@ -1055,7 +1030,7 @@ function bindWorkspaceColHandlers(root) {
     btn.addEventListener('click', _onSyncSkillsClick);
   }
   // Reset session button — destructive, confirm first. Clears claude
-  // session_id + codex marker so the next run starts a fresh conversation.
+  // claude session_id so the next run starts a fresh conversation.
   for (const btn of root.querySelectorAll('.ws-reset-session')) {
     btn.addEventListener('click', _onResetSessionClick);
   }
@@ -1120,74 +1095,26 @@ function _addTapFallback(el, handler) {
 function bindOverviewHandlers() {
   const newWsForm = $('view').querySelector('form[data-form-id="new-ws"]');
   newWsForm?.addEventListener('submit', onAddWorkspace);
-  _wireCodexNewWsLock(newWsForm);
   bindWorkspaceColHandlers($('view'));
   setupCarousel();
   setupDragReorder();
 }
 
-// Pick the right provider list for an engine: claude → providers.json#profiles,
-// codex → providers.json#codex_profiles. agent-run.sh consumes each via a
-// different code path (setup_provider vs setup_codex_provider), so we keep
-// them visually separate in the UI too.
-function _providersFor(engine) {
-  return engine === 'codex' ? (lastData.codexProviders || []) : (lastData.providers || []);
-}
-
-function _providerOptionsHtml(engine, selected, includeDefault) {
-  const list = _providersFor(engine);
+// Build the provider <option> list for the new-workspace form +
+// per-workspace column header dropdown. Always reads from
+// providers.json#profiles (the only supported engine since codex was
+// removed 2026-05-14).
+function _providerOptionsHtml(selected, includeDefault) {
+  const list = lastData.providers || [];
   const opts = [];
   if (includeDefault) {
-    const label = engine === 'codex'
-      ? '(codex 默认:openai 内置)'
-      : `(use global default${lastData.globalProvider ? `: ${esc(lastData.globalProvider)}` : ''})`;
+    const label = `(use global default${lastData.globalProvider ? `: ${esc(lastData.globalProvider)}` : ''})`;
     opts.push(`<option value=""${selected ? '' : ' selected'}>${label}</option>`);
   }
   for (const p of list) {
     opts.push(`<option value="${esc(p)}"${p === selected ? ' selected' : ''}>${esc(p)}</option>`);
   }
   return opts.join('');
-}
-
-// engine=codex implies trust=true AND swaps the provider dropdown to the
-// codex_profiles list. Both visible at form-fill time so the user doesn't
-// pick a claude-profile name expecting it to apply to codex.
-//
-// (was _wireCodexTrustLock; renamed because it now does two things.)
-function _wireCodexNewWsLock(form) {
-  if (!form) return;
-  const engineSel = form.querySelector('select[name="engine"]');
-  const trustChk = form.querySelector('input[name="trust"]');
-  const providerSel = form.querySelector('select[name="provider"]');
-  if (!engineSel) return;
-  // Remember the user's pre-codex trust choice so flipping engine back to
-  // claude restores it.
-  let prevTrustValue = trustChk ? trustChk.checked : false;
-  const apply = () => {
-    const eng = engineSel.value;
-    if (trustChk) {
-      if (eng === 'codex') {
-        if (!trustChk.disabled) prevTrustValue = trustChk.checked;
-        trustChk.checked = true;
-        trustChk.disabled = true;
-        trustChk.title = 'codex 不支持精细审批,trust 锁定为 true';
-      } else {
-        trustChk.disabled = false;
-        trustChk.checked = prevTrustValue;
-        trustChk.title = '';
-      }
-    }
-    if (providerSel) {
-      const wasSelected = providerSel.value;
-      providerSel.innerHTML = _providerOptionsHtml(eng, '', true);
-      // Preserve the prior selection if it's valid for the new engine,
-      // otherwise fall to the "(default)" empty option.
-      const valid = new Set(Array.from(providerSel.options).map((o) => o.value));
-      providerSel.value = valid.has(wasSelected) ? wasSelected : '';
-    }
-  };
-  engineSel.addEventListener('change', apply);
-  apply();
 }
 
 // ---------- PC drag-to-reorder ----------
@@ -1389,39 +1316,23 @@ function setupCarousel() {
 }
 
 // Effective per-workspace trust (mirrors backend ws_settings.trust_for):
-//   engine=codex → always true (forced; codex has no fine-grained approval)
 //   explicit setting > config.toml default_trust > false
 function effectiveTrust(name) {
   const s = lastData.wsSettings[name];
-  if (s?.engine === 'codex') return true;
   if (s && typeof s.trust === 'boolean') return s.trust;
   return !!lastData.globalDefaultTrust;
 }
 
-// Render the per-workspace trust toggle button.
-// For codex workspaces the toggle is rendered DISABLED — codex has no
-// PreToolUse-style hook API upstream (issue #8923/#3817), so trust is
-// effectively locked to true. The button still renders so the column
-// header layout stays consistent, but clicking does nothing except
-// surface a toast explanation.
 function trustToggleHtml(name) {
-  const isCodex = lastData.wsSettings[name]?.engine === 'codex';
   const trusted = effectiveTrust(name);
   const icon = trusted ? ICONS.unlock : ICONS.lock;
-  let tip;
-  if (isCodex) {
-    tip = 'codex 不支持精细工具审批 — trust 锁定为 auto-approve.';
-  } else {
-    tip = trusted
-      ? '工具已自动批准 (bypassPermissions). 点击改回 ask.'
-      : '工具需要批准 (acceptEdits). 点击改成自动 (慎用).';
-  }
+  const tip = trusted
+    ? '工具已自动批准 (bypassPermissions). 点击改回 ask.'
+    : '工具需要批准 (acceptEdits). 点击改成自动 (慎用).';
   const classes = ['ws-trust-toggle'];
   if (trusted) classes.push('is-trusted');
-  if (isCodex) classes.push('is-locked');
   return `<button class="${classes.join(' ')}" type="button"
                   data-ws="${esc(name)}" data-trusted="${trusted ? '1' : '0'}"
-                  data-codex="${isCodex ? '1' : '0'}"
                   title="${esc(tip)}" aria-label="Toggle trust">${icon}</button>`;
 }
 
@@ -1467,12 +1378,6 @@ async function _onResetSessionClick(e) {
 async function onTrustToggleClick(e) {
   const btn = e.currentTarget;
   const name = btn.dataset.ws;
-  // codex workspaces: short-circuit with an explanation rather than firing
-  // a PUT that the backend will 400. Less round-trips, clearer signal.
-  if (btn.dataset.codex === '1') {
-    showToast('info', `${name}: engine=codex 强制 trust=true(codex 无审批 hook)`, { ttl: 3500 });
-    return;
-  }
   const wasTrusted = btn.dataset.trusted === '1';
   const next = !wasTrusted;
   // Only confirm when ENABLING trust — it's the security-relevant direction.
@@ -1594,10 +1499,9 @@ function workspaceColHtml(name, data, opts = {}) {
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
-  // Per-workspace dropdown shows the provider list matching THIS workspace's
-  // engine (claude → profiles, codex → codex_profiles). Include the empty
-  // "default" option so users can clear the per-ws override.
-  const providerOptions = _providerOptionsHtml(wsEngine, wsProvider, true);
+  // Per-workspace dropdown — includes the empty "default" option so users
+  // can clear the per-ws override.
+  const providerOptions = _providerOptionsHtml(wsProvider, true);
 
   // Overview: h2 wraps in a link so clicking it drills into detail; also
   // gets a drag handle for PC drag-to-reorder.

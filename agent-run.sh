@@ -50,15 +50,20 @@ POSITIONAL=()
 
 usage() {
     cat >&2 <<'EOF'
-Usage: agent-run --engine=<claude|codex> <workspace> "<prompt>" [session_key]
+Usage: agent-run --engine=claude <workspace> "<prompt>" [session_key]
                  [--source <pwa|feishu|cron|manual>] [--job-name <name>]
                  [--provider <name>] [--permission-mode <mode>]
 
-  --provider <name>         Override config.toml's provider. For claude engine,
-                            <name> must be a key in providers.json#profiles; for
-                            codex engine, a key in providers.json#codex_profiles.
-                            Falls back to config.toml then engine's default
-                            ("claude" anthropic OAuth / "openai" built-in).
+  --engine=claude           Only "claude" is supported. The flag is kept for
+                            backward compat with cron entries; codex support
+                            was removed 2026-05-14 after upstream removed
+                            wire_api=chat in codex-cli 0.130+, which broke
+                            non-OpenAI providers (DeepSeek/Kimi). See README
+                            "engine 现状" for re-enable steps.
+  --provider <name>         Override config.toml's provider. <name> must be
+                            a key in ~/.cc-workflow/providers.json#profiles.
+                            Falls back to config.toml then "claude" (anthropic
+                            OAuth via local `claude login`).
   --permission-mode <mode>  Claude tool-permission mode. One of:
                               acceptEdits        — default; Edit/Write auto-allowed
                               bypassPermissions  — all tools auto-allowed (use when
@@ -99,7 +104,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$ENGINE" ]] || { usage; die "$EX_USAGE" "missing --engine"; }
-[[ "$ENGINE" =~ ^(claude|codex)$ ]] || die "$EX_USAGE" "engine must be claude|codex (got: $ENGINE)"
+# codex was removed 2026-05-14 — see usage doc. Old cron entries or
+# workspaces.json rows with engine=codex will fail here with a clear
+# error rather than silently working in a half-broken state.
+[[ "$ENGINE" == "claude" ]] || die "$EX_USAGE" "engine must be claude (codex support removed; got: $ENGINE)"
 case "$SOURCE" in pwa|feishu|cron|manual) ;; *) die "$EX_USAGE" "bad --source: $SOURCE" ;; esac
 case "$PERMISSION_MODE" in acceptEdits|bypassPermissions|plan|default) ;; *) die "$EX_USAGE" "bad --permission-mode: $PERMISSION_MODE (want acceptEdits|bypassPermissions|plan|default)" ;; esac
 [[ ${#POSITIONAL[@]} -ge 2 ]] || { usage; die "$EX_USAGE" "need <workspace> and <prompt>"; }
@@ -154,8 +162,10 @@ ccw_provider_name() {
     ' "$CCW_CONFIG"
 }
 
-# Export env vars from providers.json's claude `profiles` section.
-# No-op for engine != claude (codex has its own peer setup_codex_provider).
+# Export env vars from providers.json's `profiles` section before
+# invoking claude. (Only "claude" engine is supported — see arg parse
+# above. Function-level guard kept for defense-in-depth in case a
+# future engine is added without removing the guard.)
 setup_provider() {
     [[ "$ENGINE" == "claude" ]] || return 0
     local profile key val
@@ -179,135 +189,11 @@ setup_provider() {
         '.profiles[$p].env | to_entries[] | "\(.key)\t\(.value)"' "$PROVIDERS_FILE")
 }
 
-# codex peer of setup_provider. Reads providers.json's codex_profiles section
-# and prepares a managed CODEX_HOME at ~/.cc-state/codex-home/ so we don't
-# clobber the user's interactive ~/.codex/.
-#
-# Two profile shapes supported:
-#
-#   A. Endpoint-reference (new, DRY — shares config with roundtable):
-#        codex_profiles.<name> = { "endpoint": "deepseek", "model": "..." }
-#      → look up openai_endpoints[<endpoint>].{base_url, api_key, wire_api}
-#      → export OPENAI_API_KEY=<api_key> (codex's standard env var name)
-#      → write codex config.toml using base_url + env_key=OPENAI_API_KEY + wire_api
-#
-#   B. Inline (legacy, pre-2026-05-14):
-#        codex_profiles.<name> = { "env": {...}, "base_url": "...",
-#                                   "env_key": "...", "wire_api": "...", "model": "..." }
-#      → export env, write codex config.toml using inline fields
-#
-#   C. env-only profile (e.g. default "openai"):
-#        codex_profiles.<name> = { "env": { "OPENAI_API_KEY": "sk-..." } }
-#      → just export env, codex uses its built-in default base_url.
-#
-# Why support all three: A is the cleanest going forward, but B is what users
-# upgrading from May 2026 already have in their providers.json. C remains
-# valid for the default openai.com path where you don't need any URL override.
-#
-# Caveat (unchanged): non-OpenAI codex endpoints support tool-use to varying
-# degrees. Simple prompts probably work; complex agent flows may fail at the
-# wire-api level. We bridge the config plumbing — making the model itself
-# behave is upstream's problem.
-CODEX_HOME_DIR="${STATE_DIR}/codex-home"
-CODEX_PROFILE=""
-setup_codex_provider() {
-    [[ "$ENGINE" == "codex" ]] || return 0
-    [[ -f "$PROVIDERS_FILE" ]] || return 0           # no providers file → codex defaults
-    local profile
-    profile="$(ccw_provider_name)"
-    # Empty profile name → check if the user has any codex_profiles defined
-    # and fall back to the first one; otherwise let codex use its built-in
-    # default (needs OPENAI_API_KEY in env).
-    if [[ -z "$profile" ]]; then
-        profile="$(jq -r '.codex_profiles | keys | .[0] // ""' "$PROVIDERS_FILE")"
-        [[ -z "$profile" ]] && return 0
-    fi
+# NOTE: setup_codex_provider() + run_codex() removed 2026-05-14.
+# codex-cli 0.130+ dropped wire_api=chat, breaking DeepSeek/Kimi support.
+# See README "engine 现状" section + git history (commits 35afb12 / acac176)
+# if you want to revive codex support later.
 
-    # Silently fall back to codex defaults if the profile name doesn't exist
-    # under codex_profiles (e.g. user picked a name only valid for claude).
-    # Note: by convention codex_profiles and profiles use parallel keys
-    # ("deepseek" / "kimi") so a single config.toml provider line works
-    # for both engines.
-    jq -e --arg p "$profile" '.codex_profiles[$p]' "$PROVIDERS_FILE" >/dev/null 2>&1 || return 0
-
-    # Branch on schema shape. `endpoint` field present → Shape A (ref).
-    # Otherwise existing inline fields apply (Shape B/C).
-    local has_endpoint
-    has_endpoint="$(jq -r --arg p "$profile" '.codex_profiles[$p] | has("endpoint")' "$PROVIDERS_FILE")"
-
-    if [[ "$has_endpoint" == "true" ]]; then
-        # --- Shape A: endpoint reference ---
-        local ep_name base_url api_key wire_api model
-        ep_name="$(jq -r --arg p "$profile" '.codex_profiles[$p].endpoint' "$PROVIDERS_FILE")"
-        # Resolve the endpoint from openai_endpoints (the shared block).
-        jq -e --arg e "$ep_name" '.openai_endpoints[$e]' "$PROVIDERS_FILE" >/dev/null 2>&1 \
-            || die "$EX_USAGE" "codex_profile '$profile' references endpoint '$ep_name' which is missing from openai_endpoints — edit $PROVIDERS_FILE"
-        base_url="$(jq -r --arg e "$ep_name" '.openai_endpoints[$e].base_url // ""' "$PROVIDERS_FILE")"
-        api_key="$( jq -r --arg e "$ep_name" '.openai_endpoints[$e].api_key  // ""' "$PROVIDERS_FILE")"
-        wire_api="$(jq -r --arg e "$ep_name" '.openai_endpoints[$e].wire_api // "chat"' "$PROVIDERS_FILE")"
-        model="$(   jq -r --arg p "$profile" '.codex_profiles[$p].model // "gpt-5-codex"' "$PROVIDERS_FILE")"
-        [[ -n "$base_url" && -n "$api_key" ]] \
-            || die "$EX_USAGE" "openai_endpoints['$ep_name'] missing base_url or api_key — edit $PROVIDERS_FILE"
-        if [[ "$api_key" =~ ^\<.*\>$ ]]; then
-            die "$EX_USAGE" "openai_endpoints['$ep_name'].api_key is still a placeholder ($api_key) — edit $PROVIDERS_FILE"
-        fi
-        # Standardize on OPENAI_API_KEY for codex's env_key — single name,
-        # set per-run, doesn't collide with the user's interactive shell.
-        export "OPENAI_API_KEY=$api_key"
-        mkdir -p "$CODEX_HOME_DIR"
-        cat > "$CODEX_HOME_DIR/config.toml" <<EOF
-# Auto-generated by agent-run.sh from ~/.cc-workflow/providers.json — do not edit.
-# Regenerated on every run. To customize, edit codex_profiles + openai_endpoints.
-[model_providers.$profile]
-base_url = "$base_url"
-env_key  = "OPENAI_API_KEY"
-wire_api = "$wire_api"
-
-[profiles.$profile]
-model           = "$model"
-model_provider  = "$profile"
-EOF
-        export CODEX_HOME="$CODEX_HOME_DIR"
-        CODEX_PROFILE="$profile"
-        return 0
-    fi
-
-    # --- Shape B / C: legacy inline (env + optional base_url/env_key/wire_api/model) ---
-    local key val
-    while IFS=$'\t' read -r key val; do
-        [[ -z "$key" ]] && continue
-        if [[ "$val" =~ ^\<.*\>$ ]]; then
-            die "$EX_USAGE" "codex_profile '$profile' has placeholder for $key — edit $PROVIDERS_FILE"
-        fi
-        export "$key=$val"
-    done < <(jq -r --arg p "$profile" \
-        '.codex_profiles[$p].env // {} | to_entries[] | "\(.key)\t\(.value)"' "$PROVIDERS_FILE")
-
-    local has_base
-    has_base="$(jq -r --arg p "$profile" '.codex_profiles[$p] | has("base_url")' "$PROVIDERS_FILE")"
-    if [[ "$has_base" == "true" ]]; then
-        mkdir -p "$CODEX_HOME_DIR"
-        local base_url wire_api env_key model
-        base_url="$(jq -r --arg p "$profile" '.codex_profiles[$p].base_url' "$PROVIDERS_FILE")"
-        wire_api="$(jq -r --arg p "$profile" '.codex_profiles[$p].wire_api // "chat"' "$PROVIDERS_FILE")"
-        env_key="$( jq -r --arg p "$profile" '.codex_profiles[$p].env_key  // "OPENAI_API_KEY"' "$PROVIDERS_FILE")"
-        model="$(   jq -r --arg p "$profile" '.codex_profiles[$p].model    // "gpt-5-codex"' "$PROVIDERS_FILE")"
-        cat > "$CODEX_HOME_DIR/config.toml" <<EOF
-# Auto-generated by agent-run.sh from ~/.cc-workflow/providers.json — do not edit.
-# Regenerated on every run. To customize, edit codex_profiles in providers.json.
-[model_providers.$profile]
-base_url = "$base_url"
-env_key  = "$env_key"
-wire_api = "$wire_api"
-
-[profiles.$profile]
-model           = "$model"
-model_provider  = "$profile"
-EOF
-        export CODEX_HOME="$CODEX_HOME_DIR"
-        CODEX_PROFILE="$profile"
-    fi
-}
 
 # ---------- sessions.json helpers ----------
 
@@ -641,99 +527,15 @@ ${PROMPT}"
     rm -f "$stream"
 }
 
-run_codex() {
-    # codex CLI (https://github.com/openai/codex) flag surface verified
-    # against codex-cli 0.130.0 (`codex exec --help`):
-    #
-    #   --dangerously-bypass-approvals-and-sandbox
-    #                                Skip all approval prompts AND run
-    #                                without sandbox restrictions. The
-    #                                "no prompts" half is essential — we
-    #                                run headless, a TTY prompt would hang.
-    #                                The "no sandbox" half is the price
-    #                                in this codex version: 0.130.0 has
-    #                                no middle ground between "ask every
-    #                                time" and "no prompts + no sandbox".
-    #                                The backend forces trust=true for
-    #                                engine=codex workspaces, so the user
-    #                                has opted into this security model.
-    #   --skip-git-repo-check        We've already validated WORKDIR is a
-    #                                git repo at arg-parse time.
-    #   --profile <CODEX_PROFILE>    Set by setup_codex_provider when a
-    #                                custom-endpoint profile is active.
-    #
-    # NOT used (removed when verified absent from 0.130.0):
-    #   -a never               (no --ask-for-approval flag at this version)
-    #   --output-last-message  (not implemented; we capture stdout directly)
-    #   --json                 (would turn stdout into JSONL; we want plain
-    #                           text for the final reply)
-    #
-    # PERMISSION_MODE is intentionally ignored — claude's vocabulary
-    # doesn't map. Engine=codex → trust=true at workspace creation makes
-    # the security model explicit.
-    #
-    # Session resume:
-    # We can't fetch session_id from --json output (upstream issue #8923),
-    # so claude's "store sid in sessions.json, pass --resume <sid>" pattern
-    # doesn't translate. Instead use codex's own per-cwd "resume --last"
-    # semantics: codex tracks the most recent session by cwd, and our
-    # WORKDIR is already per-session_key (via worktree when session_key !=
-    # "default"). So resume-on-this-cwd ≈ resume-on-this-session_key.
-    #
-    # We gate it behind a marker file under STATE_DIR so we don't try to
-    # resume a session that never existed on the first run for a new
-    # workspace/session_key combo — `codex exec resume --last` errors out
-    # with "no prior session" in that case.
-    local log="${LOGS_DIR}/$(date +%Y-%m-%d).jsonl"
-    local out rc=0
-    out="$(mktemp)"
-    local marker_dir="${STATE_DIR}/codex-sessions"
-    local marker_safe
-    marker_safe="$(printf '%s' "${WORKSPACE}__${SESSION_KEY}" | tr -c 'A-Za-z0-9._-' '_')"
-    local marker="${marker_dir}/${marker_safe}"
-    # Build the codex command. `exec resume --last` continues the most
-    # recent session in cwd; `exec` starts a fresh one. CODEX_PROFILE is set
-    # by setup_codex_provider iff a custom-endpoint profile was active.
-    local cmd=(codex exec)
-    if [[ -f "$marker" ]]; then
-        cmd+=(resume --last)
-    fi
-    [[ -n "$CODEX_PROFILE" ]] && cmd+=(--profile "$CODEX_PROFILE")
-    cmd+=(--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "$PROMPT")
-    # codex exec without --json writes the final assistant message to stdout
-    # (per https://developers.openai.com/codex/noninteractive). Progress
-    # goes to stderr — keep it in the day log for debugging without
-    # contaminating the captured reply.
-    (
-        cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" "${cmd[@]}"
-    ) >"$out" 2>>"$log" || rc=$?
-    # Mirror stdout to the log too, for easier debugging.
-    cat "$out" >>"$log" 2>/dev/null || true
-    if [[ $rc -eq 124 ]]; then rm -f "$out"; die "$EX_TIMEOUT" "codex timeout (${TIMEOUT_SECONDS}s)"; fi
-    if [[ $rc -ne 0 ]]; then  rm -f "$out"; die "$EX_ENGINE_FAIL" "codex exit=$rc (log: $log)"; fi
-    # First-run success → drop the marker so the next call resumes. If codex
-    # state gets wiped externally (e.g. ~/.codex/ deleted), the resume call
-    # will fail loudly with EX_ENGINE_FAIL — user can clear our marker by
-    # hand.
-    mkdir -p "$marker_dir"
-    touch "$marker"
-    # Emit the final assistant text so the outer OUTPUT="$(run_codex)" captures
-    # it. With no --json flag, codex's stdout is plain text.
-    cat "$out" 2>/dev/null || true
-    rm -f "$out"
-}
+# NOTE: run_codex() removed 2026-05-14. See setup_codex_provider removal
+# note above and the README "engine 现状" section.
 
 # ---------- main ----------
 
 job_start
 setup_provider
-setup_codex_provider
 
-if [[ "$ENGINE" == "claude" ]]; then
-    OUTPUT="$(run_claude)" || RC=$?
-else
-    OUTPUT="$(run_codex)" || RC=$?
-fi
+OUTPUT="$(run_claude)" || RC=$?
 
 [[ -n "$OUTPUT" ]] && printf '%s\n' "$OUTPUT"
 exit "$RC"

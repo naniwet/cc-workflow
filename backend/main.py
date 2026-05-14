@@ -12,7 +12,6 @@ Routes:
   GET    /workspaces                           session
   POST   /workspaces                           session
   DELETE /workspaces/{name}/session            session   (reset PWA conversation)
-  GET    /providers/codex                       session   (codex_profiles list)
   GET    /skills                               session   (slash command discovery)
   GET    /loops                                session
   POST   /loops                                session
@@ -109,7 +108,8 @@ class RunRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8192)
     # engine is no longer per-run — backend derives it from the workspace's
     # immutable engine setting. Field accepted for backward compat but ignored.
-    engine: Optional[Literal["claude", "codex"]] = None
+    # Only "claude" is supported as of 2026-05-14 (codex removed; see README).
+    engine: Optional[Literal["claude"]] = None
     session_key: Optional[str] = Field(default=None, max_length=128)
     source: Literal["pwa", "feishu", "cron", "manual"] = "manual"
     provider: Optional[str] = Field(default=None, max_length=64)   # one-shot LLM override
@@ -204,11 +204,10 @@ class NewWorkspaceRequest(BaseModel):
     # time. Same semantics as PUT /workspaces/{name}/settings — saved into
     # workspaces.json. Empty/None means "use global config.toml default".
     provider: Optional[str] = Field(default=None, max_length=64)
-    # Engine is set ONCE at creation time. No endpoint allows changing it
-    # later — to switch engines, delete + recreate. The field is always
-    # written to workspaces.json so ws_settings.engine_for() can read it
-    # without falling back to DEFAULT_ENGINE for fresh workspaces.
-    engine: Literal["claude", "codex"] = "claude"
+    # Engine is set ONCE at creation time. Field accepted for backward
+    # compat with older clients / cron entries; only "claude" is supported
+    # since 2026-05-14 (codex support removed; see README "engine 现状").
+    engine: Literal["claude"] = "claude"
     # When trust=True, agent-run is invoked with --permission-mode
     # bypassPermissions for this workspace (Claude auto-approves Bash /
     # WebFetch / etc.). Mutable post-creation via PUT settings, unlike
@@ -265,32 +264,9 @@ def get_skills(workspace: Optional[str] = None) -> list[dict]:
     return skills.scan_skills(ws_path)
 
 
-@app.get("/providers/codex", dependencies=PROTECT)
-def list_codex_providers() -> list[str]:
-    """codex_profiles keys. Returned in a separate endpoint (not merged with
-    /providers) because the dropdown shown for a codex workspace must be
-    different from the one shown for a claude workspace — the keys here are
-    consumed by agent-run.sh's setup_codex_provider, not setup_provider.
-
-    Filter: include profiles that actually have something agent-run can
-    consume. Three shapes count as "configured":
-      - `endpoint`  (new endpoint-ref shape, references openai_endpoints)
-      - `base_url`  (legacy inline custom-endpoint shape)
-      - non-empty `env`  (env-only shape, e.g. default "openai" with
-                         just OPENAI_API_KEY set)
-    Everything else is a placeholder that can't actually run.
-    """
-    cprofiles = _load_providers_json().get("codex_profiles") or {}
-    return sorted(
-        name for name, p in cprofiles.items()
-        if p.get("endpoint") or p.get("base_url") or (p.get("env") or {})
-    )
-
-
-def _valid_providers_for_engine(engine: str) -> set[str]:
-    """Used to validate the `provider` field of create/put-settings against
-    the right list — claude profiles vs codex_profiles, by engine."""
-    return set(list_codex_providers() if engine == "codex" else list_providers())
+# NOTE: GET /providers/codex + _valid_providers_for_engine removed
+# 2026-05-14 when codex was dropped from the supported engine list.
+# Provider validation below now uses list_providers() directly.
 
 
 @app.get("/workspaces/{name}/settings", dependencies=PROTECT)
@@ -317,17 +293,14 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
     if not (target / ".git").exists():
         raise HTTPException(404, {"error": "workspace not found", "name": name})
 
-    # Validate provider name against the right list based on this workspace's
-    # engine (claude → profiles, codex → codex_profiles). Look up engine
-    # from existing settings since put_settings can't change it.
+    # Validate provider name against providers.json#profiles keys (claude
+    # is currently the only supported engine; codex was removed 2026-05-14).
     if body.provider is not None and body.provider != "":
-        existing_engine = (ws_settings.load().get(name) or {}).get("engine") or ws_settings.DEFAULT_ENGINE
-        valid = _valid_providers_for_engine(existing_engine)
+        valid = set(list_providers())
         if body.provider not in valid:
             raise HTTPException(
                 400,
-                {"error": "unknown provider for engine",
-                 "got": body.provider, "engine": existing_engine, "valid": sorted(valid)},
+                {"error": "unknown provider", "got": body.provider, "valid": sorted(valid)},
             )
 
     # Mutate ONLY fields the client explicitly sent. Pydantic v2's
@@ -345,16 +318,6 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
             current["provider"] = body.provider
 
     if "trust" in sent:
-        # engine=codex always forces trust=true (see ws_settings.trust_for).
-        # Reject attempts to flip it off — silently coercing would leave the
-        # client thinking it succeeded; better to 400 so the UI knows to
-        # show its own explanation.
-        if current.get("engine") == "codex" and body.trust is False:
-            raise HTTPException(
-                400,
-                {"error": "engine=codex requires trust=true (codex has no fine-grained approval API)",
-                 "name": name},
-            )
         if body.trust is None:
             current.pop("trust", None)              # null → revert to default
         else:
@@ -372,22 +335,13 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
 def reset_workspace_session(name: str) -> dict:
     """Reset the PWA's conversation session for this workspace.
 
-    Clears two pieces of state, both keyed by the PWA's session_key
-    convention `pwa-<workspace>`:
-
-      1. ~/.cc-state/sessions.json[pwa-<name>].claude_session_id
-         (the resume pointer; absent → next agent-run starts fresh)
-      2. ~/.cc-state/codex-sessions/<name>__pwa-<name>
-         (the marker file; absent → codex skips `resume --last`)
-
-    Returns {"cleared": [...]} listing what was actually removed (so
-    the PWA can show a precise toast — "session_id + codex marker"
-    vs "session_id only" depending on engine history).
+    Drops ~/.cc-state/sessions.json[pwa-<name>] (the row containing
+    claude_session_id + the token-tracking last_input_tokens used by
+    DIY compact). Next agent-run for this workspace starts a fresh
+    session with no --resume.
 
     Does NOT touch cron loops' or Feishu chats' sessions — those use
-    different session_keys and their own UX would call this with
-    different parameters (not implemented yet — single-user can edit
-    sessions.json by hand).
+    different session_keys.
     """
     target = config.WORKSPACES_DIR / name
     if not (target / ".git").exists():
@@ -396,14 +350,10 @@ def reset_workspace_session(name: str) -> dict:
     key = f"pwa-{name}"
     cleared: list[str] = []
 
-    # 1. Claude session_id
     try:
         if config.SESSIONS_FILE.exists():
             data = json.loads(config.SESSIONS_FILE.read_text(encoding="utf-8"))
             if key in data:
-                # Drop the whole row (both claude and codex slots — they
-                # share the session_key entry). Empty file is fine; agent-run
-                # ensure_sessions_file handles missing dict keys.
                 data.pop(key)
                 tmp = config.SESSIONS_FILE.with_suffix(".tmp")
                 tmp.write_text(
@@ -414,18 +364,6 @@ def reset_workspace_session(name: str) -> dict:
                 cleared.append("claude_session_id")
     except (OSError, json.JSONDecodeError) as e:
         raise HTTPException(500, {"error": f"sessions.json write failed: {e}"})
-
-    # 2. Codex marker
-    # Marker name mirrors agent-run.sh setup_codex_provider's safe-name logic.
-    import re
-    marker_safe = re.sub(r"[^A-Za-z0-9._-]", "_", f"{name}__{key}")
-    marker = config.CODEX_SESSIONS_DIR / marker_safe
-    try:
-        if marker.exists():
-            marker.unlink()
-            cleared.append("codex_marker")
-    except OSError as e:
-        raise HTTPException(500, {"error": f"codex marker delete failed: {e}"})
 
     return {"ok": True, "workspace": name, "session_key": key, "cleared": cleared}
 
@@ -443,14 +381,12 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
 
     # Validate the optional provider FIRST so we don't leave a half-created
     # repo behind if the provider name is bad. Engine determines which list
-    # to validate against.
     if req.provider:
-        valid = _valid_providers_for_engine(req.engine)
+        valid = set(list_providers())
         if req.provider not in valid:
             raise HTTPException(
                 400,
-                {"error": "unknown provider for engine",
-                 "got": req.provider, "engine": req.engine, "valid": sorted(valid)},
+                {"error": "unknown provider", "got": req.provider, "valid": sorted(valid)},
             )
 
     target.mkdir(parents=True, exist_ok=False)
@@ -468,34 +404,24 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
         # Leave the half-initialized dir for inspection; surface error.
         raise HTTPException(500, {"error": "git init failed", "detail": str(e)})
 
-    # Save settings. Engine is always written so engine_for() doesn't have
-    # to fall back to DEFAULT_ENGINE for freshly-created workspaces.
+    # Save settings. Engine is always written ("claude" only — codex removed
+    # 2026-05-14) so engine_for() doesn't have to fall back to DEFAULT_ENGINE.
     data = ws_settings.load()
     settings = data.get(req.name, {})
     if req.provider:
         settings["provider"] = req.provider
     settings["engine"] = req.engine
-    # engine=codex implies trust=true (codex doesn't support fine-grained
-    # approval — see ws_settings.trust_for docstring). Persist that explicitly
-    # so the PWA shows the trust state correctly without having to special-
-    # case codex everywhere. User-supplied req.trust is overridden.
-    if req.engine == "codex":
-        settings["trust"] = True
-        effective_trust: Optional[bool] = True
-    elif req.trust is not None:
+    if req.trust is not None:
         settings["trust"] = bool(req.trust)
-        effective_trust = bool(req.trust)
-    else:
-        # If req.trust is None we DON'T write anything — trust_for() will
-        # fall back to config.toml default_trust at runtime. Avoids freezing
-        # the current global default into the workspace.
-        effective_trust = None
+    # If req.trust is None we DON'T write anything — trust_for() will
+    # fall back to config.toml default_trust at runtime. Avoids freezing
+    # the current global default into the workspace.
     data[req.name] = settings
     ws_settings.save(data)
 
     return {
         "ok": True, "name": req.name, "path": str(target),
-        "provider": req.provider, "engine": req.engine, "trust": effective_trust,
+        "provider": req.provider, "engine": req.engine, "trust": req.trust,
     }
 
 

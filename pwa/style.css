@@ -30,7 +30,7 @@
   --accent-cyan:        #06b6d4;    /* info — Claude reply, engine=claude */
   --accent-amber:       #f59e0b;    /* warning / queued */
   --accent-red:         #ef4444;    /* danger / failed */
-  --accent-purple:      #a855f7;    /* engine=codex (OpenAI-ish) */
+  --accent-purple:      #a855f7;    /* roundtable role: 借鉴派 (kimi) */
 
   /* spacing — 8px rhythm */
   --space-1: 4px;
@@ -261,11 +261,9 @@ main {
   color: var(--accent-cyan);
   border-color: rgba(6, 182, 212, 0.30);
 }
-.ws-engine[data-engine="codex"] {
-  background: rgba(168, 85, 247, 0.10);
-  color: var(--accent-purple);
-  border-color: rgba(168, 85, 247, 0.30);
-}
+/* Engine=codex chip styling removed 2026-05-14 along with codex support.
+   Existing workspaces.json entries with engine=codex will fall through to
+   the default chip (gray) — visual cue to delete-and-recreate. */
 
 /* Per-workspace trust toggle — lock / unlock icon button inline with
    provider + engine. Click flips trust (with a confirm() when going
@@ -294,16 +292,8 @@ main {
   background: rgba(245, 158, 11, 0.10);
 }
 .ws-trust-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
-/* Locked: engine=codex forces trust=true (no PreToolUse hook available
-   upstream). Visual cue = dashed border + no hover background change; the
-   click handler still surfaces a toast explanation rather than firing a
-   pointless PUT. */
-.ws-trust-toggle.is-locked {
-  border-style: dashed;
-  cursor: help;
-  opacity: 0.85;
-}
-.ws-trust-toggle.is-locked:hover { background: transparent; border-color: rgba(245, 158, 11, 0.30); }
+/* .ws-trust-toggle.is-locked removed 2026-05-14 along with codex support
+   (codex was the only thing that locked trust). */
 
 /* Sync skills button — same chrome as ws-trust-toggle for visual cohesion.
    Spins when syncing (CSS-only). */

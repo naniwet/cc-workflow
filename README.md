@@ -14,8 +14,8 @@
 - **PWA**(手机/PC 浏览器都能装):4 列 Workspaces 视图 + Tasks(cron)视图,实时看每个 workspace 的 agent 运行状态
 - **飞书集成**:在群里 `@bot daily-digest 总结一下昨天的 commit` 就能触发,执行完结果以飞书卡片回到群里
 - **Linux cron Loop**:每天 9 点拉代码、每小时巡检 PR、隔半小时跑测试都行
-- **多引擎**:Claude Code(主)+ Codex(辅);通过 ccswitch-style providers.json 可切到 DeepSeek / Kimi 等 Anthropic 兼容端点
-- **每 workspace 独立配置**:engine(创建后不可改)+ provider(可改)+ trust(可改;开启后跳过工具审批)
+- **多 provider**:通过 ccswitch-style providers.json 可切到 DeepSeek / Kimi 等 Anthropic 兼容端点(codex 引擎已下线,详见 README 末尾"已知限制")
+- **每 workspace 独立配置**:provider(可改)+ trust(可改;开启后跳过工具审批)
 - **工具审批**(可选):Claude 想跑 Bash / WebFetch 时 PWA 弹 `[Approve] [Deny]`,审批通过才执行(走 Claude Code PreToolUse hook)
 
 ---
@@ -101,7 +101,7 @@ curl -s http://<server-ip>/healthz   # → {"ok":true}
 PWA → Workspaces → `+ New workspace`。填:
 - **name**:repo 目录名(字母数字 `.` `_` `-`)
 - **provider**:LLM 路由(留空 → 用 config.toml 的全局默认)
-- **engine**:目前 PWA 只能选 `claude`(codex 暂时下线,见下面"engine 现状")。
+- **engine**:固定 `claude`。codex 引擎已于 2026-05-14 下线,见末尾"已知限制"。
 - **trust**:勾上 → 自动批准 Bash / WebFetch 等工具(默认不勾,会弹审批)
 
 后端会在 `~/workspaces/<name>/` 创建空目录 + `git init` + first commit。
@@ -133,7 +133,7 @@ PWA → Tasks → `New cron loop`。两种填法:
 
 ### 5. 多 provider
 
-`~/.cc-workflow/providers.json` **按协议分段**(不是按 feature):
+`~/.cc-workflow/providers.json` 两段:
 
 ```json
 {
@@ -142,36 +142,20 @@ PWA → Tasks → `New cron loop`。两种填法:
     "kimi":     { "env": { "ANTHROPIC_BASE_URL": "...", "ANTHROPIC_API_KEY":  "sk-..." } }
   },
   "openai_endpoints": {
-    "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "wire_api": "chat" },
-    "moonshot": { "base_url": "https://api.moonshot.cn/v1", "api_key": "sk-...", "wire_api": "chat" }
-  },
-  "codex_profiles": {
-    "deepseek": { "endpoint": "deepseek", "model": "deepseek-chat" },
-    "kimi":     { "endpoint": "moonshot", "model": "kimi-k2-0905-preview" }
+    "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key": "sk-..." },
+    "moonshot": { "base_url": "https://api.moonshot.cn/v1", "api_key": "sk-..." }
   }
 }
 ```
 
-注意 `profiles.deepseek` 和 `codex_profiles.deepseek` 同名是有意的——它们是同一个 provider 的两种 API 形态(Anthropic-compat 和 OpenAI-compat)。`config.toml` 写 `provider = "deepseek"` 时,claude 引擎走 profiles,codex 引擎走 codex_profiles,**一行配置覆盖两个引擎**。
+| 段 | 协议 | 消费方 |
+|---|---|---|
+| **`profiles`** | Anthropic-compat | `claude` CLI(通过 agent-run.sh)、`backend/llm.py` |
+| **`openai_endpoints`** | OpenAI-compat | Roundtable(`backend/roundtable/model.py` 直接 HTTP) |
 
-3 段各自的语义:
+每 workspace 可以在列头下拉里独立选 provider —— PWA 显示 `profiles` 的 keys。Roundtable 的 4 个角色硬编码在 `roles.py` 里(借鉴派用 Kimi,其他三个 + 整理员用 DeepSeek),不通过 PWA 切。
 
-| 段 | 协议 | 消费方 | 形状 |
-|---|---|---|---|
-| **`profiles`** | Anthropic-compat | `claude` CLI(通过 agent-run.sh 的 `setup_provider`)、`backend/llm.py` | 每个 profile 是一组 env vars(ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 等),agent-run 调 claude 前 export 进环境 |
-| **`openai_endpoints`** | OpenAI-compat | Roundtable(直接 HTTP)、codex CLI(通过 codex_profiles 引用) | `{base_url, api_key, wire_api}`。同一 endpoint 被两个 feature 共享,**key 只填一次** |
-| **`codex_profiles`** | codex 专用配置 | codex CLI(`setup_codex_provider` 生成 `~/.cc-state/codex-home/config.toml`) | `{endpoint: <openai_endpoints 的 key>, model: <model 名>}`。endpoint 字段是引用,实际 URL/key 来自 openai_endpoints |
-
-每 workspace 可以在列头的下拉里独立选 provider —— PWA 根据这个 ws 的 engine 显示对应那段的 keys(claude → profiles,codex → codex_profiles,不会混)。
-
-**想用 Anthropic 原生 OAuth**(本地 `claude login`):在 `profiles` 加一条 `"claude": { "env": {} }`(空 env),再在 `config.toml` 设 `provider = "claude"`。agent-run 看到名字是 claude/anthropic 就跳过 env 注入,让 claude CLI 走 OAuth 流。默认模板不预置这条——大部分用户用 DeepSeek/Kimi 兼容端点,不走官方 OAuth。
-
-**关于 codex 的 endpoint 引用模式**:
-- `codex_profiles.deepseek.endpoint = "deepseek"` → agent-run 查 `openai_endpoints.deepseek.{base_url, api_key, wire_api}`,生成 codex config.toml,export `OPENAI_API_KEY=<api_key>` 作为运行时 env。
-- 你自己交互式用的 `~/.codex/` 完全不动(我们用独立的 `~/.cc-state/codex-home/`)。
-- 老版本(2026-05-14 之前)的 inline `codex_profiles.<name>.{env, base_url, env_key, wire_api, model}` 形状仍兼容——agent-run 检测到没有 `endpoint` 字段时,会走 legacy 分支。
-
-**兼容性提醒**:非 OpenAI 端点(deepseek / moonshot 等)对 codex 的 function calling / tool use 协议支持参差不齐。简单文本 prompt 多半能跑;agent-style 操作(改多文件、跑复杂 shell 命令链)可能在 wire-api 层卡住。先简单 prompt 试通,再上复杂任务。
+**想用 Anthropic 原生 OAuth**(本地 `claude login`):在 `profiles` 加一条 `"claude": { "env": {} }`(空 env),再在 `config.toml` 设 `provider = "claude"`。agent-run 看到名字是 claude/anthropic 就跳过 env 注入。默认模板不预置——大部分用户用 DeepSeek/Kimi 兼容端点。
 
 ---
 
@@ -179,7 +163,7 @@ PWA → Tasks → `New cron loop`。两种填法:
 
 ```
 cc-workflow/
-├── agent-run.sh                  # 多引擎包装(claude / codex)+ 并发锁
+├── agent-run.sh                  # claude CLI 包装 + 并发锁 + 沙盒 + DIY compact
 ├── backend/                      # FastAPI gateway
 │   ├── main.py                   #   全部 HTTP 路由
 │   ├── auth.py                   #   HMAC session cookie 鉴权
@@ -197,7 +181,7 @@ cc-workflow/
 │   ├── manifest.json  sw.js      #   PWA 可装桌面
 │   └── icon.svg
 ├── scripts/
-│   ├── install-deps.sh           #   T+0 装依赖(claude / codex / jq ...)
+│   ├── install-deps.sh           #   T+0 装依赖(claude / jq ...)
 │   └── cc-approve-hook.sh        #   Claude PreToolUse hook(工具审批)
 ├── deploy/
 │   ├── INSTALL.md                #   ← 完整部署文档
@@ -216,37 +200,18 @@ cc-workflow/
 
 ---
 
-## engine 现状(2026-05-14)
+## 已知限制
 
-**只有 `claude` 可用**。codex 选项从 PWA 暂时下线,原因如下:
+**codex 引擎已下线(2026-05-14)**。只支持 Claude Code (`claude` CLI)。
 
-- codex-cli 0.130+(2026-02 早期落地的 PR #10157)废弃了 `wire_api = "chat"`,只接受 `responses` 协议
-- DeepSeek / Kimi / Moonshot 等非 OpenAI 端点都**没有 `/v1/responses`**,只有 `/v1/chat/completions`
-- 结果:codex + 非 OpenAI 在 0.80.0 之后**结构性不可用**。详见 [codex discussions/7782](https://github.com/openai/codex/discussions/7782)。
+原因:codex-cli 0.130+ 上游[废弃了 `wire_api = "chat"`](https://github.com/openai/codex/discussions/7782),DeepSeek / Kimi 等非 OpenAI 端点没有 `/v1/responses`,导致 codex + 非 OpenAI 在 0.80.0 之后结构性不可用。
 
-**后端代码全保留**:`backend/main.py` 的 codex 验证、`agent-run.sh` 的 `setup_codex_provider`、`providers.json` 的 `codex_profiles` 段都还在。想要恢复:
+如果未来想恢复 codex(任一条件满足):
+- DeepSeek/Kimi 实现了 `/v1/responses` 端点
+- 或通过 [VibeAround](https://github.com/jazzenchen) 这种 Responses↔Chat 代理转接
+- 或 pin `@openai/codex@0.80.0`(陈旧,不推荐)
 
-1. **撤掉 PWA 隐藏**:把 `pwa/app.js` 里 `new-ws` 表单两处恢复 `<option value="codex">codex</option>`,或
-2. **走第三方代理** [VibeAround](https://github.com/jazzenchen)(Responses ↔ Chat 翻译层)+ 改 `openai_endpoints.deepseek.base_url` 指向它,或
-3. **pin codex 到 0.80.0**(`npm i -g @openai/codex@0.80.0`,但会陈旧),或
-4. **等 DeepSeek/Kimi 实现 responses API**(无时间表)
-
-如果未来 codex 可用了,**workspace 数据兼容**:已有的 `engine=codex` workspace 不需要重建,只需 PWA 重新允许选这个 engine 即可。
-
-—
-
-## 历史:engine=claude vs engine=codex 的语义差异(参考)
-
-下表是 codex 还能用时的两个 engine 对比,保留作为设计参考——以及一旦 codex 被启用,什么行为继续生效:
-
-| 维度 | claude | codex | 备注 |
-|---|---|---|---|
-| 一次性 prompt | ✅ | ✅(若启用) | 都通过 `agent-run.sh` 包装 |
-| 工具审批(PWA `[Approve][Deny]`) | ✅ PreToolUse hook | ❌ 上游无 hook API([#8923](https://github.com/openai/codex/issues/8923) / [#3817](https://github.com/openai/codex/issues/3817)) | codex workspace 自动 `trust=true`、PWA trust 锁定为 🔓 不可改 |
-| 多轮对话(session 连续) | ✅ `--resume <sid>` | ⚠ `codex exec resume --last`(per-cwd) | marker 文件管理"这个 ws/session 是否跑过 codex" |
-| 沙盒 | claude 自己的 permission-mode | `--dangerously-bypass-approvals-and-sandbox`(0.130+ 唯一 headless 选项) | 0.130+ 无中间档,只有"全沙箱 + 提问"或"全跳过 + 全权限"两个极端 |
-| 通过 `providers.json` 切端点 | ✅ Anthropic 兼容端点(DeepSeek / Kimi) | ⚠ 仅支持 OpenAI Responses API,DeepSeek/Kimi 不可用(见上) | `codex_profiles` 段保留,以后可用 |
-| install | `npm i -g @anthropic-ai/claude-code` | `npm i -g @openai/codex`(+ /usr/local/bin 软链给 systemd 看到) | install-deps.sh 还会装,只是 PWA 不显示选项 |
+恢复操作:参考 git 历史 commit `f15d830`(完整 codex 实现)+ `8d5f648`(PWA 隐藏);代码已删除,从 git revert 找回即可。
 
 —
 
@@ -258,7 +223,7 @@ cc-workflow/
 |---|---|---|
 | **鉴权模型** | HMAC 签名 session cookie(30 天) | Phase 1 时是 HTTP Basic,后来发现在 Quark / 微信内置浏览器对 `WWW-Authenticate` 处理不一致,Phase 2 后期换。HMAC key 自动生成于 `~/.cc-workflow/.session-secret`。 |
 | **工具审批模型** | PreToolUse hook → backend 长轮询 → PWA 弹按钮(路 2) | 路 1(`.claude/settings.json` 预批准)和路 3(`bypassPermissions` 全跳过)都保留。trust toggle 让用户在路 2 和路 3 之间一键切。 |
-| **per-workspace 配置 vs 全局** | 选 per-workspace,落到 `~/.cc-workflow/workspaces.json` | 全局 fallback 在 `config.toml`(`provider`、`default_trust`)。engine 一旦创建不可改——避免历史 run 的语义漂移。 |
+| **per-workspace 配置 vs 全局** | 选 per-workspace,落到 `~/.cc-workflow/workspaces.json` | 全局 fallback 在 `config.toml`(`provider`、`default_trust`)。 |
 | **cron loop 触发** | cron 写 `/etc/cron.d/cc-loops`,POST `/loops/{name}/run` 可手动重发一次 | session_key 用 loop 名 → cron-fired 和手动 fired 共享同一个 Claude 会话(对模型来说是连续对话) |
 | **PWA 缓存策略** | service worker 网络优先,失败回落缓存 | 频繁发布的开发工具,用户拉新代码就该看到新 UI;缓存只在离线时兜底 |
 | **长对话 context 管理** | DIY auto-compact(agent-run 检测 input_tokens > 阈值时,跑 9 段式 summary prompt,清旧 session,新 session 以 summary 开场)+ PWA 手动 reset 按钮 | Claude Code 的 `/compact` 是 TUI-only,headless 不可用。Prompt 模板基于 Piebald-AI 社区反向工程版本(非 Anthropic 官方)。阈值默认 150k,可在 `config.toml` 改 `compact_threshold_tokens`。 |
