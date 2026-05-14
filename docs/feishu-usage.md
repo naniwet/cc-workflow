@@ -65,11 +65,34 @@ cc-workflow 的飞书集成:**在群里 @机器人发 prompt → 服务器跑 Cl
 
 | 命令 | 行为 |
 |---|---|
+| `/loops new <name> <自然语言描述>` | 用自然语言新建 loop。LLM parse 出 cron 后**预览**给你看,要求 `/loops confirm` 二次确认才生效 |
+| `/loops confirm` | 确认上一个待建 loop(10 分钟内有效) |
+| `/loops cancel` | 取消上一个待建 loop |
 | `/loops run <name>` | 立即跑一次该 loop。**不影响**它原本的 cron 调度 |
 | `/loops pause <name>` | 暂停该 loop(cron 不再触发它,但定义还在) |
 | `/loops resume <name>` | 恢复暂停的 loop |
 
-> **新建 / 删除 loop 走 PWA**。cron 表达式 + 长 prompt 在手机上打容易出错,设计上故意没放在飞书。
+**新建示例:**
+
+```
+/loops new daily-digest 每天9点拉一下最新代码并跑测试
+```
+
+机器人回:
+
+```
+待建 loop 预览(10 分钟内 /loops confirm 生效):
+  name      : daily-digest
+  cron      : 0 9 * * *
+  workspace : test-repo
+  prompt    : 拉一下最新代码并跑测试
+
+确认: /loops confirm   取消: /loops cancel
+```
+
+你检查无误,回 `/loops confirm` → 成功创建。`workspace` 用的是这个聊天的当前默认(`/use` 设的 / 全局兜底);要把 loop 建在另一个 workspace 下,先 `/use <ws>` 切过去再 `/loops new`。
+
+**删除 loop 走 PWA**(避免误删风险)。
 
 ### 圆桌会议(多 agent 辩论)
 

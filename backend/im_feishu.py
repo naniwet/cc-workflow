@@ -267,6 +267,9 @@ cc-workflow 飞书命令清单:
   /run                               手动填表单触发一次 run(workspace + prompt)
 
 ▸ Cron loop 操作
+  /loops new <name> <自然语言描述>   新建一个 loop(NL 解析,需要 /loops confirm 二次确认)
+  /loops confirm                     确认上一个待建 loop(10 min 内)
+  /loops cancel                      取消上一个待建 loop
   /loops run <name>                  立即跑一次该 loop(不动调度)
   /loops pause <name>                暂停该 loop(cron 不再触发)
   /loops resume <name>               恢复
@@ -280,6 +283,15 @@ cc-workflow 飞书命令清单:
 
 提示:命令不区分大小写。圆桌完成 / run 完成的结果都会主动回到原聊天。
 """
+
+# Pending /loops new plans, in-memory only.
+# Shape: chat_id -> {name, cron, prompt, workspace, created_at}
+# Why in-memory: backend restart loses pending state, but pending is meant
+# to be confirmed within minutes, not survive restart. Persistence would be
+# overkill (and would need an eviction story). 10-min TTL is enforced lazily
+# at confirm time.
+_pending_loop_plans: "dict[str, dict]" = {}
+_PENDING_PLAN_TTL_SECONDS = 600
 
 
 def _handle_slash(cmd: str, rest: str, chat_id: str) -> Optional[dict]:
@@ -406,11 +418,18 @@ def _handle_loops_command(rest: str, chat_id: str) -> dict:
         return _loops_run(target, chat_id)
     if action in ("pause", "resume"):
         return _loops_toggle(target, enabled=(action == "resume"), chat_id=chat_id)
+    if action == "new":
+        return _loops_new(target, chat_id)
+    if action == "confirm":
+        return _loops_confirm(chat_id)
+    if action == "cancel":
+        return _loops_cancel(chat_id)
 
     reply_to_chat(
         chat_id,
         f"未识别的 loops 操作: {action!r}\n"
-        f"支持: /loops run|pause|resume <name>。/loops 看列表,/help 看全部命令。",
+        f"支持: /loops new|run|pause|resume|confirm|cancel ...。\n"
+        f"/loops 看列表,/help 看全部命令。",
     )
     return {"ok": True, "slash": "loops", "unknown_action": action}
 
@@ -468,6 +487,163 @@ def _loops_toggle(name: str, *, enabled: bool, chat_id: str) -> dict:
     verb = "已恢复" if enabled else "已暂停"
     reply_to_chat(chat_id, f"✓ {name} {verb}")
     return {"ok": True, "slash": "loops", "name": name, "enabled": enabled}
+
+
+def _loops_new(rest: str, chat_id: str) -> dict:
+    """Parse `<name> <natural language description>` into a pending plan.
+
+    Two-step UX: this just stages the plan in _pending_loop_plans and asks
+    for /loops confirm. Workspace = the chat's current default workspace
+    (no explicit override syntax — keeps the command short; users who need
+    a different workspace can /use it first or build via PWA).
+    """
+    rest = rest.strip()
+    parts = rest.split(maxsplit=1)
+    if len(parts) < 2:
+        reply_to_chat(
+            chat_id,
+            "用法: /loops new <name> <自然语言描述>\n"
+            "例: /loops new daily-digest 每天9点拉一下最新代码并跑测试",
+        )
+        return {"ok": True, "slash": "loops", "missing_arg": True}
+    name, nl_text = parts[0], parts[1].strip()
+
+    # Validate name now so we fail before burning an LLM call.
+    from . import cron_state
+    try:
+        cron_state._validate_name(name)
+    except ValueError as e:
+        reply_to_chat(chat_id, f"name 不合法: {e}\nname 只能用字母数字 . _ -")
+        return {"ok": True, "slash": "loops", "bad_name": True}
+    if cron_state.get_job(name) is not None:
+        reply_to_chat(
+            chat_id,
+            f"loop {name!r} 已存在。换个 name,或者 /loops resume {name} / /loops run {name} 操作现有。",
+        )
+        return {"ok": True, "slash": "loops", "exists": True}
+
+    # Call the same NL parser the PWA uses. Lazy import to dodge the
+    # main → im_feishu → main circular at module load.
+    try:
+        from .main import parse_nl_cron, ParseNlRequest
+    except ImportError as e:
+        reply_to_chat(chat_id, f"内部错误,parser 不可用: {e}")
+        return {"ok": False, "slash": "loops", "error": "import"}
+
+    try:
+        parsed = parse_nl_cron(ParseNlRequest(text=nl_text))
+    except Exception as e:    # noqa: BLE001 — HTTPException + others
+        # parse_nl_cron raises HTTPException(422) for "LLM didn't return cron";
+        # 502 for LLM call failure. Both surface here.
+        detail = getattr(e, "detail", None) or str(e)
+        reply_to_chat(
+            chat_id,
+            f"NL 解析失败: {detail}\n"
+            f"换个说法?例: /loops new {name} 每天早上9点拉代码并跑测试",
+        )
+        return {"ok": False, "slash": "loops", "parse_error": str(e)}
+
+    cron = (parsed.get("cron") or "").strip()
+    prompt = (parsed.get("prompt") or "").strip()
+    if not cron or len(cron.split()) < 5:
+        reply_to_chat(
+            chat_id,
+            f"LLM 没解析出合法 cron。原始回复:\n{parsed.get('raw_reply', '(空)')}\n"
+            f"换种说法试试,或者去 PWA 手填 cron 表达式。",
+        )
+        return {"ok": False, "slash": "loops", "bad_cron": True}
+    if not prompt:
+        # LLM 只识别出 schedule 没识别出 task。原始 nl_text 作 prompt 兜底。
+        prompt = nl_text
+
+    workspace = _resolve_default_workspace(chat_id)
+
+    # Stash the plan and ask for confirmation.
+    import time as _time
+    _pending_loop_plans[chat_id] = {
+        "name": name,
+        "cron": cron,
+        "prompt": prompt,
+        "workspace": workspace,
+        "created_at": _time.time(),
+    }
+    reply_to_chat(
+        chat_id,
+        f"待建 loop 预览(10 分钟内 /loops confirm 生效):\n"
+        f"  name      : {name}\n"
+        f"  cron      : {cron}\n"
+        f"  workspace : {workspace}\n"
+        f"  prompt    : {prompt}\n"
+        f"\n确认: /loops confirm   取消: /loops cancel",
+    )
+    return {"ok": True, "slash": "loops", "pending": name}
+
+
+def _loops_confirm(chat_id: str) -> dict:
+    """Commit the pending plan stashed by /loops new."""
+    plan = _pending_loop_plans.get(chat_id)
+    if plan is None:
+        reply_to_chat(chat_id, "没有待建的 loop。先 /loops new <name> <描述> 创建一个。")
+        return {"ok": True, "slash": "loops", "no_pending": True}
+
+    # TTL check — lazy expiry, only relevant at confirm time.
+    import time as _time
+    if _time.time() - plan["created_at"] > _PENDING_PLAN_TTL_SECONDS:
+        _pending_loop_plans.pop(chat_id, None)
+        reply_to_chat(chat_id, "待建 loop 已过期(超 10 分钟未确认)。请重新 /loops new。")
+        return {"ok": True, "slash": "loops", "expired": True}
+
+    from . import cron_state
+    try:
+        job = cron_state.add_cron_loop(
+            name=plan["name"],
+            schedule=plan["cron"],
+            workspace=plan["workspace"],
+            prompt=plan["prompt"],
+            engine="claude",
+        )
+    except FileExistsError:
+        _pending_loop_plans.pop(chat_id, None)
+        reply_to_chat(chat_id, f"loop {plan['name']!r} 同名已存在(可能其他 chat 抢先建了)。请换个 name 重试。")
+        return {"ok": False, "slash": "loops", "exists": True}
+    except (ValueError, OSError) as e:
+        # Don't pop — let the user fix and try confirm again (e.g. recover from
+        # transient FS error). 10-min TTL still applies.
+        reply_to_chat(chat_id, f"写 cron 文件失败: {e}\n稍后再 /loops confirm 试试。")
+        return {"ok": False, "slash": "loops", "write_error": str(e)}
+
+    _pending_loop_plans.pop(chat_id, None)
+    reply_to_chat(
+        chat_id,
+        f"✓ 新建 loop {plan['name']}\n"
+        f"  cron      : {plan['cron']}\n"
+        f"  workspace : {plan['workspace']}\n"
+        f"\n下次 cron 触发后会自动跑;现在立即试 /loops run {plan['name']}。",
+    )
+    return {"ok": True, "slash": "loops", "created": plan["name"], "job": job}
+
+
+def _loops_cancel(chat_id: str) -> dict:
+    """Drop the pending plan if any."""
+    plan = _pending_loop_plans.pop(chat_id, None)
+    if plan is None:
+        reply_to_chat(chat_id, "没有待建的 loop,无需取消。")
+    else:
+        reply_to_chat(chat_id, f"已取消待建 loop: {plan['name']}")
+    return {"ok": True, "slash": "loops", "cancelled": plan is not None}
+
+
+def _resolve_default_workspace(chat_id: str) -> str:
+    """Return the chat's current effective default workspace.
+
+    Same priority as _resolve_workspace, minus the [prefix] override
+    (since /loops new doesn't accept a [prefix]) — i.e. chat /use'd
+    default > [feishu].default_workspace > "test-repo".
+    """
+    chat_default = (_load_chat_ws().get(chat_id) or {}).get("workspace")
+    if chat_default:
+        return chat_default
+    return _secrets().get("default_workspace") or "test-repo"
 
 
 # ---------- /rt (roundtable) command handlers ----------
