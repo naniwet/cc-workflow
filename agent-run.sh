@@ -215,10 +215,19 @@ setup_codex_provider() {
     [[ -f "$PROVIDERS_FILE" ]] || return 0           # no providers file → codex defaults
     local profile
     profile="$(ccw_provider_name)"
-    [[ -z "$profile" ]] && profile="openai"
+    # Empty profile name → check if the user has any codex_profiles defined
+    # and fall back to the first one; otherwise let codex use its built-in
+    # default (needs OPENAI_API_KEY in env).
+    if [[ -z "$profile" ]]; then
+        profile="$(jq -r '.codex_profiles | keys | .[0] // ""' "$PROVIDERS_FILE")"
+        [[ -z "$profile" ]] && return 0
+    fi
 
     # Silently fall back to codex defaults if the profile name doesn't exist
     # under codex_profiles (e.g. user picked a name only valid for claude).
+    # Note: by convention codex_profiles and profiles use parallel keys
+    # ("deepseek" / "kimi") so a single config.toml provider line works
+    # for both engines.
     jq -e --arg p "$profile" '.codex_profiles[$p]' "$PROVIDERS_FILE" >/dev/null 2>&1 || return 0
 
     # Branch on schema shape. `endpoint` field present → Shape A (ref).

@@ -97,9 +97,6 @@ else
     cat > "$PROVIDERS_FILE" <<'JSON'
 {
   "profiles": {
-    "claude": {
-      "env": {}
-    },
     "deepseek": {
       "env": {
         "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
@@ -120,13 +117,12 @@ else
     }
   },
   "openai_endpoints": {
-    "openai":   { "base_url": "https://api.openai.com/v1",   "api_key": "<api-key>", "wire_api": "responses" },
     "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key": "<api-key>", "wire_api": "chat" },
     "moonshot": { "base_url": "https://api.moonshot.cn/v1", "api_key": "<api-key>", "wire_api": "chat" }
   },
   "codex_profiles": {
-    "openai":         { "endpoint": "openai",   "model": "gpt-5-codex" },
-    "deepseek-codex": { "endpoint": "deepseek", "model": "deepseek-chat" }
+    "deepseek": { "endpoint": "deepseek", "model": "deepseek-chat" },
+    "kimi":     { "endpoint": "moonshot", "model": "kimi-k2-0905-preview" }
   }
 }
 JSON

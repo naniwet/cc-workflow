@@ -138,21 +138,21 @@ PWA → Tasks → `New cron loop`。两种填法:
 ```json
 {
   "profiles": {
-    "claude":   { "env": {} },
     "deepseek": { "env": { "ANTHROPIC_BASE_URL": "...", "ANTHROPIC_AUTH_TOKEN": "sk-..." } },
     "kimi":     { "env": { "ANTHROPIC_BASE_URL": "...", "ANTHROPIC_API_KEY":  "sk-..." } }
   },
   "openai_endpoints": {
-    "openai":   { "base_url": "https://api.openai.com/v1",   "api_key": "sk-...", "wire_api": "responses" },
     "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "wire_api": "chat" },
     "moonshot": { "base_url": "https://api.moonshot.cn/v1", "api_key": "sk-...", "wire_api": "chat" }
   },
   "codex_profiles": {
-    "openai":         { "endpoint": "openai",   "model": "gpt-5-codex" },
-    "deepseek-codex": { "endpoint": "deepseek", "model": "deepseek-chat" }
+    "deepseek": { "endpoint": "deepseek", "model": "deepseek-chat" },
+    "kimi":     { "endpoint": "moonshot", "model": "kimi-k2-0905-preview" }
   }
 }
 ```
+
+注意 `profiles.deepseek` 和 `codex_profiles.deepseek` 同名是有意的——它们是同一个 provider 的两种 API 形态(Anthropic-compat 和 OpenAI-compat)。`config.toml` 写 `provider = "deepseek"` 时,claude 引擎走 profiles,codex 引擎走 codex_profiles,**一行配置覆盖两个引擎**。
 
 3 段各自的语义:
 
@@ -164,14 +164,14 @@ PWA → Tasks → `New cron loop`。两种填法:
 
 每 workspace 可以在列头的下拉里独立选 provider —— PWA 根据这个 ws 的 engine 显示对应那段的 keys(claude → profiles,codex → codex_profiles,不会混)。
 
-**关于 `claude` profile**:不带 token(用 Anthropic 原生 OAuth),只能本地 `claude login` 后被 agent-run 使用,不能从后端驱动——所以不出现在 PWA dropdown 里。
+**想用 Anthropic 原生 OAuth**(本地 `claude login`):在 `profiles` 加一条 `"claude": { "env": {} }`(空 env),再在 `config.toml` 设 `provider = "claude"`。agent-run 看到名字是 claude/anthropic 就跳过 env 注入,让 claude CLI 走 OAuth 流。默认模板不预置这条——大部分用户用 DeepSeek/Kimi 兼容端点,不走官方 OAuth。
 
 **关于 codex 的 endpoint 引用模式**:
-- `codex_profiles.deepseek-codex.endpoint = "deepseek"` → agent-run 查 `openai_endpoints.deepseek.{base_url, api_key, wire_api}`,生成 codex config.toml,export `OPENAI_API_KEY=<api_key>` 作为运行时 env。
+- `codex_profiles.deepseek.endpoint = "deepseek"` → agent-run 查 `openai_endpoints.deepseek.{base_url, api_key, wire_api}`,生成 codex config.toml,export `OPENAI_API_KEY=<api_key>` 作为运行时 env。
 - 你自己交互式用的 `~/.codex/` 完全不动(我们用独立的 `~/.cc-state/codex-home/`)。
 - 老版本(2026-05-14 之前)的 inline `codex_profiles.<name>.{env, base_url, env_key, wire_api, model}` 形状仍兼容——agent-run 检测到没有 `endpoint` 字段时,会走 legacy 分支。
 
-**兼容性提醒**:非 OpenAI 端点(deepseek / moonshot 等)对 codex 的 function calling / tool use 协议支持参差不齐。简单文本 prompt 多半能跑;agent-style 操作(改文件、跑 shell)可能在 wire-api 层卡住。先用 OpenAI 直连跑通,再考虑切便宜端点。
+**兼容性提醒**:非 OpenAI 端点(deepseek / moonshot 等)对 codex 的 function calling / tool use 协议支持参差不齐。简单文本 prompt 多半能跑;agent-style 操作(改多文件、跑复杂 shell 命令链)可能在 wire-api 层卡住。先简单 prompt 试通,再上复杂任务。
 
 ---
 
