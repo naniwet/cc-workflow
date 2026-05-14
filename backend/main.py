@@ -439,9 +439,12 @@ def delete_workspace(name: str) -> dict:
         # leftover is harmless (just an orphan claude_session_id).
         pass
 
-    if not cleaned:
-        raise HTTPException(404, {"error": "workspace not found", "name": name})
-
+    # Tolerant: even if nothing was actually found (dir gone, no settings,
+    # no session), return 200 with cleaned=[]. The PWA's card might be
+    # stale (3s polling delay between filesystem rm and refresh) — the
+    # user already wanted this workspace gone; "404 / Not Found" is
+    # surprising UX when the answer is "yeah, it's already gone".
+    # PWA decides the toast wording based on len(cleaned).
     return {"ok": True, "name": name, "cleaned": cleaned}
 
 

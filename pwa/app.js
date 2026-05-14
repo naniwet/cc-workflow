@@ -1392,8 +1392,15 @@ async function _onDeleteWorkspaceClick(e) {
   btn.disabled = true;
   try {
     const result = await api(`/workspaces/${encodeURIComponent(ws)}`, { method: 'DELETE' });
-    const what = (result?.cleaned || []).join(' + ') || '(nothing)';
-    showToast('success', `${ws}: deleted — ${what}`, { ttl: 3000 });
+    const cleaned = result?.cleaned || [];
+    if (cleaned.length > 0) {
+      showToast('success', `${ws}: deleted — ${cleaned.join(' + ')}`, { ttl: 3000 });
+    } else {
+      // Card was stale — dir + configs already gone elsewhere
+      // (manual cleanup, parallel session, etc.). Still a successful
+      // outcome from the user's POV.
+      showToast('info', `${ws}: 已经不存在(目录和配置都没了),卡片刷掉`, { ttl: 3000 });
+    }
     // If user is currently viewing this workspace's detail page,
     // navigate back to the overview before refreshAll repaints — else
     // they'll see a 404 detail view for a workspace that no longer exists.
