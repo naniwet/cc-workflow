@@ -25,6 +25,13 @@ readonly PROVIDERS_FILE="${HOME}/.cc-workflow/providers.json"
 readonly WORKSPACES_DIR="${HOME}/workspaces"
 readonly WT_BASE="${WORKSPACES_DIR}/.wt"
 readonly CONCURRENCY_LIMIT=3
+# Wall-clock cap for the compact pre-flight only (the 9-section summary
+# prompt; should finish in 30-60s, anything past 600s is a hang). Main
+# `claude -p` calls run unbounded — see run_claude. Removed the main-task
+# timeout 2026-05-14 because (a) the 'protect against hang' rationale was
+# weaker than thought (flock is a global 3-slot pool, not per-workspace,
+# so a hung task only blocks 1/3 of concurrency), (b) the user-facing
+# cost was real: any task > 10 min got murdered.
 readonly TIMEOUT_SECONDS=600
 
 # ---------- state (declared before any trap can read them) ----------
@@ -495,14 +502,18 @@ ${PROMPT}"
     [[ -n "$sid" ]] && resume=(--resume "$sid")
 
     stream="$(mktemp)"
-    ( cd "$WORKDIR" && timeout "$TIMEOUT_SECONDS" claude -p "$PROMPT" \
+    # No `timeout` wrapper — long tasks (>10 min) should be able to run to
+    # completion. If claude actually hangs (rare; would need a tool call
+    # waiting on stdin or a stuck stream), an admin can `kill <pid>` it
+    # manually; the EXIT trap will free the concurrency slot. The slot pool
+    # is global 3-wide, so one hung task doesn't block other workspaces.
+    ( cd "$WORKDIR" && claude -p "$PROMPT" \
         --output-format stream-json --verbose \
         --permission-mode "$PERMISSION_MODE" "${resume[@]}" ) >"$stream" 2>>"$log" || rc=$?
 
     cat "$stream" >>"$log"
 
-    if [[ $rc -eq 124 ]]; then rm -f "$stream"; die "$EX_TIMEOUT" "claude timeout (${TIMEOUT_SECONDS}s)"; fi
-    if [[ $rc -ne 0 ]]; then  rm -f "$stream"; die "$EX_ENGINE_FAIL" "claude exit=$rc (log: $log)"; fi
+    if [[ $rc -ne 0 ]]; then rm -f "$stream"; die "$EX_ENGINE_FAIL" "claude exit=$rc (log: $log)"; fi
 
     new_sid="$(jq -rs 'map(select(.type=="system" and .subtype=="init"))
                        | .[0].session_id // empty' "$stream" 2>/dev/null || true)"
