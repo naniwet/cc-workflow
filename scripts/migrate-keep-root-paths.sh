@@ -72,7 +72,24 @@ step "4. chown the project dir (+ .venv) to ${SERVICE_USER}"
 # and fails. Also lets `sudo -u ccw git pull` work without permission errors.
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${PROJECT_DIR}"
 
-step "5. Install the cron-replace wrapper"
+step "5a. Reinstall agent-run as a regular file (not a symlink)"
+# /usr/local/bin/agent-run is often a symlink to /root/projects/.../agent-run.sh
+# from an earlier install. After we drop privileges to ccw, that symlink
+# becomes a trap: ccw calls os.stat on it, the kernel follows the link
+# and tries to traverse /root/, which is still 0755 by step 2 above but
+# we'd rather not depend on /root/ perms for a binary lookup. Replace
+# the symlink with a root-owned regular file copy — ccw can stat it
+# directly without touching /root/.
+if [[ -L /usr/local/bin/agent-run ]]; then
+    rm -f /usr/local/bin/agent-run
+    echo "    removed pre-existing symlink"
+fi
+install -m 0755 -o root -g root \
+    "${PROJECT_DIR}/agent-run.sh" \
+    /usr/local/bin/agent-run
+echo "    /usr/local/bin/agent-run installed (regular file, root:root)"
+
+step "5b. Install the cron-replace wrapper"
 install -m 0755 -o root -g root \
     "${PROJECT_DIR}/scripts/install-cc-loops" \
     /usr/local/bin/install-cc-loops
