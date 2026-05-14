@@ -101,7 +101,7 @@ curl -s http://<server-ip>/healthz   # → {"ok":true}
 PWA → Workspaces → `+ New workspace`。填:
 - **name**:repo 目录名(字母数字 `.` `_` `-`)
 - **provider**:LLM 路由(留空 → 用 config.toml 的全局默认)
-- **engine**:`claude` 或 `codex`(**创建后不可改**;想换 engine 就新建一个)
+- **engine**:目前 PWA 只能选 `claude`(codex 暂时下线,见下面"engine 现状")。
 - **trust**:勾上 → 自动批准 Bash / WebFetch 等工具(默认不勾,会弹审批)
 
 后端会在 `~/workspaces/<name>/` 创建空目录 + `git init` + first commit。
@@ -216,24 +216,37 @@ cc-workflow/
 
 ---
 
-## engine=claude vs engine=codex 的语义差异
+## engine 现状(2026-05-14)
 
-两套 engine 都能跑,但**能力不对等**——codex CLI 没暴露和 Claude Code 等价的所有钩子,所以创建 `engine=codex` 的 workspace 会自动锁定一些行为。看完这张表再选:
+**只有 `claude` 可用**。codex 选项从 PWA 暂时下线,原因如下:
+
+- codex-cli 0.130+(2026-02 早期落地的 PR #10157)废弃了 `wire_api = "chat"`,只接受 `responses` 协议
+- DeepSeek / Kimi / Moonshot 等非 OpenAI 端点都**没有 `/v1/responses`**,只有 `/v1/chat/completions`
+- 结果:codex + 非 OpenAI 在 0.80.0 之后**结构性不可用**。详见 [codex discussions/7782](https://github.com/openai/codex/discussions/7782)。
+
+**后端代码全保留**:`backend/main.py` 的 codex 验证、`agent-run.sh` 的 `setup_codex_provider`、`providers.json` 的 `codex_profiles` 段都还在。想要恢复:
+
+1. **撤掉 PWA 隐藏**:把 `pwa/app.js` 里 `new-ws` 表单两处恢复 `<option value="codex">codex</option>`,或
+2. **走第三方代理** [VibeAround](https://github.com/jazzenchen)(Responses ↔ Chat 翻译层)+ 改 `openai_endpoints.deepseek.base_url` 指向它,或
+3. **pin codex 到 0.80.0**(`npm i -g @openai/codex@0.80.0`,但会陈旧),或
+4. **等 DeepSeek/Kimi 实现 responses API**(无时间表)
+
+如果未来 codex 可用了,**workspace 数据兼容**:已有的 `engine=codex` workspace 不需要重建,只需 PWA 重新允许选这个 engine 即可。
+
+—
+
+## 历史:engine=claude vs engine=codex 的语义差异(参考)
+
+下表是 codex 还能用时的两个 engine 对比,保留作为设计参考——以及一旦 codex 被启用,什么行为继续生效:
 
 | 维度 | claude | codex | 备注 |
 |---|---|---|---|
-| 一次性 prompt | ✅ | ✅ | 都通过 `agent-run.sh` 包装 |
+| 一次性 prompt | ✅ | ✅(若启用) | 都通过 `agent-run.sh` 包装 |
 | 工具审批(PWA `[Approve][Deny]`) | ✅ PreToolUse hook | ❌ 上游无 hook API([#8923](https://github.com/openai/codex/issues/8923) / [#3817](https://github.com/openai/codex/issues/3817)) | codex workspace 自动 `trust=true`、PWA trust 锁定为 🔓 不可改 |
-| 多轮对话(session 连续) | ✅ `--resume <sid>` | ⚠ `codex exec resume --last`(per-cwd) | 我们用 marker 文件管理"这个 ws/session 是否跑过 codex" |
-| 沙盒 | claude 自己的 permission-mode | codex `--sandbox workspace-write` | 都允许写 WORKDIR,网络默认禁(claude permission-mode 视情况) |
-| 通过 `providers.json` 切端点 | ✅ Anthropic 兼容端点(DeepSeek / Kimi) | ✅ 走 `codex_profiles` 段(并列于 `profiles`) | agent-run 自动生成临时 `~/.cc-state/codex-home/config.toml`,你自己的 `~/.codex/` 不动 |
-| install | `npm i -g @anthropic-ai/claude-code` | `npm i -g @openai/codex` | 两个都 npm 全局装 |
-
-**实际意义**:
-
-- 你想要"任何 Bash / WebFetch 都过我一遍"的安全感 → 用 claude
-- 你想试 OpenAI 系模型(gpt-5-codex 等)、且不介意"我点了 codex 就等于自动批一切" → 用 codex
-- 切换 engine 不能在 workspace 创建后改 —— 新建一个就是
+| 多轮对话(session 连续) | ✅ `--resume <sid>` | ⚠ `codex exec resume --last`(per-cwd) | marker 文件管理"这个 ws/session 是否跑过 codex" |
+| 沙盒 | claude 自己的 permission-mode | `--dangerously-bypass-approvals-and-sandbox`(0.130+ 唯一 headless 选项) | 0.130+ 无中间档,只有"全沙箱 + 提问"或"全跳过 + 全权限"两个极端 |
+| 通过 `providers.json` 切端点 | ✅ Anthropic 兼容端点(DeepSeek / Kimi) | ⚠ 仅支持 OpenAI Responses API,DeepSeek/Kimi 不可用(见上) | `codex_profiles` 段保留,以后可用 |
+| install | `npm i -g @anthropic-ai/claude-code` | `npm i -g @openai/codex`(+ /usr/local/bin 软链给 systemd 看到) | install-deps.sh 还会装,只是 PWA 不显示选项 |
 
 —
 

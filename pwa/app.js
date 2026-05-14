@@ -608,7 +608,10 @@ function renderDesktopOverview() {
           <label>engine
             <select name="engine">
               <option value="claude">claude</option>
-              <option value="codex">codex</option>
+              <!-- codex 暂从 PWA 隐藏:codex-cli 0.130+ 废弃了 wire_api=chat,
+                   DeepSeek/Kimi 没有 /v1/responses 端点。后端代码保留,
+                   想用 codex 的话手动改 workspaces.json 或等上游修复。
+                   详见根目录 README. -->
             </select>
           </label>
         </div>
@@ -743,7 +746,10 @@ function renderMobileOverview() {
           <label>engine
             <select name="engine">
               <option value="claude">claude</option>
-              <option value="codex">codex</option>
+              <!-- codex 暂从 PWA 隐藏:codex-cli 0.130+ 废弃了 wire_api=chat,
+                   DeepSeek/Kimi 没有 /v1/responses 端点。后端代码保留,
+                   想用 codex 的话手动改 workspaces.json 或等上游修复。
+                   详见根目录 README. -->
             </select>
           </label>
         </div>
