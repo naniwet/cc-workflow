@@ -2233,16 +2233,20 @@ function paintRunDetail(id, row) {
   // Cancel button — only when this run is actually running (and we
   // know its id). Placed in a dedicated .run-actions row below the
   // meta line so it has visual weight + a clear hit target on mobile.
-  // No elapsed-time threshold any more: short tasks deserve a cancel
-  // too (you sent the wrong prompt, you want to stop within 30s).
-  // The misclick-bait concern that pushed us toward a threshold goes
-  // away by virtue of this being on a dedicated detail page, not in
-  // the timeline list view.
   const cancelBtn = status === 'running' && id
     ? `<button class="run-cancel-btn" type="button" data-run-id="${esc(id)}">
          ✕  Cancel this run
        </button>`
     : '';
+
+  // Live output panel — only on running runs. Empty container; the
+  // polling loop below fills it. Showing the live stream tail tells the
+  // user whether claude is actually working (new jsonl lines appearing
+  // every few seconds) or stuck (no activity for 30s+).
+  const liveBlock = status === 'running' && id ? `
+    <h3>Live output <span class="run-live-hint muted" id="run-live-hint">(loading…)</span></h3>
+    <pre class="run-live-tail" id="run-live-tail">(waiting for first chunk)</pre>
+  ` : '';
 
   $('view').innerHTML = `
     <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
@@ -2257,11 +2261,65 @@ function paintRunDetail(id, row) {
       ${startedAt ? ` · ${esc(startedAt)}` : ''}
     </div>
     ${cancelBtn ? `<div class="run-actions">${cancelBtn}</div>` : ''}
+    ${liveBlock}
     <h3>Prompt</h3>
     <pre>${esc(row.prompt || '')}</pre>
     <h3>Output</h3>
     <div class="md-output">${row.output ? renderMarkdown(row.output) : '<p class="muted">(empty)</p>'}</div>
   `;
+  if (status === 'running' && id) _startLiveTailPoll(id);
+  else _stopLiveTailPoll();
+}
+
+// Live output polling — runs only on the detail page of a 'running' run.
+// Cancelled when navigating away or when the run flips to terminal.
+let _liveTailTimer = null;
+let _liveTailRunId = null;
+
+function _stopLiveTailPoll() {
+  if (_liveTailTimer) { clearInterval(_liveTailTimer); _liveTailTimer = null; }
+  _liveTailRunId = null;
+}
+
+function _startLiveTailPoll(runId) {
+  _stopLiveTailPoll();
+  _liveTailRunId = runId;
+  // Kick once immediately so the panel populates before the first tick.
+  _pollLiveTail(runId);
+  _liveTailTimer = setInterval(() => _pollLiveTail(runId), 2500);
+}
+
+async function _pollLiveTail(runId) {
+  // Bail if user navigated away — the polling timer outlives the page
+  // unless we explicitly stop it elsewhere.
+  if (location.hash !== `#runs/${runId}` || _liveTailRunId !== runId) {
+    _stopLiveTailPoll();
+    return;
+  }
+  let data;
+  try {
+    data = await api(`/runs/${encodeURIComponent(runId)}/tail?lines=40`);
+  } catch (err) {
+    // Stop on permanent failures (404 = run unknown, e.g. deleted)
+    if (String(err.message).includes('404')) _stopLiveTailPoll();
+    return;
+  }
+  const tail = $('view').querySelector('#run-live-tail');
+  const hint = $('view').querySelector('#run-live-hint');
+  if (!tail || !hint) return;
+  if (!data.exists || !data.lines || data.lines.length === 0) {
+    tail.textContent = '(no stream yet — claude may be initializing)';
+    hint.textContent = '(no data)';
+    return;
+  }
+  tail.textContent = data.lines.join('\n');
+  // "Xs ago" with color hint: <5s green, <30s normal, >30s warning.
+  const since = Math.round(data.seconds_since_update || 0);
+  let color = 'var(--text-tertiary)';
+  if (since < 5) color = 'var(--accent-green)';
+  else if (since > 30) color = 'var(--accent-amber)';
+  hint.style.color = color;
+  hint.textContent = `· last update ${since}s ago · ${data.size} bytes`;
 }
 
 // ---------- Tasks view ----------

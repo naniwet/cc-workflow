@@ -501,7 +501,18 @@ ${PROMPT}"
 
     [[ -n "$sid" ]] && resume=(--resume "$sid")
 
-    stream="$(mktemp)"
+    # Stream path: when backend passed CCW_RUN_ID, write to a deterministic
+    # path under LOGS_DIR. That lets the backend's GET /runs/{id}/tail
+    # endpoint stream the live output to PWA's run-detail page — so the
+    # user can tell "claude is still working" vs "claude is stuck" without
+    # ssh'ing in. Fallback to mktemp keeps `agent-run` usable from the
+    # CLI without the wrapper env (e.g. manual debugging).
+    if [[ -n "${CCW_RUN_ID:-}" ]]; then
+        stream="${LOGS_DIR}/run-${CCW_RUN_ID}.stream.jsonl"
+        : >"$stream"   # truncate (a new turn replaces the previous tail)
+    else
+        stream="$(mktemp)"
+    fi
     # No `timeout` wrapper — long tasks (>10 min) should be able to run to
     # completion. If claude actually hangs (rare; would need a tool call
     # waiting on stdin or a stuck stream), an admin can `kill <pid>` it
@@ -513,7 +524,13 @@ ${PROMPT}"
 
     cat "$stream" >>"$log"
 
-    if [[ $rc -ne 0 ]]; then rm -f "$stream"; die "$EX_ENGINE_FAIL" "claude exit=$rc (log: $log)"; fi
+    if [[ $rc -ne 0 ]]; then
+        # Don't rm the deterministic-path stream — backend's tail endpoint
+        # still wants to surface the partial output to the user (e.g. to
+        # show what claude printed before the error).
+        [[ "$stream" == /tmp/* ]] && rm -f "$stream"
+        die "$EX_ENGINE_FAIL" "claude exit=$rc (log: $log)"
+    fi
 
     new_sid="$(jq -rs 'map(select(.type=="system" and .subtype=="init"))
                        | .[0].session_id // empty' "$stream" 2>/dev/null || true)"
@@ -536,7 +553,10 @@ ${PROMPT}"
                       | select(.type=="text") | .text) | join(""))
             end' "$stream" 2>/dev/null || true
 
-    rm -f "$stream"
+    # Only rm temp-path streams; leave deterministic-path streams in place
+    # so backend can show them in run-detail history after the fact (the
+    # next turn for the same run_id will truncate them).
+    [[ "$stream" == /tmp/* ]] && rm -f "$stream"
 }
 
 # NOTE: run_codex() removed 2026-05-14. See setup_codex_provider removal

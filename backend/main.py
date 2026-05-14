@@ -9,6 +9,7 @@ Routes:
   POST   /run                                  session
   GET    /runs/{task_id}                       session
   POST   /runs/{task_id}/cancel                session   (SIGTERM running subprocess)
+  GET    /runs/{task_id}/tail                  session   (live stream jsonl tail)
   GET    /sessions                             session
   GET    /workspaces                           session
   POST   /workspaces                           session
@@ -231,6 +232,54 @@ def post_run(req: RunRequest) -> dict:
         permission_mode=ws_settings.permission_mode_for(req.workspace),
     )
     return {"task_id": run_id, "status": "queued"}
+
+
+@app.get("/runs/{task_id}/tail", dependencies=PROTECT)
+def tail_run(task_id: str, lines: int = 50) -> dict:
+    """Return the most recent N lines from this run's live stream jsonl.
+
+    Used by run-detail's "Live output" panel so the user can tell whether
+    claude is actually doing something or has hung. Stream file is
+    written by agent-run.sh at ${LOGS_DIR}/run-${CCW_RUN_ID}.stream.jsonl
+    when CCW_RUN_ID is set (always, when invoked via backend).
+
+    Response shape:
+      {
+        exists: bool,                  # stream file present at all
+        size: int,                     # bytes (useful for "is it growing?")
+        mtime: float,                  # last-modified unix ts
+        seconds_since_update: float,   # now - mtime (UI shows "Xs ago")
+        lines: list[str]               # last `lines` jsonl lines (raw)
+      }
+    """
+    if lines < 1 or lines > 500:
+        raise HTTPException(400, {"error": "lines must be 1..500"})
+    row = db.get_run(task_id)
+    if row is None:
+        raise HTTPException(404, {"error": "run not found", "id": task_id})
+
+    path = config.STATE_DIR / "logs" / f"run-{task_id}.stream.jsonl"
+    if not path.is_file():
+        return {"exists": False, "size": 0, "mtime": 0, "seconds_since_update": 0, "lines": []}
+
+    try:
+        st = path.stat()
+        # Read tail efficiently for small N. The stream rarely exceeds a
+        # few MB; full read + slice is fine and avoids seek-from-end
+        # complexity. If this ever shows up in profiles, switch to
+        # reverse seek.
+        all_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        raise HTTPException(500, {"error": f"stream unreadable: {e}"})
+
+    import time as _t
+    return {
+        "exists": True,
+        "size": st.st_size,
+        "mtime": st.st_mtime,
+        "seconds_since_update": max(0.0, _t.time() - st.st_mtime),
+        "lines": all_lines[-lines:],
+    }
 
 
 @app.post("/runs/{task_id}/cancel", dependencies=PROTECT)

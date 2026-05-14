@@ -699,6 +699,29 @@ body.is-dragging .ws-col:not(.dragging) {
   border-color: var(--accent-red);
 }
 .run-cancel-btn:disabled { opacity: 0.5; cursor: wait; }
+
+/* Live output tail — only visible on detail pages of 'running' runs.
+ * Pre-formatted (no markdown render) so the user sees raw stream-jsonl
+ * lines the way claude emits them. Capped height so a long stream
+ * doesn't push the Prompt/Output sections off-screen. */
+.run-live-hint {
+  font-size: var(--text-sm);
+  font-weight: normal;
+  margin-left: var(--space-2);
+}
+.run-live-tail {
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: var(--text-xs);
+  line-height: var(--lh-normal);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-secondary);
+}
 .row-prompt, .row-output {
   font-size: var(--text-sm);
   padding-left: var(--space-1);
