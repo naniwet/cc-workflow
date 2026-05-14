@@ -73,9 +73,19 @@ def run_session(
     model_fn: ModelFn,
     session_path: Path,
     *,
+    role_model_overrides: Optional[dict[str, str]] = None,
     on_turn: Optional[Callable[[AgentTurn], None]] = None,
     clock: Callable[[], float] = time.time,
 ) -> Session:
+    """role_model_overrides: map role.name → model name. Missing roles fall
+    back to that role's preferred_model. Empty dict / None = pure defaults.
+    Validated by the caller (main.py) against MODEL_ENDPOINTS — we trust it
+    here. Role frozen dataclass stays untouched; we resolve per-call."""
+    overrides = role_model_overrides or {}
+
+    def model_for(role: Role) -> str:
+        return overrides.get(role.name) or role.preferred_model
+
     session = Session(question=question, started_at=clock())
     write_meta(session_path, session)
 
@@ -91,7 +101,7 @@ def run_session(
     # --- Round 1 ---------------------------------------------------------- #
     for role in roles:
         user_prompt = build_r1_user_prompt(question)
-        content = model_fn(role.preferred_model, role.system_prompt, user_prompt, role.temperature)
+        content = model_fn(model_for(role), role.system_prompt, user_prompt, role.temperature)
         _record(AgentTurn(round=1, role=role.name, type="answer", content=content, ts=clock()))
 
     # --- Round 2 ---------------------------------------------------------- #
@@ -99,11 +109,14 @@ def run_session(
     for role in roles:
         others = {name: c for name, c in r1_by_role.items() if name != role.name}
         user_prompt = build_r2_user_prompt(question, others)
-        content = model_fn(role.preferred_model, role.system_prompt, user_prompt, role.temperature)
+        content = model_fn(model_for(role), role.system_prompt, user_prompt, role.temperature)
         _record(AgentTurn(round=2, role=role.name, type="critique", content=content, ts=clock()))
 
     # --- Round 3 ---------------------------------------------------------- #
-    synth_text = synthesize(question, session.turns, synthesizer, model_fn)
+    synth_text = synthesize(
+        question, session.turns, synthesizer, model_fn,
+        model_override=overrides.get(synthesizer.name),
+    )
     _record(AgentTurn(round=3, role=synthesizer.name, type="synth", content=synth_text, ts=clock()))
 
     return session

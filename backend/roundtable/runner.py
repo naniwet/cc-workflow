@@ -26,8 +26,17 @@ from .model import ModelError, call_model
 from .data import Session
 
 
-def submit(question: str) -> Path:
+def submit(
+    question: str,
+    *,
+    role_models: dict[str, str] | None = None,
+) -> Path:
     """Kick off a roundtable session in a background thread.
+
+    role_models: optional per-role model override. Map role name → model
+    name. Caller (main.py) is responsible for validating against
+    MODEL_ENDPOINTS — we just pass through. Unknown role names are
+    no-op (debate.run_session falls back to each role's preferred_model).
 
     Synchronously:
       - Compute the session_path (used as the public session id)
@@ -46,7 +55,7 @@ def submit(question: str) -> Path:
 
     t = threading.Thread(
         target=_execute,
-        args=(question, path),
+        args=(question, path, dict(role_models or {})),
         name=f"roundtable-{path.stem}",
         daemon=True,
     )
@@ -54,7 +63,7 @@ def submit(question: str) -> Path:
     return path
 
 
-def _execute(question: str, session_path: Path) -> None:
+def _execute(question: str, session_path: Path, role_models: dict[str, str]) -> None:
     """Run the 3-round debate end-to-end. Any error is written to the
     session jsonl as a synthetic __error__ turn so the PWA can show it."""
     try:
@@ -64,6 +73,7 @@ def _execute(question: str, session_path: Path) -> None:
             synthesizer=roles_mod.SYNTHESIZER,
             model_fn=call_model,
             session_path=session_path,
+            role_model_overrides=role_models,
         )
     except ModelError as e:
         # Expected failure mode (provider down, rate limit exhausted,

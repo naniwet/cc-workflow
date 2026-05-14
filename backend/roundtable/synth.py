@@ -83,11 +83,18 @@ def synthesize(
     turns: list[AgentTurn],
     synthesizer: Role,
     model_fn: ModelFn,
+    *,
+    model_override: str | None = None,
 ) -> str:
-    """Build the R3 prompt and call the model. Returns raw text — caller persists."""
+    """Build the R3 prompt and call the model. Returns raw text — caller persists.
+
+    model_override: optional per-session model name (validated by caller against
+    MODEL_ENDPOINTS). When omitted, falls back to synthesizer.preferred_model
+    from roles.py.
+    """
     prompt = build_r3_user_prompt(question, turns)
     return model_fn(
-        synthesizer.preferred_model,
+        model_override or synthesizer.preferred_model,
         synthesizer.system_prompt,
         prompt,
         synthesizer.temperature,

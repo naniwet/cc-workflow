@@ -22,6 +22,7 @@ Routes:
   POST   /loops/{name}/run                     session   (fire one immediate run)
   GET    /roundtables                           session   (list multi-agent debates)
   POST   /roundtables                           session   (start new one)
+  GET    /roundtables/models                    session   (model registry for PWA model picker)
   GET    /roundtables/{id}                      session   (full session content)
   DELETE /roundtables/{id}                      session
   POST   /cron/parse-nl                        session
@@ -56,6 +57,8 @@ from pydantic import BaseModel, Field
 
 from . import approvals, auth, config, cron_state, db, im_feishu, llm, runner, skills, ws_settings
 from .roundtable import io as roundtable_io
+from .roundtable import model as roundtable_model
+from .roundtable import roles as roundtable_roles
 from .roundtable import runner as roundtable_runner
 from .roundtable.synth import parse_synthesis
 
@@ -646,6 +649,10 @@ def resume_loop(name: str) -> dict:
 
 class NewRoundtableRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=4096)
+    # Optional per-role model override. Map role name → model name.
+    # Missing roles fall back to that role's preferred_model in roles.py.
+    # Validated server-side against MODEL_ENDPOINTS — see create_roundtable.
+    role_models: Optional[dict[str, str]] = None
 
 
 def _roundtable_session_summary(path: Path) -> dict:
@@ -687,11 +694,57 @@ def list_roundtables() -> list[dict]:
     return [_roundtable_session_summary(p) for p in paths]
 
 
+@app.get("/roundtables/models", dependencies=PROTECT)
+def list_roundtable_models() -> dict:
+    """Surface the model registry + role defaults so the PWA can render
+    a per-role model selector in the new-roundtable form.
+
+    Returns:
+      {
+        "models": [{"name": "deepseek-chat", "endpoint": "deepseek"}, ...],
+        "roles":  [{"name": "极简派", "default_model": "...", "kind": "persona"},
+                   ..., {"name": "整理员", "default_model": "...", "kind": "synthesizer"}]
+      }
+
+    Adding a new model = append to MODEL_ENDPOINTS in model.py (code-as-
+    registry). Adding a new role = edit roles.py (no schema migration).
+    """
+    return {
+        "models": [
+            {"name": m, "endpoint": ep}
+            for m, ep in sorted(roundtable_model.MODEL_ENDPOINTS.items())
+        ],
+        "roles": [
+            {"name": r.name, "default_model": r.preferred_model, "kind": "persona"}
+            for r in roundtable_roles.ROLES
+        ] + [
+            {
+                "name": roundtable_roles.SYNTHESIZER.name,
+                "default_model": roundtable_roles.SYNTHESIZER.preferred_model,
+                "kind": "synthesizer",
+            }
+        ],
+    }
+
+
 @app.post("/roundtables", dependencies=PROTECT, status_code=202)
 def create_roundtable(req: NewRoundtableRequest) -> dict:
     """Kick off a new roundtable session. Returns immediately with the
     session id; the 9 LLM calls run in a background thread."""
-    path = roundtable_runner.submit(req.question.strip())
+    if req.role_models:
+        valid_roles = (
+            {r.name for r in roundtable_roles.ROLES}
+            | {roundtable_roles.SYNTHESIZER.name}
+        )
+        for role_name, model_name in req.role_models.items():
+            if role_name not in valid_roles:
+                raise HTTPException(400, {"error": f"unknown role: {role_name!r}"})
+            if model_name not in roundtable_model.MODEL_ENDPOINTS:
+                raise HTTPException(400, {
+                    "error": f"unknown model: {model_name!r}",
+                    "known": sorted(roundtable_model.MODEL_ENDPOINTS),
+                })
+    path = roundtable_runner.submit(req.question.strip(), role_models=req.role_models)
     return {"id": path.stem, "status": "queued", "question": req.question}
 
 

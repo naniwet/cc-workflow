@@ -1592,6 +1592,72 @@ pre {
   word-break: break-word;
 }
 
+/* Per-role model override block — collapsible <details> inside the new-
+ * roundtable form. Default collapsed; opens to 5 rows (4 personas + 1
+ * synthesizer), each role name on the left, native dark select on the
+ * right (dark theming already inherits from the global input/select rule).
+ */
+.rt-model-config { margin: 0; }
+.rt-model-config > summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  padding: var(--space-2) 0;
+  user-select: none;
+  list-style: none;
+}
+.rt-model-config > summary::-webkit-details-marker { display: none; }
+.rt-model-config > summary:hover { color: var(--text-primary); }
+.rt-model-config[open] > summary { color: var(--text-primary); }
+.rt-model-config-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-2);
+}
+.rt-model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.rt-model-role {
+  flex: 0 0 auto;
+  min-width: 90px;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+.rt-model-role-kind {
+  font-size: var(--text-micro);
+  margin-left: var(--space-1);
+}
+.rt-model-select {
+  flex: 1;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
+}
+.rt-model-reset-all {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.rt-model-reset-all:hover {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+/* Narrow screens — stack role label above the select to free up width */
+@media (max-width: 480px) {
+  .rt-model-row { flex-direction: column; align-items: stretch; gap: var(--space-1); }
+  .rt-model-role { min-width: 0; }
+}
+
 /* R1/R2 grid — 4 roles side-by-side on wide screens, stack on narrow */
 .rt-round h3 {
   font-size: var(--text-md);

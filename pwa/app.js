@@ -2239,6 +2239,91 @@ async function onLoopAction(e) {
 
 const roundtableDetailCache = {};     // id → full detail row (cached when done/error)
 
+// Model registry cache. Backend GET /roundtables/models returns the static
+// MODEL_ENDPOINTS table + the role defaults from roles.py. Both change only
+// on backend deploy, so we cache for the lifetime of the page load — no
+// invalidation logic needed.
+let _rtModelsCache = null;
+
+// Per-role model overrides remembered across sessions. Stored as a flat
+// {role_name → model_name} dict, ONLY containing roles where the user
+// picked something other than the default (so flipping back to default =
+// remove the key, not write "default" as a value). New users get {}.
+function _loadRtRoleModels() {
+  try { return JSON.parse(localStorage.getItem('cc_rt_role_models') || '{}') || {}; }
+  catch { return {}; }
+}
+function _saveRtRoleModels(m) {
+  try { localStorage.setItem('cc_rt_role_models', JSON.stringify(m)); } catch {}
+}
+
+async function ensureRoundtableModels() {
+  if (_rtModelsCache) return _rtModelsCache;
+  try {
+    _rtModelsCache = await api('/roundtables/models');
+    return _rtModelsCache;
+  } catch {
+    return null;    // older backend / fetch failure — UI degrades gracefully
+  }
+}
+
+// Render the 5 role rows inside the <details> model-config block. Reads
+// from _rtModelsCache + localStorage. Called twice in the lifecycle: once
+// optimistically if cache is hot, once after async fetch otherwise. Both
+// paths bind the change handler — idempotent.
+function _populateRtModelConfig() {
+  const slot = document.getElementById('rt-model-config-slot');
+  if (!slot) return;
+  if (!_rtModelsCache) {
+    slot.innerHTML = '<p class="muted" style="font-size:11px;margin:0">(模型列表加载失败)</p>';
+    return;
+  }
+  const { models, roles } = _rtModelsCache;
+  const saved = _loadRtRoleModels();
+  slot.innerHTML = roles.map((r) => {
+    const current = saved[r.name] || r.default_model;
+    const opts = models.map((m) => {
+      const sel = m.name === current ? ' selected' : '';
+      return `<option value="${esc(m.name)}"${sel}>${esc(m.name)}  ·  ${esc(m.endpoint)}</option>`;
+    }).join('');
+    const kindHint = r.kind === 'synthesizer'
+      ? '<span class="muted rt-model-role-kind">(整理员)</span>'
+      : '';
+    return `
+      <div class="rt-model-row">
+        <span class="rt-model-role">${esc(r.name)} ${kindHint}</span>
+        <select class="rt-model-select" data-role="${esc(r.name)}" data-default="${esc(r.default_model)}">
+          ${opts}
+        </select>
+      </div>
+    `;
+  }).join('') + `
+    <button type="button" class="rt-model-reset-all">↩ 全部恢复默认</button>
+  `;
+  for (const sel of slot.querySelectorAll('.rt-model-select')) {
+    sel.addEventListener('change', _onRtModelSelectChange);
+  }
+  slot.querySelector('.rt-model-reset-all')?.addEventListener('click', _onRtModelResetAll);
+}
+
+function _onRtModelSelectChange(e) {
+  const sel = e.currentTarget;
+  const role = sel.dataset.role;
+  const val = sel.value;
+  const dflt = sel.dataset.default;
+  const saved = _loadRtRoleModels();
+  if (val === dflt) delete saved[role];   // back to default = remove override
+  else saved[role] = val;
+  _saveRtRoleModels(saved);
+}
+
+function _onRtModelResetAll() {
+  _saveRtRoleModels({});
+  // Re-render the rows so every select snaps back to its default.
+  _populateRtModelConfig();
+  showToast('info', '已恢复全部默认', { ttl: 1200 });
+}
+
 function renderRoundtablesView() {
   const rows = lastData.roundtables || [];
   const list = rows.length
@@ -2266,6 +2351,12 @@ function renderRoundtablesView() {
           <textarea name="question" required rows="3"
             placeholder="例:个人 side project 一开始就上严格 TDD,还是先 spike?"></textarea>
         </label>
+        <details class="rt-model-config" data-details-id="rt-model-config">
+          <summary>🎛 模型配置(默认即可)</summary>
+          <div class="rt-model-config-body" id="rt-model-config-slot">
+            <p class="muted" style="font-size:11px;margin:0">(加载模型列表中…)</p>
+          </div>
+        </details>
         <p class="muted" style="font-size:11px;margin:0">
           约 1-2 分钟出结果(9 个 LLM 调用串行)。结果落在 <code>~/.cc-state/roundtables/</code>。
         </p>
@@ -2278,6 +2369,14 @@ function renderRoundtablesView() {
     ?.addEventListener('submit', onCreateRoundtable);
   for (const b of $('view').querySelectorAll('.rt-delete')) {
     b.addEventListener('click', onDeleteRoundtable);
+  }
+  // Populate the model config block. Cache-hot path is synchronous; cold
+  // path fetches once, then patches the slot only (textarea / open state
+  // stay intact thanks to the existing snapshot/restore + draft system).
+  if (_rtModelsCache) {
+    _populateRtModelConfig();
+  } else {
+    ensureRoundtableModels().then(_populateRtModelConfig);
   }
 }
 
@@ -2311,13 +2410,28 @@ async function onCreateRoundtable(e) {
   e.preventDefault();
   const form = e.target;
   const fd = Object.fromEntries(new FormData(form).entries());
+
+  // Collect per-role model overrides from the live selects. Only roles where
+  // the picked value differs from the default ship in the POST — backend
+  // treats absent roles as "use roles.py preferred_model". This keeps the
+  // wire payload minimal and makes the default path indistinguishable from
+  // pre-feature traffic for the backend.
+  const overrides = {};
+  for (const sel of form.querySelectorAll('select.rt-model-select')) {
+    if (sel.value && sel.value !== sel.dataset.default) {
+      overrides[sel.dataset.role] = sel.value;
+    }
+  }
+
   const btn = form.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = '开始中…';
   try {
+    const body = { question: fd.question };
+    if (Object.keys(overrides).length > 0) body.role_models = overrides;
     const r = await api('/roundtables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: fd.question }),
+      body: JSON.stringify(body),
     });
     form.reset();
     showToast('success', `圆桌已开:${r.id}`, { ttl: 2000 });
