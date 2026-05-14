@@ -225,11 +225,12 @@ let lastData = {
   codexProviders: [],                   // codex profiles (providers.json#codex_profiles)
   wsSettings: {},                       // name → {provider?, engine?, trust?}
   globalProvider: '',                   // config.toml's provider field
+  roundtables: [],                      // list summaries from GET /roundtables
 };
 
 async function refreshAll() {
   try {
-    const [ws, sess, lp, providers, codexProviders, cfg, approvals] = await Promise.all([
+    const [ws, sess, lp, providers, codexProviders, cfg, approvals, roundtables] = await Promise.all([
       api('/workspaces'),
       api('/sessions'),
       api('/loops'),
@@ -241,6 +242,9 @@ async function refreshAll() {
       api('/providers/codex').catch(() => []),
       api('/config'),
       api('/approvals/pending').catch(() => []),   // graceful: backend may not have it yet
+      // /roundtables = list summaries for the 3rd tab. Cheap (no per-turn
+      // body, just counts). .catch keeps older backends working.
+      api('/roundtables').catch(() => []),
     ]);
     // Workspace settings: one fetch per workspace (small N, fine for now).
     const settingsList = await Promise.all(
@@ -265,6 +269,7 @@ async function refreshAll() {
       // entry has {approval_id, run_id, workspace, tool_name, tool_input}.
       // Attached to run rows by run_id in renderWorkspacesView path.
       pendingApprovals: Array.isArray(approvals) ? approvals : [],
+      roundtables: Array.isArray(roundtables) ? roundtables : [],
     };
     clearError();
     $('status').textContent = '· ' + new Date().toLocaleTimeString();
@@ -283,11 +288,16 @@ async function refreshAll() {
 //                                on PC.
 //   #runs/<id>                 → single-run detail (full output, link target
 //                                 from Feishu when output is truncated)
-const ROUTES = { workspaces: renderWorkspacesView, tasks: renderTasksView };
+const ROUTES = {
+  workspaces:  renderWorkspacesView,
+  tasks:       renderTasksView,
+  roundtables: renderRoundtablesView,
+};
 function parseRoute() {
   const h = location.hash.replace('#', '');
   if (h.startsWith('runs/')) return { name: 'runs', id: h.slice(5) };
   if (h.startsWith('workspaces/')) return { name: 'workspace-detail', id: decodeURIComponent(h.slice(11)) };
+  if (h.startsWith('roundtables/')) return { name: 'roundtable-detail', id: decodeURIComponent(h.slice(12)) };
   return { name: h || 'workspaces', id: null };
 }
 
@@ -519,6 +529,9 @@ function render() {
   } else if (route.name === 'workspace-detail' && route.id) {
     setActiveTab('workspaces');                    // Workspaces tab stays highlighted
     renderWorkspaceDetailView(route.id, { isFreshNav });
+  } else if (route.name === 'roundtable-detail' && route.id) {
+    setActiveTab('roundtables');
+    renderRoundtableDetailView(route.id, { isFreshNav });
   } else {
     const handler = ROUTES[route.name] || ROUTES.workspaces;
     setActiveTab(route.name in ROUTES ? route.name : 'workspaces');
@@ -2113,6 +2126,263 @@ async function onLoopAction(e) {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ============================================================================
+// Roundtable (third tab — multi-agent debate)
+// ============================================================================
+// Backend has /roundtables (list) + /roundtables/{id} (detail) + DELETE.
+// 9 sequential LLM calls per session takes 45-135s, so detail view polls
+// while status != 'done' / 'error'. List rows live in lastData.roundtables
+// (refreshed on every refreshAll cycle).
+
+const roundtableDetailCache = {};     // id → full detail row (cached when done/error)
+
+function renderRoundtablesView() {
+  const rows = lastData.roundtables || [];
+  const list = rows.length
+    ? rows.map(_roundtableListRow).join('')
+    : '<p class="muted">还没有圆桌会议。先写一个问题,4 个角色 + 1 个整理员会替你辩论 3 轮。</p>';
+  $('view').innerHTML = `
+    <h1>圆桌会议</h1>
+    <p class="muted" style="margin-top:-8px">
+      4 个固定角色(<strong>极简派 / 场景派 / 借鉴派 / 悲观派</strong>)对一个决策问题各抒己见,
+      <strong>整理员</strong>把分歧整理成 <em>共识点 / 分歧轴 / 判断题</em>。让你做决定,不替你做决定。
+    </p>
+    <details class="add-form" data-details-id="add-roundtable" open>
+      <summary>新开一场</summary>
+      <form data-form-id="new-roundtable">
+        <label>问题(决策级,不是事实问题)
+          <textarea name="question" required rows="3"
+            placeholder="例:个人 side project 一开始就上严格 TDD,还是先 spike?"></textarea>
+        </label>
+        <p class="muted" style="font-size:11px;margin:0">
+          约 1-2 分钟出结果(9 个 LLM 调用串行)。结果落在 <code>~/.cc-state/roundtables/</code>。
+        </p>
+        <button type="submit">开始辩论</button>
+      </form>
+    </details>
+    <div class="rt-list">${list}</div>
+  `;
+  $('view').querySelector('form[data-form-id="new-roundtable"]')
+    ?.addEventListener('submit', onCreateRoundtable);
+  for (const b of $('view').querySelectorAll('.rt-delete')) {
+    b.addEventListener('click', onDeleteRoundtable);
+  }
+}
+
+function _roundtableListRow(r) {
+  const status = r.status || 'queued';
+  const when = r.started_at
+    ? new Date(r.started_at * 1000).toLocaleString()
+    : '';
+  const progress = status === 'done'
+    ? '✓ 完成'
+    : status === 'error'
+      ? '✗ 出错'
+      : `${r.turns_done || 0} / 9 轮`;
+  return `
+    <div class="rt-row">
+      <a class="rt-row-link" href="#roundtables/${encodeURIComponent(r.id)}">
+        <div class="rt-row-q">${esc(r.question || '(无标题)')}</div>
+        <div class="rt-row-meta">
+          ${statusTag(status === 'done' ? 'done' : status === 'error' ? 'failed' : 'running')}
+          <span class="muted">· ${esc(progress)}</span>
+          ${when ? `<span class="muted">· ${esc(when)}</span>` : ''}
+        </div>
+      </a>
+      <button class="danger rt-delete" type="button" data-id="${esc(r.id)}"
+              title="删除这场会议">×</button>
+    </div>
+  `;
+}
+
+async function onCreateRoundtable(e) {
+  e.preventDefault();
+  const form = e.target;
+  const fd = Object.fromEntries(new FormData(form).entries());
+  const btn = form.querySelector('button[type="submit"]');
+  btn.disabled = true; btn.textContent = '开始中…';
+  try {
+    const r = await api('/roundtables', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: fd.question }),
+    });
+    form.reset();
+    showToast('success', `圆桌已开:${r.id}`, { ttl: 2000 });
+    // Jump into detail view so user sees turns appear live.
+    location.hash = `#roundtables/${encodeURIComponent(r.id)}`;
+  } catch (err) {
+    showError(`创建失败: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = '开始辩论';
+  }
+}
+
+async function onDeleteRoundtable(e) {
+  const btn = e.currentTarget;
+  const id = btn.dataset.id;
+  if (!id) return;
+  if (!confirm(`删除圆桌 "${id}"?\n.jsonl 文件会被删,无法恢复。`)) return;
+  btn.disabled = true;
+  try {
+    await api(`/roundtables/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    delete roundtableDetailCache[id];
+    refreshAll();
+  } catch (err) {
+    showError(`删除失败: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Detail view — async like renderRunDetailView. Cache terminal-state
+// rows so the 3s polling cycle doesn't re-fetch them indefinitely.
+async function renderRoundtableDetailView(id, opts = {}) {
+  const cached = roundtableDetailCache[id];
+  if (cached && (cached.status === 'done' || cached.status === 'error')) {
+    if (!$('view').querySelector('.rt-detail')) paintRoundtableDetail(id, cached);
+    return;
+  }
+  let row;
+  try {
+    row = await api(`/roundtables/${encodeURIComponent(id)}`);
+  } catch (err) {
+    $('view').innerHTML = `
+      <p><a href="#roundtables" class="back-link">← 圆桌会议</a></p>
+      <h1>圆桌 <code>${esc(id)}</code></h1>
+      <p class="muted">加载失败: ${esc(err.message)}</p>
+    `;
+    return;
+  }
+  if (row.status === 'done' || row.status === 'error') {
+    roundtableDetailCache[id] = row;
+  }
+  // User may have navigated away while we awaited.
+  const route = parseRoute();
+  if (route.name !== 'roundtable-detail' || route.id !== id) return;
+  paintRoundtableDetail(id, row);
+}
+
+const _ROLE_ORDER = ['极简派', '场景派', '借鉴派', '悲观派'];
+
+function paintRoundtableDetail(id, row) {
+  const turnsByRound = { 1: {}, 2: {} };
+  for (const t of row.turns || []) {
+    if (t.round === 1 || t.round === 2) {
+      turnsByRound[t.round][t.role] = t.content;
+    }
+  }
+  const r3 = row.r3;
+  const status = row.status || 'queued';
+  const when = row.started_at
+    ? new Date(row.started_at * 1000).toLocaleString()
+    : '';
+
+  const errorBlock = row.error
+    ? `<div class="rt-error">⚠ ${esc(row.error)}</div>`
+    : '';
+
+  // R3 first (the meat for decision-makers); R1/R2 below for context.
+  const r3Block = r3 ? `
+    <section class="rt-r3">
+      <h2>整理员综合</h2>
+      ${_rtSection('共识点', r3.parsed['共识点'])}
+      ${_rtSection('分歧轴', r3.parsed['分歧轴'])}
+      ${_rtSection('判断题', r3.parsed['判断题'], { yesno: true })}
+      <details class="rt-r3-raw">
+        <summary>原始 markdown</summary>
+        <pre>${esc(r3.raw)}</pre>
+      </details>
+    </section>
+  ` : (status === 'error' ? '' : `
+    <section class="rt-r3 rt-r3-pending">
+      <h2>整理员综合</h2>
+      <p class="muted">R1 + R2 共 8 轮跑完后,整理员会给你 <strong>共识点 / 分歧轴 / 判断题</strong>。当前 ${esc(row.turns?.length || 0)} / 9 轮。</p>
+    </section>
+  `);
+
+  const r1Cells = _ROLE_ORDER.map((name) => _rtCell(name, turnsByRound[1][name])).join('');
+  const r2Cells = _ROLE_ORDER.map((name) => _rtCell(name, turnsByRound[2][name])).join('');
+
+  $('view').innerHTML = `
+    <p><a href="#roundtables" class="back-link">← 圆桌会议</a></p>
+    <h1 class="rt-question">${esc(row.question || '(无题)')}</h1>
+    <div class="rt-meta">
+      ${statusTag(status === 'done' ? 'done' : status === 'error' ? 'failed' : 'running')}
+      ${when ? `<span class="muted">· ${esc(when)}</span>` : ''}
+      <span class="muted">· ${esc(row.turns?.length || 0)} / 9 轮</span>
+    </div>
+    ${errorBlock}
+    <div class="rt-detail">
+      ${r3Block}
+      <section class="rt-round">
+        <h3>Round 1 — 初次回答</h3>
+        <div class="rt-grid">${r1Cells}</div>
+      </section>
+      <section class="rt-round">
+        <h3>Round 2 — Steel-man + Attack</h3>
+        <div class="rt-grid">${r2Cells}</div>
+      </section>
+    </div>
+  `;
+}
+
+function _rtCell(role, content) {
+  if (!content) {
+    return `
+      <div class="rt-cell rt-cell-${_roleSlug(role)} rt-cell-empty">
+        <h4>${esc(role)}</h4>
+        <p class="muted">…等待中</p>
+      </div>
+    `;
+  }
+  return `
+    <div class="rt-cell rt-cell-${_roleSlug(role)}">
+      <h4>${esc(role)}</h4>
+      <div class="rt-content">${_renderInlineMd(content)}</div>
+    </div>
+  `;
+}
+
+function _rtSection(title, bullets, opts = {}) {
+  if (!bullets || bullets.length === 0) {
+    return `<div class="rt-r3-section"><h3>${esc(title)}</h3><p class="muted">(整理员没列任何条目)</p></div>`;
+  }
+  const items = bullets.map((b) => {
+    if (opts.yesno) {
+      return `<li class="rt-yesno"><label><input type="checkbox"> ${_renderInlineMd(b)}</label></li>`;
+    }
+    return `<li>${_renderInlineMd(b)}</li>`;
+  }).join('');
+  return `
+    <div class="rt-r3-section">
+      <h3>${esc(title)}</h3>
+      <ul>${items}</ul>
+    </div>
+  `;
+}
+
+// Tiny inline-markdown: bold + code only. We deliberately avoid bringing
+// in a full markdown parser (no new dep) — the personas use **bold** and
+// `code` heavily; everything else is just paragraphs.
+function _renderInlineMd(text) {
+  let out = esc(text);
+  out = out.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/`([^`]+?)`/g, '<code>$1</code>');
+  return out.replace(/\n/g, '<br>');
+}
+
+function _roleSlug(name) {
+  // Stable CSS class per role. Hardcoded mapping so the colored chip
+  // doesn't depend on the 8-byte Chinese name surviving CSS escaping.
+  return ({
+    '极简派': 'minimalist',
+    '场景派': 'scenario',
+    '借鉴派': 'precedent',
+    '悲观派': 'pessimist',
+  })[name] || 'unknown';
 }
 
 // ---------- boot ----------
