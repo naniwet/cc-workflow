@@ -612,8 +612,9 @@ function renderDesktopOverview() {
   const allNames = Object.keys(groups);
   const layout = effectiveLayout(allNames);
 
-  // Initial provider list assumes engine=claude (the form's default selection).
-  const newWsProviderOptions = _providerOptionsHtml('', true);
+  // Provider picker — uses the unified form-picker component so dark
+  // theming matches the workspace ⋯ menu / roundtable model picker.
+  const newWsProviderPicker = _newWsProviderPickerHtml();
 
   // Render: alternating row-gap + row. The trailing gap (after the last
   // row) is a drop target for "create new row at the bottom".
@@ -648,7 +649,7 @@ function renderDesktopOverview() {
       <form data-form-id="new-ws">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
           placeholder="repo-name (alphanum / . _ -)" required></label>
-        <label>provider <select name="provider">${newWsProviderOptions}</select></label>
+        <label>provider ${newWsProviderPicker}</label>
         <!-- engine 字段固定为 claude(codex 已下线 2026-05-14;原因见 README "engine 现状")。
              保留 hidden input 是为了后端 NewWorkspaceRequest 的 engine 字段满足 Pydantic
              Literal["claude"] 验证。 -->
@@ -777,7 +778,7 @@ function renderMobileOverview() {
       <form data-form-id="new-ws">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
           placeholder="repo-name (alphanum / . _ -)" required></label>
-        <label>provider <select name="provider">${newWsProviderOptions}</select></label>
+        <label>provider ${newWsProviderPicker}</label>
         <!-- engine 字段固定为 claude(codex 已下线 2026-05-14;原因见 README "engine 现状")。
              保留 hidden input 是为了后端 NewWorkspaceRequest 的 engine 字段满足 Pydantic
              Literal["claude"] 验证。 -->
@@ -1094,7 +1095,9 @@ function bindWorkspaceColHandlers(root) {
   for (const btn of root.querySelectorAll('.ws-delete-workspace')) {
     btn.addEventListener('click', _onDeleteWorkspaceClick);
   }
-  // Native <select> (new-workspace form) still uses the old change handler.
+  // Any leftover .provider-inline <select>s (none in tree today after the
+  // form-picker unification, but the binding stays as cheap defense in
+  // depth if some future surface re-introduces a native select).
   for (const sel of root.querySelectorAll('.provider-inline')) {
     sel.addEventListener('change', onProviderInlineChange);
   }
@@ -1170,8 +1173,10 @@ function bindOverviewHandlers() {
 // providers.json#profiles (the only supported engine since codex was
 // removed 2026-05-14).
 function _providerOptionsHtml(selected, includeDefault) {
-  // Still used by the new-workspace form (which is a native <select>
-  // inside a wider <form>, where native styling looks fine).
+  // Legacy native-<option> builder. Kept for any code path that still
+  // wants native <select> behavior — the form-facing surfaces now use
+  // _renderFormPicker (collapsible + radio-list, dark-theme consistent
+  // with the workspace ⋯ menu).
   const list = lastData.providers || [];
   const opts = [];
   if (includeDefault) {
@@ -1183,6 +1188,91 @@ function _providerOptionsHtml(selected, includeDefault) {
   }
   return opts.join('');
 }
+
+// New-workspace form: provider picker HTML. Wrapper around _renderFormPicker
+// so both the desktop (line ~651) and mobile (line ~780) render paths
+// stay tidy and stay in sync if the option list ever needs special handling.
+function _newWsProviderPickerHtml() {
+  const list = lastData.providers || [];
+  const defaultLabel = lastData.globalProvider
+    ? `default · ${lastData.globalProvider}`
+    : 'default';
+  const options = [{ value: '', label: defaultLabel }];
+  for (const p of list) options.push({ value: p, label: p });
+  return _renderFormPicker({ name: 'provider', options, value: '' });
+}
+
+// Reusable form picker — drop-in replacement for <select> inside forms.
+// Renders as a collapsible <details> + radio list, visually matching the
+// workspace ⋯ menu's provider picker and roundtable's role-model picker
+// (one dark-theme component, three usage sites). A hidden <input> holds
+// the value so FormData / standard form submit keep working unchanged.
+//
+//   _renderFormPicker({
+//     name: 'workspace',
+//     options: [{value:'foo', label:'foo'}, {value:'bar', label:'bar'}],
+//     value: 'foo',
+//     detailsId: 'optional-id-for-snapshot/restore',
+//   })
+//
+// Event handling is via document-level delegation (bound once at module
+// init below), so callers don't need to bind anything after rendering.
+function _renderFormPicker({ name, options, value, detailsId }) {
+  const safeOpts = options.length > 0 ? options : [{ value: '', label: '(none)' }];
+  const current = safeOpts.find((o) => o.value === value) || safeOpts[0];
+  const dIdAttr = detailsId ? ` data-details-id="${esc(detailsId)}"` : '';
+  const rows = safeOpts.map((o) => {
+    const isSel = o.value === current.value;
+    const rowClass = isSel
+      ? 'ws-menu-radio form-picker-radio is-selected'
+      : 'ws-menu-radio form-picker-radio';
+    const dotClass = isSel ? 'ws-radio-dot is-selected' : 'ws-radio-dot';
+    return `
+      <button type="button" class="${rowClass}"
+              data-field="${esc(name)}" data-value="${esc(o.value)}">
+        <span class="${dotClass}"></span>
+        <span class="ws-radio-label">${esc(o.label)}</span>
+      </button>
+    `;
+  }).join('');
+  return `
+    <details class="form-picker"${dIdAttr}>
+      <summary class="form-picker-summary">
+        <span class="form-picker-current">${esc(current.label)}</span>
+      </summary>
+      <div class="form-picker-list">${rows}</div>
+      <input type="hidden" name="${esc(name)}" value="${esc(current.value)}">
+    </details>
+  `;
+}
+
+function _onFormPickerClick(e) {
+  const btn = e.target.closest('.form-picker-radio');
+  if (!btn) return;
+  const picker = btn.closest('details.form-picker');
+  if (!picker) return;
+  const fieldName = btn.dataset.field;
+  const value = btn.dataset.value;
+  // 1. Update hidden input → form.submit / FormData see the new value
+  const hidden = picker.querySelector(`input[type="hidden"][name="${fieldName}"]`);
+  if (hidden) hidden.value = value;
+  // 2. Repaint summary text
+  const newLabel = btn.querySelector('.ws-radio-label')?.textContent || value;
+  const summary = picker.querySelector('.form-picker-current');
+  if (summary) summary.textContent = newLabel;
+  // 3. Repaint is-selected state on every row in this picker
+  for (const r of picker.querySelectorAll('.form-picker-radio')) {
+    const isSel = r === btn;
+    r.classList.toggle('is-selected', isSel);
+    r.querySelector('.ws-radio-dot')?.classList.toggle('is-selected', isSel);
+  }
+  // 4. Click-to-pick-and-close (matches workspace ⋯ menu UX)
+  picker.open = false;
+}
+
+// Document-level click delegation — bound once at module load. Lets every
+// form-picker work without renderXxx needing to wire its own handlers.
+document.addEventListener('click', _onFormPickerClick);
 
 // In-menu provider picker: render as a vertical radio-list instead of a
 // native <select>. Native <select> popups are OS-styled (white-on-black
@@ -2106,9 +2196,11 @@ function renderTasksView() {
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
           placeholder="daily-digest" required></label>
         <label>workspace
-          <select name="workspace" required>
-            ${workspaces.map(w => `<option value="${esc(w)}">${esc(w)}</option>`).join('')}
-          </select>
+          ${_renderFormPicker({
+            name: 'workspace',
+            options: workspaces.map((w) => ({ value: w, label: w })),
+            value: workspaces[0] || '',
+          })}
         </label>
         <p class="muted" style="font-size:11px;margin:0">
           Engine is determined by the workspace's setting (see the column header).
@@ -2452,10 +2544,14 @@ function renderRoundtablesView() {
         </label>
         <div class="rt-rounds-row">
           <label class="rt-rounds-label">辩论轮数</label>
-          <select name="critique_rounds" class="rt-rounds-select">
-            <option value="1">1 轮(默认 · 9 调用 · ~90s)</option>
-            <option value="2">2 轮(深挖 · 13 调用 · ~2min)</option>
-          </select>
+          ${_renderFormPicker({
+            name: 'critique_rounds',
+            options: [
+              { value: '1', label: '1 轮(默认 · 9 调用 · ~90s)' },
+              { value: '2', label: '2 轮(深挖 · 13 调用 · ~2min)' },
+            ],
+            value: '1',
+          })}
         </div>
         <details class="rt-model-config" data-details-id="rt-model-config">
           <summary>🎛 模型配置(默认即可)</summary>

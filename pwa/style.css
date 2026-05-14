@@ -1667,6 +1667,68 @@ pre {
   font-size: var(--text-sm);
   padding: var(--space-1) var(--space-2);
 }
+/* The .rt-rounds-row now embeds a .form-picker; make it flex naturally
+ * so the picker fills remaining space next to the label. */
+.rt-rounds-row > .form-picker { flex: 1; }
+
+/* ============================================================================
+ *  Form picker — unified <details>+radio drop-in replacement for native
+ *  <select>. Used by:
+ *    - new-workspace form's provider field
+ *    - new-cron-loop form's workspace field
+ *    - new-roundtable form's critique_rounds field
+ *  Shares .ws-menu-radio / .ws-radio-dot styling with the workspace ⋯ menu's
+ *  provider picker and roundtable's per-role model picker, so the dark-theme
+ *  surface looks the same everywhere.
+ * ============================================================================ */
+.form-picker {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+}
+.form-picker > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  color: var(--text-primary);
+  font-size: var(--text-md);
+}
+.form-picker > summary::-webkit-details-marker { display: none; }
+.form-picker > summary::after {
+  content: '▾';
+  color: var(--text-tertiary);
+  font-size: 10px;
+  flex: 0 0 auto;
+  transition: transform var(--t-base);
+}
+.form-picker[open] > summary::after { transform: rotate(180deg); }
+.form-picker > summary:hover { background: var(--bg-elevated); }
+.form-picker[open] > summary {
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.form-picker-current {
+  flex: 1;
+  /* Long workspace / provider names shouldn't push the chevron off-screen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.form-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1);
+  /* Cap height so a wallload of providers / workspaces doesn't push the
+   * form's Submit button off the viewport. Scroll within the list. */
+  max-height: 280px;
+  overflow-y: auto;
+}
 
 /* Per-role model override block — collapsible <details> inside the new-
  * roundtable form. Default collapsed; opens to 5 role pickers (4 personas
