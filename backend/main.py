@@ -167,6 +167,28 @@ def auth_me(request: Request) -> dict:
 
 @app.post("/run", dependencies=PROTECT)
 def post_run(req: RunRequest) -> dict:
+    # Reject concurrent submits in the same workspace. Two claude --resume
+    # processes hitting the same session_key would race each other (claude
+    # has no internal lock on session-id reuse), and the second one's
+    # output is at best confusing, at worst written over the first's.
+    # Single-workspace single-flight matches a chat UX anyway — you don't
+    # send turn N+1 while turn N is still streaming.
+    in_flight = db.active_in_workspace(req.workspace)
+    if in_flight:
+        active = in_flight[0]
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "workspace_busy",
+                "active_run_id": active["id"],
+                "since": active.get("started_at"),
+                "msg": (
+                    f"workspace 「{req.workspace}」 已经有 1 个 run 在跑 "
+                    f"(id={active['id'][:8]})。等它完成或失败再提交;"
+                    f"卡死的话 ssh 上去 kill 进程即可。"
+                ),
+            },
+        )
     run_id = db.new_run_id()
     runner.submit(
         run_id=run_id,

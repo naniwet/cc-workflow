@@ -184,3 +184,23 @@ def list_sessions_view() -> dict:
             )
         ]
     return {"active": active, "queued": queued, "recent": recent}
+
+
+def active_in_workspace(workspace: str) -> list[dict]:
+    """Queued + running runs for `workspace`, newest first.
+
+    Used by POST /run to reject a second submit while one is already in
+    flight (same session_key would race the first claude --resume call).
+    Returns full _RUN_SUMMARY_COLS rows so the caller can surface the
+    blocking run's id to the user.
+    """
+    with _conn() as c:
+        return [
+            dict(r)
+            for r in c.execute(
+                f"SELECT {_RUN_SUMMARY_COLS} FROM runs "
+                "WHERE workspace=? AND status IN ('queued','running') "
+                "ORDER BY started_at DESC",
+                (workspace,),
+            )
+        ]

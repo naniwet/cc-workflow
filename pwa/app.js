@@ -215,6 +215,7 @@ async function api(path, opts = {}) {
         detail = d;
       } else if (d && typeof d === 'object') {
         if (d.raw_reply) detail = `${d.error || 'error'} · LLM said: ${String(d.raw_reply).slice(0, 200)}`;
+        else if (typeof d.msg === 'string') detail = d.msg;    // human-readable explanation (preferred)
         else if (typeof d.detail === 'string') detail = d.detail;
         else if (d.error) detail = d.error;
         else detail = JSON.stringify(d);
@@ -2154,16 +2155,12 @@ function paintRunDetail(id, row) {
   const startedAt = row.started_at
     ? new Date(row.started_at * 1000).toLocaleString()
     : '';
-  // Back link points to the run's own workspace detail page when we know
-  // it (~always, except for the rare orphan run whose workspace was
-  // deleted), so the user comes back to where they were instead of the
-  // overview. Falls through to the overview for the orphan case.
-  const backHref = row.workspace
-    ? `#workspaces/${encodeURIComponent(row.workspace)}`
-    : '#workspaces';
-  const backLabel = row.workspace ? `← ${esc(row.workspace)}` : '← Workspaces';
+  // Back link → overview. On PC the overview is the multi-column "see
+  // everything at once" surface, which is more useful than dropping back
+  // into a single workspace detail. (On mobile this link is hidden by
+  // CSS anyway — see .back-link media query.)
   $('view').innerHTML = `
-    <p><a href="${backHref}" class="back-link">${backLabel}</a></p>
+    <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
     <h1>Run <code>${esc(id.slice(0, 8))}</code></h1>
     <div class="run-meta">
       ${statusTag(status)}
