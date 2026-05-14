@@ -1520,13 +1520,19 @@ async function onAddWorkspace(e) {
 }
 
 function groupByWorkspace(workspaces, sessions) {
+  // Start from filesystem-backed workspace names (what /workspaces returns).
+  // Old behavior `??=` auto-created entries for any r.workspace seen in
+  // sessions — that meant deleted workspaces kept showing as phantom
+  // cards because runs.db still has their history. Now we DROP orphan
+  // runs from the UI; the workspace list (filesystem) is the source of truth.
+  const valid = new Set(workspaces);
   const g = {};
   for (const w of workspaces) g[w] = { active: [], recent: [] };
   for (const r of sessions.active || []) {
-    (g[r.workspace] ??= { active: [], recent: [] }).active.push(r);
+    if (valid.has(r.workspace)) g[r.workspace].active.push(r);
   }
   for (const r of sessions.recent || []) {
-    (g[r.workspace] ??= { active: [], recent: [] }).recent.push(r);
+    if (valid.has(r.workspace)) g[r.workspace].recent.push(r);
   }
   return g;
 }
@@ -2168,7 +2174,7 @@ function renderRoundtablesView() {
       <strong>整理员</strong>把分歧整理成 <em>共识点 / 分歧轴 / 判断题</em>。让你做决定,不替你做决定。
     </p>` : '';
   $('view').innerHTML = `
-    <h1>圆桌会议</h1>
+    <h1>Roundtable</h1>
     ${blurb}
     <details class="add-form" data-details-id="add-roundtable" ${formOpen}>
       <summary>新开一场</summary>
@@ -2271,8 +2277,8 @@ async function renderRoundtableDetailView(id, opts = {}) {
     row = await api(`/roundtables/${encodeURIComponent(id)}`);
   } catch (err) {
     $('view').innerHTML = `
-      <p><a href="#roundtables" class="back-link">← 圆桌会议</a></p>
-      <h1>圆桌 <code>${esc(id)}</code></h1>
+      <p><a href="#roundtables" class="back-link">← Roundtable</a></p>
+      <h1>Roundtable <code>${esc(id)}</code></h1>
       <p class="muted">加载失败: ${esc(err.message)}</p>
     `;
     return;
@@ -2328,7 +2334,7 @@ function paintRoundtableDetail(id, row) {
   const r2Cells = _ROLE_ORDER.map((name) => _rtCell(name, turnsByRound[2][name])).join('');
 
   $('view').innerHTML = `
-    <p><a href="#roundtables" class="back-link">← 圆桌会议</a></p>
+    <p><a href="#roundtables" class="back-link">← Roundtable</a></p>
     <h1 class="rt-question">${esc(row.question || '(无题)')}</h1>
     <div class="rt-meta">
       ${statusTag(status === 'done' ? 'done' : status === 'error' ? 'failed' : 'running')}

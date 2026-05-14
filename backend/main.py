@@ -439,6 +439,16 @@ def delete_workspace(name: str) -> dict:
         # leftover is harmless (just an orphan claude_session_id).
         pass
 
+    # 4. Drop run history from runs.db. Without this, the /sessions
+    # endpoint still returns historic rows tagged workspace=<name>, and
+    # PWA's groupByWorkspace would resurrect a phantom card from them.
+    try:
+        n = db.delete_runs_for_workspace(name)
+        if n > 0:
+            cleaned.append(f"runs.db ({n} rows)")
+    except Exception:  # noqa: BLE001 — never fail the delete because of db cleanup
+        pass
+
     # Tolerant: even if nothing was actually found (dir gone, no settings,
     # no session), return 200 with cleaned=[]. The PWA's card might be
     # stale (3s polling delay between filesystem rm and refresh) — the

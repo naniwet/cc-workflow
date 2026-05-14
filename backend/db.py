@@ -124,6 +124,17 @@ def get_run(run_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def delete_runs_for_workspace(workspace: str) -> int:
+    """Drop all run history rows for `workspace`. Called from
+    DELETE /workspaces/{name} so phantom history doesn't keep that name
+    visible in the PWA via the /sessions endpoint. Returns the count
+    of rows removed."""
+    with _conn() as c:
+        cur = c.execute("DELETE FROM runs WHERE workspace = ?", (workspace,))
+        # autocommit is on (isolation_level=None) — no explicit commit needed
+        return cur.rowcount or 0
+
+
 # Columns returned by /sessions endpoint.
 #
 # Q1 PWA polish: prompt + output snippet added so the workspace timeline
