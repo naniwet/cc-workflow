@@ -149,7 +149,16 @@ _RUN_SUMMARY_COLS = (
     "id, workspace, engine, session_key, status, "
     "exit_code, started_at, finished_at, elapsed_s, source, "
     "substr(prompt, 1, 200) AS prompt, "
-    "substr(output, 1, 200) AS output_preview"
+    # Output preview: head + tail with an elision in the middle, so the
+    # timeline row shows both the opener (how claude frames the reply)
+    # AND the closer (conclusion / next step / "what should we do" —
+    # which is what the user actually has to act on). Short outputs
+    # (<= 200) show in full; only long ones get the head…tail trick.
+    # Prompt stays head-only (prompts are usually user-written, the
+    # opener is the salient part).
+    "CASE WHEN length(output) <= 200 THEN output "
+    "ELSE substr(output, 1, 100) || char(10) || '…' || char(10) || substr(output, -100) "
+    "END AS output_preview"
 )
 
 
