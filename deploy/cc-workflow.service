@@ -13,23 +13,27 @@ Type=simple
 # refuses --dangerously-skip-permissions on root" since 2026-05-14: we
 # only change the launch user, not the data layout. Pre-requisites:
 #
-#   - User `ccw` exists with home `/root` (useradd -r -d /root -s /bin/bash ccw)
-#   - `/root` mode 0755 (chmod 755 /root) so ccw can traverse into it
-#   - /root/.cc-workflow, /root/.cc-state, /root/workspaces, and
-#     /root/projects/cc-workflow are chowned to ccw:ccw
+#   - User `ccw` exists with home `/root` and a nologin shell
+#     (useradd --no-create-home -d /root -s /usr/sbin/nologin ccw)
+#   - `/root` has `u:ccw:x` ACL so ccw can traverse it (NOT 755 — the
+#     ACL approach is more surgical than world-traversable /root)
+#   - /root/.cc-workflow, /root/.cc-state, /root/workspaces,
+#     /root/.claude, /root/projects/cc-workflow have `u:ccw:rwx`
+#     ACL (current + default) so ccw can read/write under each tree
+#     while OWNER stays root throughout
 #   - /etc/sudoers.d/cc-workflow grants ccw the install-cc-loops wrapper
 #   - cron lines in /etc/cron.d/cc-loops have USER=ccw (not root)
 #
-# scripts/migrate-keep-root-paths.sh does all of the above idempotently.
+# scripts/migrate-grant-acl.sh does all of the above idempotently.
 #
 # HOME=/root is intentional — config.py uses Path.home() to find
 # .cc-workflow / .cc-state, and agent-run.sh uses ${HOME}/workspaces.
 # Pointing $HOME at /root keeps every reader on the same paths.
 #
 # Two alternative deployment shapes still supported but not the default:
-#   - Legacy root install:     User=root, no chown / chmod gymnastics
+#   - Legacy root install:     User=root, no ACL plumbing needed
 #   - Full home migrate:       User=ccw, all data under /home/ccw/
-#                              (use scripts/migrate-to-non-root.sh)
+#                              (see deploy/MIGRATE-TO-NONROOT.md)
 User=ccw
 WorkingDirectory=/root/projects/cc-workflow
 Environment=HOME=/root

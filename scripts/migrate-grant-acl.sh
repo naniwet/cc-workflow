@@ -2,24 +2,29 @@
 #
 # migrate-grant-acl.sh
 #
-# Switch the cc-workflow backend from User=root to User=ccw, without
+# Switch the cc-workflow backend from User=root to User=ccw without
 # transferring ownership of /root/{...} to ccw. ccw gains rwx access
 # via POSIX ACLs (setfacl); root remains the owner of every file.
-#
-# Sister to scripts/migrate-keep-root-paths.sh, which does the same
-# job via chown. Use this one when you'd rather preserve "root owns
-# its home" semantics.
 #
 # Idempotent — safe to re-run. New files inside the granted dirs
 # inherit the ACL via the default-ACL plumbing on each dir.
 #
-# Why this exists at all (not "stay on root"):
+# Why move off root at all:
 #   Recent claude CLI rejects --permission-mode bypassPermissions when
 #   invoked as uid 0. Without bypass, trust=on workspaces still get
 #   blocked by claude's L1 permission system on edge-case ops (e.g.
 #   writes to ~/.claude/<anything>). Moving the backend to uid != 0
 #   unlocks bypassPermissions, which is what trust=on was supposed to
 #   mean all along.
+#
+# Why ACL not chown:
+#   "Give ccw access without transferring ownership" — the previous
+#   chown-based script (migrate-keep-root-paths.sh, removed
+#   2026-05-15) changed the file owner to ccw, which read weirdly
+#   under /root. ACL keeps owner=root and just adds a u:ccw:rwx
+#   permission overlay. Same functional result, cleaner semantics.
+#   For the full-isolation alternative (move data to /home/ccw),
+#   see deploy/MIGRATE-TO-NONROOT.md.
 
 set -euo pipefail
 

@@ -369,32 +369,43 @@ The full step-by-step migration plan (idempotent, with rollback) is in
 ### 9a. Keep paths under /root (minimal disruption — recommended)
 
 `ccw` runs the backend, but every config / state / workspace stays at its
-current `/root/...` location. The only system-wide change is `chmod 755 /root`
-so `ccw` can traverse into it. Subfile/subdir perms (.ssh, .bashrc, etc.)
-are untouched.
+current `/root/...` location. **Ownership of every file stays root**;
+ccw gains access via POSIX ACLs (`setfacl u:ccw:rwx ...`). `/root` itself
+gets only a traverse-only ACL (`u:ccw:x`) — ccw can `cd /root`, can NOT
+`ls /root` directly. Tighter than the older `chmod 755 /root` approach.
 
 ```bash
 cd /root/projects/cc-workflow
 git pull
-sudo bash scripts/migrate-keep-root-paths.sh
+sudo bash scripts/migrate-grant-acl.sh
 sudo systemctl restart cc-workflow
 sudo systemctl status cc-workflow     # expect: Active=running, User=ccw
 ```
 
 What the script does (idempotent — safe to re-run):
 
-1. Creates user `ccw` with home=/root (or fixes an existing ccw if home is wrong)
-2. `chmod 755 /root` — directory traversal only; file/subdir perms preserved
-3. `chown -R ccw:ccw` on `/root/{.cc-workflow,.cc-state,workspaces,projects/cc-workflow}`
-4. Installs the `install-cc-loops` wrapper to `/usr/local/bin/` (root-owned)
-5. Installs the sudoers grant so `ccw` can invoke the wrapper (`/etc/sudoers.d/cc-workflow`)
-6. Installs the new `cc-workflow.service` (User=ccw, HOME=/root, paths under /root)
-7. Rewrites the USER field in `/etc/cron.d/cc-loops` from root → ccw
+1. Installs `acl` package if missing
+2. Creates user `ccw` with home=/root, nologin shell (service user, not for sudo'ing into)
+3. `setfacl u:ccw:x /root` — traverse only, not list
+4. For each data dir (`.cc-workflow`, `.cc-state`, `workspaces`, `.claude`,
+   `projects/cc-workflow`): apply `u:ccw:rwx` ACL (current + default), so
+   ccw has read/write on existing files AND files claude creates later
+   automatically inherit the same ACL
+5. Installs the `install-cc-loops` sudoers wrapper to `/usr/local/bin/`
+6. Installs the sudoers grant so `ccw` can invoke the wrapper (`/etc/sudoers.d/cc-workflow`)
+7. Installs the new `cc-workflow.service` (User=ccw, HOME=/root, paths under /root)
+8. Rewrites the USER field in `/etc/cron.d/cc-loops` from root → ccw
 
-Security trade-off: any non-root account on this box can now `stat`
-filenames directly under `/root/` (the directory itself is 0755; file
-contents are still protected by their own perms). On a single-user VPS
-that's fine. On a shared box, prefer §9b.
+Security trade-off vs. the older chown approach: zero — owner stays root,
+which means root via SSH still reads/writes everything unchanged. ccw
+gets ACL-grant access ONLY to the 5 listed dirs (not /root at large).
+A separate user "alice" wouldn't have any access.
+
+Revert (if ever needed): change systemd unit back to User=root, revert
+the cron USER field. The ACLs are harmless — root doesn't use them
+(superuser bypass) and ccw can no longer write because the service no
+longer runs as ccw. Optionally strip ACLs with
+`setfacl -R -b /root/{.cc-workflow,.cc-state,...}`.
 
 ### 9b. Move everything to /home/ccw (textbook clean — fully isolated)
 
