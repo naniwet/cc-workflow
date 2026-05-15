@@ -2064,8 +2064,14 @@ function runRowHtml(r) {
     ? new Date(r.started_at * 1000).toLocaleString()
     : '';
 
+  // data-run-id + data-status: used by _patchWorkspaceCard's diff loop
+  // to find existing rows and decide whether to swap (status changed)
+  // or leave alone. Without these, the diff layer falls back to full
+  // re-render.
   return `
-    <a class="row run-link" href="#runs/${esc(r.id || '')}">
+    <a class="row run-link" href="#runs/${esc(r.id || '')}"
+       data-run-id="${esc(r.id || '')}"
+       data-status="${esc(status)}">
       <div class="row-head">
         ${statusTag(status)}
         <code>${esc((r.id || '').slice(0, 8))}</code>
@@ -2193,13 +2199,27 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
     </div>
   `;
 
-  $('view').innerHTML = `
+  // Patch path: when the SAME workspace is already rendered, don't
+  // tear the whole view down. Diff-update the timeline rows in place
+  // instead — preserves scroll position, doesn't blink the nav bar,
+  // and doesn't yank focus from a half-typed reply textarea.
+  // Detection: the .ws-mobile-body wrapper carries data-workspace=name,
+  // so finding one with the matching name means "we're already on
+  // this view, just need to refresh row data".
+  const view = $('view');
+  const existingBody = view.querySelector(`.ws-mobile-body[data-workspace="${esc(currentName)}"]`);
+  if (existingBody && !opts.isFreshNav) {
+    _patchWorkspaceCard(currentName, groups[currentName] || { active: [], queued: [], recent: [] });
+    return;
+  }
+
+  view.innerHTML = `
     <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
     ${navHtml}
-    <div class="ws-mobile-body">${colHtml}</div>
+    <div class="ws-mobile-body" data-workspace="${esc(currentName)}">${colHtml}</div>
   `;
 
-  bindWorkspaceColHandlers($('view'));
+  bindWorkspaceColHandlers(view);
 
   // Arrow handlers — use history.replaceState so each arrow click does
   // NOT push a new history entry. The user's history stack should look
@@ -2207,7 +2227,7 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
   // many workspaces they cycle through — not 5 entries if they pressed
   // → five times. Browser back from any single-detail page returns
   // straight to overview.
-  for (const btn of $('view').querySelectorAll('.ws-nav-arrow')) {
+  for (const btn of view.querySelectorAll('.ws-nav-arrow')) {
     if (btn.disabled) continue;
     btn.addEventListener('click', (e) => {
       const target = e.currentTarget.dataset.target;
@@ -2220,6 +2240,101 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
       _lastDataHash = '';
       render();
     });
+  }
+}
+
+// Diff-update the timeline inside a mobile single-ws view.
+// Inputs: workspace name (must match .ws-timeline[data-ws=...] already
+// in DOM) + the same `data` shape workspaceColHtml takes.
+// Strategy per row:
+//   exists + same status → no DOM write
+//   exists + status flipped (running → done etc) → outerHTML swap
+//   new (not in DOM)     → insertAdjacentHTML 'beforeend'
+//   missing from new set → remove
+// Doesn't touch the header / form / approval-pending row — those
+// rarely change and a full path is taken on isFreshNav anyway.
+function _patchWorkspaceCard(name, data) {
+  const view = $('view');
+  const timeline = view.querySelector(`.ws-timeline[data-ws="${esc(name)}"]`);
+  if (!timeline) return;     // unexpected; let the next poll fall through to full rewrite
+
+  const all = [
+    ...(data.active || []),
+    ...(data.queued || []),
+    ...(data.recent || []),
+  ];
+  all.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+  const visible = all.slice(-10);   // matches workspaceColHtml's default maxRows
+  const visibleIds = new Set(visible.map((r) => r.id || ''));
+
+  // Index of existing DOM rows by run id.
+  const existingRows = new Map();
+  for (const row of timeline.querySelectorAll('a.run-link[data-run-id]')) {
+    existingRows.set(row.dataset.runId, row);
+  }
+
+  // First-time transition: if timeline was showing the "(no runs yet)"
+  // placeholder and we now have rows, clear the placeholder so the
+  // diff loop has a clean slate to append into.
+  if (visible.length > 0 && existingRows.size === 0) {
+    const placeholder = timeline.querySelector('p.muted');
+    if (placeholder) placeholder.remove();
+  }
+
+  for (const r of visible) {
+    const rid = r.id || '';
+    const newStatus = r.status || '?';
+    const existing = existingRows.get(rid);
+    if (existing) {
+      // Skip when status hasn't flipped — accept elapsed_s ticking as
+      // "not worth a repaint" (the hint inside Live output already
+      // conveys liveness, and the row's own elapsed_s is stale-by-1-poll
+      // worst case).
+      if (existing.dataset.status === newStatus) continue;
+      // Status flipped — replace row + its approval block as one unit.
+      const replacementHtml = runRowHtml(r) + pendingApprovalsFor(rid).map(approvalBlockHtml).join('');
+      const tmp = document.createElement('div');
+      tmp.innerHTML = replacementHtml;
+      const fresh = [...tmp.children];
+      // existing is the <a class="run-link">; the approval blocks
+      // (if any) are its NEXT siblings until the next .run-link. Remove
+      // them, then insert the new bundle in place.
+      let cursor = existing.nextElementSibling;
+      while (cursor && cursor.classList.contains('approval-pending')) {
+        const next = cursor.nextElementSibling;
+        cursor.remove();
+        cursor = next;
+      }
+      // Replace the row itself; insertBefore the new bundle.
+      existing.replaceWith(...fresh);
+    } else {
+      // New row — append at end + its approval blocks.
+      timeline.insertAdjacentHTML(
+        'beforeend',
+        runRowHtml(r) + pendingApprovalsFor(rid).map(approvalBlockHtml).join(''),
+      );
+    }
+  }
+
+  // Drop rows whose run id is no longer in the visible set (e.g.
+  // backend rotated them out past the recent-10 window).
+  for (const [rid, row] of existingRows) {
+    if (visibleIds.has(rid)) continue;
+    // Remove row + any approval blocks below it.
+    let cursor = row.nextElementSibling;
+    while (cursor && cursor.classList.contains('approval-pending')) {
+      const next = cursor.nextElementSibling;
+      cursor.remove();
+      cursor = next;
+    }
+    row.remove();
+  }
+
+  // Transition to empty state: if every row got removed (rare —
+  // would require recent runs to age out faster than new ones
+  // arrive) put the "(no runs yet)" placeholder back.
+  if (visible.length === 0 && !timeline.querySelector('p.muted')) {
+    timeline.innerHTML = '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
   }
 }
 
