@@ -1464,17 +1464,40 @@ pre {
 
 /* ============================================================================
  *  PC detail view (#workspaces/<name> on desktop) — single .ws-col centered,
- *  wider, more history rows visible.
+ *  fills viewport, timeline scrolls INSIDE the card (no outer page scroll).
+ *
+ *  Layout chain that makes "card fills viewport, no outer scrollbar" work:
+ *      body          flex column, min-height 100vh
+ *      main          flex 1 1 auto, flex column (existing, unchanged)
+ *      ↳ <p back-link>     natural height
+ *      ↳ .ws-col-detail    flex 1, min-height 0 — claims the rest
+ *        ↳ .ws-col         height 100%, flex column (existing)
+ *          ↳ .ws-head      natural height
+ *          ↳ .ws-timeline  flex 1, overflow-y auto — scrolls internally
+ *          ↳ .trigger-form natural height
+ *
+ *  Without min-height: 0 on the flex parents, browser's default
+ *  "flex items default to min-content size" overrides flex shrink,
+ *  the timeline grows past the parent, the card overflows main, and
+ *  body's `min-height: 100vh` lets the page itself scroll. That's
+ *  the outer scrollbar the user was seeing.
  * ============================================================================ */
 .ws-col-detail {
   max-width: 900px;
   margin: 0 auto;
-}
-.ws-col-detail .ws-timeline {
-  max-height: 70vh;                                /* much taller than overview's 360px */
+  width: 100%;
+  flex: 1 1 0;
+  min-height: 0;
 }
 .ws-col-detail .ws-col {
-  min-height: 60vh;
+  height: 100%;
+  min-height: 0;
+}
+.ws-col-detail .ws-timeline {
+  flex: 1 1 0;
+  max-height: none;     /* drop the previous 70vh cap — flexbox handles sizing now */
+  min-height: 0;
+  overflow-y: auto;     /* internal scroll for long timelines */
 }
 
 /* ============================================================================
