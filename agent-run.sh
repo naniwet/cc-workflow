@@ -528,6 +528,36 @@ ${PROMPT}"
         --output-format stream-json --verbose \
         --permission-mode "$PERMISSION_MODE" "${resume[@]}" ) >"$stream" 2>"$errfile" || rc=$?
 
+    # ---------- stale-session recovery ----------
+    # When --resume <sid> points to a conversation claude no longer
+    # knows about, claude exits non-zero with stderr:
+    #     "No conversation found with session ID: <sid>"
+    # Causes we've seen:
+    #   - ~/.claude/projects/ was manually cleaned
+    #   - claude expired old sessions but sessions.json wasn't invalidated
+    #   - state migration / deploy mode flip left orphan sids
+    # Recover transparently: clear the stale sid, rerun without --resume.
+    # User just sees the fresh-session reply (with no prior context); much
+    # better than a baffling "exit 66" they can't act on.
+    #
+    # Only retry once — second-attempt failure means something else is
+    # wrong, fall through to the normal failure path.
+    if [[ $rc -ne 0 ]] && [[ -n "$sid" ]] \
+       && grep -qF "No conversation found with session ID" "$errfile"; then
+        err "claude: --resume ${sid} failed (session not in claude store); clearing + retrying fresh"
+        clear_session_id claude \
+            || err "warn: clear_session_id failed; sessions.json may still contain stale sid"
+        sid=""
+        resume=()
+        rc=0
+        : >"$stream"     # discard partial output from the failed first attempt
+        : >"$errfile"
+        ( cd "$WORKDIR" && claude -p "$PROMPT" \
+            --output-format stream-json --verbose \
+            --permission-mode "$PERMISSION_MODE" ) >"$stream" 2>"$errfile" || rc=$?
+    fi
+    # ---------- end stale-session recovery ----------
+
     cat "$stream" >>"$log"
     cat "$errfile" >>"$log"
 
