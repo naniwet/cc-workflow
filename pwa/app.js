@@ -2294,13 +2294,19 @@ async function _loadRunApprovals(runId) {
   const list = $('view').querySelector('#run-approvals-list');
   const count = $('view').querySelector('#run-approvals-count');
   if (!list || !count) return;
-  if (!entries || entries.length === 0) {
-    list.innerHTML = '<p class="muted">No tool calls intercepted yet.</p>';
-    count.textContent = '(0)';
-    return;
+  // Build target HTML first, then skip the write if unchanged — same
+  // anti-flicker trick as _pollLiveTail. Re-assigning innerHTML on every
+  // tick (even with identical content) tears down + re-creates the
+  // child <div>s, which the user perceives as a flash.
+  const html = (!entries || entries.length === 0)
+    ? '<p class="muted">No tool calls intercepted yet.</p>'
+    : entries.map(_renderApprovalEntry).join('');
+  const countLabel = `(${(entries || []).length})`;
+  if (html !== _lastApprovalsRender) {
+    list.innerHTML = html;
+    count.textContent = countLabel;
+    _lastApprovalsRender = html;
   }
-  count.textContent = `(${entries.length})`;
-  list.innerHTML = entries.map(_renderApprovalEntry).join('');
 }
 
 // Render one Approval audit entry into a single line. Status icons:
@@ -2373,10 +2379,18 @@ function _approvalToolSummary(name, input) {
 // Cancelled when navigating away or when the run flips to terminal.
 let _liveTailTimer = null;
 let _liveTailRunId = null;
+// Cache last-rendered strings so we can skip DOM writes when nothing
+// changed. Otherwise the 2.5s poll re-writes textContent on every tick,
+// which the browser repaints — looks like the panel is "flickering"
+// even when content is identical (cost the user one "一闪一闪" report).
+let _lastTailRender = '';
+let _lastApprovalsRender = '';
 
 function _stopLiveTailPoll() {
   if (_liveTailTimer) { clearInterval(_liveTailTimer); _liveTailTimer = null; }
   _liveTailRunId = null;
+  _lastTailRender = '';
+  _lastApprovalsRender = '';
 }
 
 function _startLiveTailPoll(runId) {
@@ -2419,7 +2433,14 @@ async function _pollLiveTail(runId) {
     .map(_formatStreamLine)
     .filter((s) => s !== null)
     .join('\n\n');
-  tail.textContent = rendered || '(stream has only init metadata so far — claude warming up)';
+  const final = rendered || '(stream has only init metadata so far — claude warming up)';
+  // Skip the DOM write if the content is byte-identical to last tick —
+  // otherwise the textContent assignment forces a repaint and the panel
+  // visibly flickers every 2.5s even on an idle stream.
+  if (final !== _lastTailRender) {
+    tail.textContent = final;
+    _lastTailRender = final;
+  }
   // "Xs ago" with color hint: <5s green, <30s normal, >30s warning.
   const since = Math.round(data.seconds_since_update || 0);
   let color = 'var(--text-tertiary)';
