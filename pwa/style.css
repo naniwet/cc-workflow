@@ -1622,6 +1622,49 @@ pre {
   /* Detail page <pre>: stay readable on narrow viewport */
   pre { font-size: var(--text-sm); padding: var(--space-3); }
 
+  /* ──────────────────────────────────────────────────────────
+   *  Mobile carousel "focus mode" — maximize the single ws card.
+   *
+   *  Detection: .ws-grid only renders inside renderMobileWorkspaceDetail
+   *  (see app.js#2176). :has() reliably scopes these rules to that view
+   *  so we don't accidentally hide the topbar on overview / Tasks /
+   *  Roundtable. Caniuse: :has() is widely supported since 2023
+   *  (Safari 15.4+, Chrome 105+, iOS 15.4+). Fallback if a browser
+   *  doesn't support it: topbar stays visible — graceful degradation,
+   *  not broken layout.
+   *
+   *  Trade-offs:
+   *    - Lose the brand label + "last refresh" timestamp at the top.
+   *      User reads freshness from run timestamps in the card itself.
+   *    - Return path: tap "Workspaces" in the bottom-nav (parent view).
+   * ────────────────────────────────────────────────────────── */
+  body:has(main .ws-grid) .topbar { display: none; }
+  body:has(main .ws-grid) main {
+    padding-top: var(--space-2);
+  }
+  /* Recompute carousel height: we've reclaimed the topbar's ~60px.
+   * Was 220 (topbar 50 + h1 50 + dots 30 + bottom-nav 64 + pad 24);
+   * now 160 (no topbar, no h1 on detail). */
+  body:has(main .ws-grid) .ws-grid {
+    height: calc(100dvh - 160px);
+    /* Edge-to-edge: cancel main's space-3 horizontal padding so the
+     * carousel can use full viewport width. */
+    margin: 0 calc(-1 * var(--space-3));
+    padding: 0 var(--space-2);
+    gap: var(--space-2);
+  }
+  /* Card width: was 100vw - space-6 (32px reservation). Now space-4
+   * (16px) — closer to edge-to-edge while leaving a hint of the
+   * adjacent card peeking on each side to advertise "swipe-able". */
+  body:has(main .ws-grid) .ws-col {
+    flex: 0 0 calc(100vw - var(--space-4));
+    min-width: calc(100vw - var(--space-4));
+  }
+  /* Tighter dots row — was 12+4=16px padding total, now 8px. */
+  body:has(main .ws-grid) .ws-dots {
+    padding: var(--space-2) 0 0;
+  }
+
   /* Drag-to-reorder + hide button are PC-only —
      mobile uses overview-card-list, no grid to rearrange. */
   .ws-drag-handle,
