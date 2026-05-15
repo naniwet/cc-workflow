@@ -230,6 +230,7 @@ def post_run(req: RunRequest) -> dict:
         source=req.source,
         provider=ws_settings.provider_for(req.workspace, req.provider),
         permission_mode=ws_settings.permission_mode_for(req.workspace),
+        trust=ws_settings.trust_for(req.workspace),
     )
     return {"task_id": run_id, "status": "queued"}
 
@@ -819,6 +820,7 @@ def run_loop_now(name: str) -> dict:
         source="pwa",                # honest: PWA triggered this, not cron
         provider=ws_settings.provider_for(workspace),
         permission_mode=ws_settings.permission_mode_for(workspace),
+        trust=ws_settings.trust_for(workspace),
     )
     return {"task_id": run_id, "status": "queued", "name": name}
 
@@ -1201,6 +1203,7 @@ async def feishu_webhook(request: Request) -> dict:
         # workspaces.json; override here with the resolved per-workspace engine.
         intent["engine"] = ws_settings.engine_for(intent["workspace"])
         intent["permission_mode"] = ws_settings.permission_mode_for(intent["workspace"])
+        intent["trust"] = ws_settings.trust_for(intent["workspace"])
         run_id = db.new_run_id()
         runner.submit(run_id=run_id, on_finish=im_feishu.reply_from_run, **intent)
         parsed["task_id"] = run_id

@@ -513,6 +513,12 @@ ${PROMPT}"
     else
         stream="$(mktemp)"
     fi
+    # Capture claude's stderr to a tmpfile so on failure we can both:
+    #   - append it to the day log (existing behavior)
+    #   - echo it back to OUR stderr → backend's subprocess pipe sees it
+    #     → PWA detail page shows the real error, not just
+    #       "agent-run: claude exit=1"
+    errfile="$(mktemp)"
     # No `timeout` wrapper — long tasks (>10 min) should be able to run to
     # completion. If claude actually hangs (rare; would need a tool call
     # waiting on stdin or a stuck stream), an admin can `kill <pid>` it
@@ -520,17 +526,24 @@ ${PROMPT}"
     # is global 3-wide, so one hung task doesn't block other workspaces.
     ( cd "$WORKDIR" && claude -p "$PROMPT" \
         --output-format stream-json --verbose \
-        --permission-mode "$PERMISSION_MODE" "${resume[@]}" ) >"$stream" 2>>"$log" || rc=$?
+        --permission-mode "$PERMISSION_MODE" "${resume[@]}" ) >"$stream" 2>"$errfile" || rc=$?
 
     cat "$stream" >>"$log"
+    cat "$errfile" >>"$log"
 
     if [[ $rc -ne 0 ]]; then
+        # Bubble claude's stderr out so backend's pipe captures it (otherwise
+        # PWA detail page just shows our useless "claude exit=1" with the
+        # actual root cause buried in /root/.cc-state/logs/$(date).jsonl).
+        cat "$errfile" >&2
+        rm -f "$errfile"
         # Don't rm the deterministic-path stream — backend's tail endpoint
         # still wants to surface the partial output to the user (e.g. to
         # show what claude printed before the error).
         [[ "$stream" == /tmp/* ]] && rm -f "$stream"
         die "$EX_ENGINE_FAIL" "claude exit=$rc (log: $log)"
     fi
+    rm -f "$errfile"
 
     new_sid="$(jq -rs 'map(select(.type=="system" and .subtype=="init"))
                        | .[0].session_id // empty' "$stream" 2>/dev/null || true)"

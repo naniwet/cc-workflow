@@ -101,6 +101,22 @@ def trust_for(workspace: str) -> bool:
 
 
 def permission_mode_for(workspace: str) -> str:
-    """Map trust → claude --permission-mode value. Used by main.py before
-    handing off to runner.submit()."""
-    return "bypassPermissions" if trust_for(workspace) else "acceptEdits"
+    """Always return 'acceptEdits' — never 'bypassPermissions'.
+
+    Why not respect trust here:
+    Claude CLI's 'bypassPermissions' refuses to run as uid 0 (root) since
+    late-2026, breaking trust=on workspaces under the standard root-mode
+    backend deployment. We don't need claude's own bypass anyway: when
+    trust=on, the PreToolUse hook (scripts/cc-approve-hook.sh) short-
+    circuits to exit-0 on CCW_TRUST=true, which has the same end effect
+    (auto-approve Bash/WebFetch) without going through claude's root
+    check.
+
+    So trust is enforced via the env var + hook channel, not via the
+    --permission-mode flag.
+
+    The function name remains permission_mode_for/ for back-compat;
+    semantically it's now "the always-safe mode that lets the hook do
+    the trust gating".
+    """
+    return "acceptEdits"

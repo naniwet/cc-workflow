@@ -465,6 +465,7 @@ def _loops_run(name: str, chat_id: str) -> dict:
         source="feishu",
         provider=ws_settings.provider_for(workspace),
         permission_mode=ws_settings.permission_mode_for(workspace),
+        trust=ws_settings.trust_for(workspace),
     )
     reply_to_chat(
         chat_id,

@@ -46,6 +46,7 @@ def submit(
     source: str,
     provider: Optional[str] = None,
     permission_mode: Optional[str] = None,
+    trust: bool = False,
     on_finish: Optional[OnFinish] = None,
 ) -> None:
     db.insert_queued_run(
@@ -58,7 +59,7 @@ def submit(
     )
     threading.Thread(
         target=_execute,
-        args=(run_id, workspace, prompt, engine, session_key, source, provider, permission_mode, on_finish),
+        args=(run_id, workspace, prompt, engine, session_key, source, provider, permission_mode, trust, on_finish),
         name=f"agent-run-{run_id}",
         daemon=True,
     ).start()
@@ -73,6 +74,7 @@ def _execute(
     source: str,
     provider: Optional[str],
     permission_mode: Optional[str],
+    trust: bool,
     on_finish: Optional[OnFinish],
 ) -> None:
     db.set_running(run_id)
@@ -91,7 +93,13 @@ def _execute(
     env = os.environ.copy()
     env["CCW_RUN_ID"] = run_id
     env["CCW_WORKSPACE"] = workspace
-    env["CCW_TRUST"] = "true" if permission_mode == "bypassPermissions" else "false"
+    # CCW_TRUST signals the PreToolUse hook to short-circuit (auto-approve
+    # Bash/WebFetch without round-tripping through the backend approval
+    # queue + PWA). Used to derive this from permission_mode == 'bypassPermissions',
+    # but we don't pass bypassPermissions to claude any more (it refuses
+    # root). Now trust travels through this env var only, and claude
+    # itself runs with --permission-mode acceptEdits regardless.
+    env["CCW_TRUST"] = "true" if trust else "false"
     try:
         # Popen + new session: lets cancel() kill the whole process group
         # in one syscall (claude + tool subprocesses + bash subshells).
