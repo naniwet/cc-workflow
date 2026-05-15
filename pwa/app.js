@@ -2253,8 +2253,31 @@ async function renderRunDetailView(id) {
   paintRunDetail(id, row);
 }
 
+// Track the last status we painted for each run, so we can decide on
+// each refreshAll tick whether to do a full repaint or skip entirely.
+// Skipping is safe for RUNNING runs because the dynamic panels each
+// have their own internal poll:
+//   - Live output  → _pollLiveTail (2.5s)
+//   - Approvals    → _loadRunApprovals (called from _pollLiveTail)
+//   - Transcript   → lazy, only on user expand
+// The static parts (Prompt, the run's metadata header) don't change
+// while running, so re-rendering them every 3s just causes flicker.
+const _lastPaintedStatus = {};
+
 function paintRunDetail(id, row) {
   const status = row.status || '?';
+  const view = $('view');
+  // Running + already painted with same status → skip the innerHTML
+  // rewrite entirely. Internal polls keep Live output / Approvals
+  // fresh; the user sees zero flash. Switching status (running →
+  // done/failed, or first paint) falls through to the full paint
+  // below so Output / cancel-button state get refreshed.
+  const alreadyPainted = view.querySelector(`.run-meta[data-run-id="${esc(id)}"]`);
+  if (alreadyPainted && status === 'running' && _lastPaintedStatus[id] === 'running') {
+    return;
+  }
+  _lastPaintedStatus[id] = status;
+
   const startedAt = row.started_at
     ? new Date(row.started_at * 1000).toLocaleString()
     : '';
@@ -2283,7 +2306,7 @@ function paintRunDetail(id, row) {
   $('view').innerHTML = `
     <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
     <h1>Run <code>${esc(id.slice(0, 8))}</code></h1>
-    <div class="run-meta">
+    <div class="run-meta" data-run-id="${esc(id)}">
       ${statusTag(status)}
       ${row.workspace ? ` <code>${esc(row.workspace)}</code>` : ''}
       ${row.engine ? ` · ${esc(row.engine)}` : ''}
@@ -2467,6 +2490,10 @@ let _lastApprovalsRender = '';
 
 function _stopLiveTailPoll() {
   if (_liveTailTimer) { clearInterval(_liveTailTimer); _liveTailTimer = null; }
+  // Also clear the painted-status cache for the run we were watching —
+  // if the user comes back to the same id, we want the first paint to
+  // happen unconditionally.
+  if (_liveTailRunId) delete _lastPaintedStatus[_liveTailRunId];
   _liveTailRunId = null;
   _lastTailRender = '';
   _lastApprovalsRender = '';
@@ -2517,8 +2544,23 @@ async function _pollLiveTail(runId) {
   // otherwise the textContent assignment forces a repaint and the panel
   // visibly flickers every 2.5s even on an idle stream.
   if (final !== _lastTailRender) {
+    // Auto-scroll to bottom IFF the user was already near the bottom
+    // before the update — that way new chunks "follow" the user when
+    // they're watching live, but won't yank them down if they've
+    // scrolled up to read earlier output. 80px tolerance covers half-
+    // line cases on long-running tasks. Page-level scroll because
+    // we removed the .run-live-tail inner scrollbar (moved to bottom).
+    const wasNearBottom =
+      window.innerHeight + window.scrollY >=
+      document.documentElement.scrollHeight - 80;
     tail.textContent = final;
     _lastTailRender = final;
+    if (wasNearBottom) {
+      // No smooth scrolling — instant snap-to-bottom feels less
+      // distracting on rapidly-updating streams (each smooth scroll
+      // would queue an animation that overlaps the next poll).
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    }
   }
   // "Xs ago" with color hint: <5s green, <30s normal, >30s warning.
   const since = Math.round(data.seconds_since_update || 0);
