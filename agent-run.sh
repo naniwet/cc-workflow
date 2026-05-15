@@ -581,7 +581,17 @@ ${PROMPT}"
     # Only rm temp-path streams; leave deterministic-path streams in place
     # so backend can show them in run-detail history after the fact (the
     # next turn for the same run_id will truncate them).
-    [[ "$stream" == /tmp/* ]] && rm -f "$stream"
+    #
+    # NB: written as `if … fi` rather than `[[ … ]] && rm …` on purpose.
+    # The `&&` form would make this the function's final expression, and
+    # when `stream` is NOT in /tmp (the common deterministic-path case),
+    # the `[[ … ]]` short-circuits to exit 1 — propagating up as
+    # `run_claude` returning 1, which the main script then reports as
+    # exit=1 even though claude actually succeeded. Cost the user
+    # one "你好 → failed exit 1" before I caught it.
+    if [[ "$stream" == /tmp/* ]]; then
+        rm -f "$stream"
+    fi
 }
 
 # NOTE: run_codex() removed 2026-05-14. See setup_codex_provider removal
