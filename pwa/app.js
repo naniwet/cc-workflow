@@ -553,8 +553,14 @@ function snapshotDrafts() {
     };
   }
   // Mobile carousel: which workspace is currently snapped into view.
+  // Capture scrollLeft UNCONDITIONALLY (including 0). The earlier `> 0`
+  // guard had a bug: scrolling LEFT back to the first card resets
+  // scrollLeft to 0, this branch skipped saving it, restoreDrafts then
+  // wrote back the LAST positive value (e.g. card-2's 800px) — so the
+  // user got yanked back to whichever card was last centered. Now any
+  // scroll position survives the next polling re-render.
   const grid = document.querySelector('.ws-grid');
-  if (grid && grid.scrollLeft > 0) carouselScroll.left = grid.scrollLeft;
+  if (grid) carouselScroll.left = grid.scrollLeft;
 }
 
 function restoreDrafts() {
@@ -587,8 +593,12 @@ function restoreDrafts() {
   }
   // Mobile carousel: restore which workspace was in view. Without this,
   // every 3s polling cycle would snap the user back to workspace #1.
+  // Restore unconditionally. carouselScroll.left=0 IS a valid value
+  // (means "first card"), the earlier truthy-check skipped it and let
+  // the freshly-rebuilt grid stay at its default scrollLeft=0 — which
+  // happened to look correct only when the user was already on card 0.
   const grid = document.querySelector('.ws-grid');
-  if (grid && carouselScroll.left) grid.scrollLeft = carouselScroll.left;
+  if (grid) grid.scrollLeft = carouselScroll.left;
 }
 
 function clearDraft(formId) {
@@ -2326,8 +2336,18 @@ function paintRunDetail(id, row) {
     <pre class="run-live-tail" id="run-live-tail">(waiting for first chunk)</pre>
   ` : '';
 
+  // Back link target: the workspace this run belongs to (not the
+  // generic Workspaces overview). Predictable: tap a run row, then
+  // back → exactly where you came from. We don't lean on history.back()
+  // because fullscreen-mode PWAs have no browser chrome / back gesture
+  // — this in-app button is the only reliable return path.
+  // `.run-back-link` overrides the global mobile .back-link hide.
+  const backHref = row.workspace
+    ? `#workspaces/${encodeURIComponent(row.workspace)}`
+    : '#workspaces';
+  const backLabel = row.workspace ? esc(row.workspace) : 'Workspaces';
   $('view').innerHTML = `
-    <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
+    <p><a href="${backHref}" class="back-link run-back-link">← ${backLabel}</a></p>
     <h1>Run <code>${esc(id.slice(0, 8))}</code></h1>
     <div class="run-meta" data-run-id="${esc(id)}">
       ${statusTag(status)}
