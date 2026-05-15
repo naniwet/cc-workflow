@@ -4,7 +4,7 @@
   "description": "Personal AI workflow — phone signals, server executes.",
   "start_url": "/pwa/",
   "scope": "/pwa/",
-  "display": "standalone",
+  "display": "fullscreen",
   "orientation": "any",
   "background_color": "#0b0b0d",
   "theme_color": "#1a73e8",
