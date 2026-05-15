@@ -547,7 +547,18 @@ ${PROMPT}"
 
     new_sid="$(jq -rs 'map(select(.type=="system" and .subtype=="init"))
                        | .[0].session_id // empty' "$stream" 2>/dev/null || true)"
-    [[ -n "$new_sid" ]] && save_session_id claude "$new_sid"
+    # save_session_id internal failure (sessions.json corrupt / unwritable /
+    # jq error) used to bubble through set -e and kill the whole script
+    # with exit 1 EVEN THOUGH claude itself succeeded and printed a reply.
+    # The PWA then showed the run as "failed exit 1" with the full claude
+    # output visible in the Output panel — a baffling user experience.
+    # Demote these to warnings: session_id save failures are real but
+    # non-fatal (worst case: next turn doesn't resume cleanly, claude
+    # starts a fresh session). Same treatment below for save_session_tokens.
+    if [[ -n "$new_sid" ]]; then
+        save_session_id claude "$new_sid" \
+            || err "warn: save_session_id failed; session resume next turn may not work"
+    fi
 
     # Save input_tokens from this run so next run's pre-flight can decide
     # whether to compact. usage.input_tokens is the total prompt size sent
@@ -556,7 +567,8 @@ ${PROMPT}"
     local input_tokens
     input_tokens="$(jq -rs 'map(select(.type=="result")) | .[-1].usage.input_tokens // 0' "$stream" 2>/dev/null || echo 0)"
     if [[ "$input_tokens" =~ ^[0-9]+$ ]] && (( input_tokens > 0 )); then
-        save_session_tokens "$input_tokens"
+        save_session_tokens "$input_tokens" \
+            || err "warn: save_session_tokens failed; DIY compact may misjudge size next turn"
     fi
 
     # Final text: prefer type=result.result, fall back to concatenated assistant text.
