@@ -2056,7 +2056,7 @@ function runRowHtml(r) {
     : '';
 
   return `
-    <a class="row run-link" href="#runs/${esc(r.id || '')}" title="Click for full output">
+    <a class="row run-link" href="#runs/${esc(r.id || '')}">
       <div class="row-head">
         ${statusTag(status)}
         <code>${esc((r.id || '').slice(0, 8))}</code>
