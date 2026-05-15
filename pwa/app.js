@@ -197,14 +197,26 @@ if ('serviceWorker' in navigator) {
 }
 
 // ---------- API + error banner ----------
+// One-shot guard so 7 parallel refreshAll() fetches all hitting 401 don't
+// each schedule a separate navigation (last-write-wins technically, but
+// some mobile browsers debounce / coalesce rapid location changes in
+// surprising ways). Single navigation, single history entry.
+let _redirectingToLogin = false;
+
 async function api(path, opts = {}) {
   const r = await fetch(path, { credentials: 'same-origin', ...opts });
   // Session expired or never logged in → jump to login. We preserve the
   // current location in ?next= so the form sends the user back here on
   // success.
   if (r.status === 401 && !path.startsWith('/auth/')) {
-    const next = encodeURIComponent(location.pathname + location.search + location.hash);
-    location.href = `/pwa/login.html?next=${next}`;
+    if (!_redirectingToLogin) {
+      _redirectingToLogin = true;
+      const next = encodeURIComponent(location.pathname + location.search + location.hash);
+      // replace (not assign) so the 401-bearing URL doesn't sit in
+      // history — a back-button tap from the login page should leave
+      // the PWA, not loop back to "fetch failed".
+      location.replace(`/pwa/login.html?next=${next}`);
+    }
     throw new Error('not authenticated; redirecting to login');
   }
   if (!r.ok) {
@@ -326,6 +338,10 @@ async function refreshAll() {
     $('status').textContent = '· ' + new Date().toLocaleTimeString();
     render();
   } catch (e) {
+    // Swallow the "not authenticated; redirecting…" toast — the user is
+    // already being redirected to login.html, the toast would just be
+    // a confusing red flash in the half-second before navigation.
+    if (_redirectingToLogin) return;
     showError(`fetch failed: ${e.message}`);
   }
 }
