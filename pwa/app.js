@@ -2194,38 +2194,87 @@ function renderWorkspaceDetailView(startName, opts = {}) {
 }
 
 function renderMobileWorkspaceDetail(startName, opts = {}) {
+  // Mobile single-workspace view, redesigned 2026-05-15:
+  // Was a horizontal carousel of all ws cards with native scroll-snap +
+  // bottom dots indicator updated via IntersectionObserver. That layout
+  // had three rough edges in production:
+  //   - first card (scrollLeft=0) couldn't survive snapshot/restore
+  //     without special-casing (the `> 0` guard bug)
+  //   - dots flashed briefly on each polling re-render because the
+  //     IntersectionObserver took a frame to recompute the active dot
+  //   - scroll-snap occasionally mis-aligned during the re-render
+  // Replaced with: top nav bar [← prev] [name] [next →] + a SINGLE
+  // workspace card rendered below. Switching ws is a click on an arrow;
+  // no carousel state to preserve, no dots to flash, no scroll math.
+  // Trade-off: lose horizontal swipe gesture (some users prefer it).
+  // User signed off on the trade-off — explicit arrows feel more
+  // navigable in a focused single-card view.
   const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
   const sortedNames = Object.keys(groups).sort();
-  const cols = sortedNames.map((w) => workspaceColHtml(w, groups[w], { detail: true })).join('');
-  const dots = sortedNames.length > 1
-    ? sortedNames.map((n) =>
-        `<button class="ws-dot${n === startName ? ' active' : ''}" data-ws="${esc(n)}" aria-label="${esc(n)}"></button>`
-      ).join('')
-    : '';
+  if (sortedNames.length === 0) {
+    $('view').innerHTML = `
+      <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
+      <p class="muted">No workspaces.</p>
+    `;
+    return;
+  }
+
+  // Pick a valid current name: prefer the URL hash, fall back to the
+  // first workspace if the hash points to one that no longer exists
+  // (rare — workspace was deleted while user was on its detail page).
+  const currentIdx = Math.max(0, sortedNames.indexOf(startName));
+  const currentName = sortedNames[currentIdx];
+  const prevName = sortedNames[(currentIdx - 1 + sortedNames.length) % sortedNames.length];
+  const nextName = sortedNames[(currentIdx + 1) % sortedNames.length];
+  const hasNeighbors = sortedNames.length > 1;
+
+  // The card itself, rendered for ONE workspace only.
+  const colHtml = workspaceColHtml(currentName, groups[currentName] || { active: [], queued: [], recent: [] }, { detail: true });
+
+  // Top nav bar. Both arrows disabled (visually + functionally) when
+  // there's only one ws — keeps the layout symmetric without making
+  // the buttons "pointless".
+  const navHtml = `
+    <div class="ws-mobile-nav">
+      <button class="ws-nav-arrow ws-nav-prev"
+              data-target="${esc(prevName)}"
+              ${hasNeighbors ? '' : 'disabled'}
+              aria-label="Previous workspace">‹</button>
+      <span class="ws-mobile-nav-title">${esc(currentName)}</span>
+      <button class="ws-nav-arrow ws-nav-next"
+              data-target="${esc(nextName)}"
+              ${hasNeighbors ? '' : 'disabled'}
+              aria-label="Next workspace">›</button>
+    </div>
+  `;
 
   $('view').innerHTML = `
     <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
-    ${cols
-      ? `<div class="ws-grid">${cols}</div>${dots ? `<div class="ws-dots">${dots}</div>` : ''}`
-      : `<p class="muted">No workspaces.</p>`}
+    ${navHtml}
+    <div class="ws-mobile-body">${colHtml}</div>
   `;
 
   bindWorkspaceColHandlers($('view'));
-  setupCarousel();
 
-  // Jump to the requested workspace only on fresh navigation. Polling re-
-  // renders within the same detail view should NOT yank the user back —
-  // they may have swiped sideways since entering.
-  if (opts.isFreshNav) {
-    carouselScroll.left = 0;                       // forget previous detail's scroll
-    const idx = sortedNames.indexOf(startName);
-    if (idx >= 0) {
-      requestAnimationFrame(() => {
-        const grid = $('view').querySelector('.ws-grid');
-        const target = grid?.children[idx];
-        if (target) target.scrollIntoView({ inline: 'center', block: 'nearest' });
-      });
-    }
+  // Arrow handlers — use history.replaceState so each arrow click does
+  // NOT push a new history entry. The user's history stack should look
+  // like [Workspaces overview, single-detail-page] regardless of how
+  // many workspaces they cycle through — not 5 entries if they pressed
+  // → five times. Browser back from any single-detail page returns
+  // straight to overview.
+  for (const btn of $('view').querySelectorAll('.ws-nav-arrow')) {
+    if (btn.disabled) continue;
+    btn.addEventListener('click', (e) => {
+      const target = e.currentTarget.dataset.target;
+      if (!target) return;
+      history.replaceState(null, '', `#workspaces/${encodeURIComponent(target)}`);
+      // replaceState doesn't fire hashchange, drive render() manually.
+      // Force a paint by invalidating the data hash — even if lastData
+      // hasn't actually changed, we need to re-render because we changed
+      // which workspace is current.
+      _lastDataHash = '';
+      render();
+    });
   }
 }
 

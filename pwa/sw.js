@@ -18,7 +18,7 @@
 // Bump VERSION on breaking SW changes so the activate handler purges
 // any older cache buckets.
 
-const VERSION = 'cc-v37';
+const VERSION = 'cc-v38';
 const SHELL = [
   '/pwa/',
   '/pwa/index.html',
@@ -27,6 +27,13 @@ const SHELL = [
   '/pwa/style.css',
   '/pwa/manifest.json',
   '/pwa/icon.svg',
+  // PNG raster icons. Chromium-based browsers (Chrome / Edge mobile)
+  // require at least one raster icon at 192x192 or 512x512 to consider
+  // a manifest "installable" — SVG alone leaves Add-to-Home-Screen
+  // grayed out. Both sizes cached so the home-screen icon survives
+  // offline.
+  '/pwa/icon-192.png',
+  '/pwa/icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {

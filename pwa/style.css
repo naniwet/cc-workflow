@@ -1623,64 +1623,99 @@ pre {
   pre { font-size: var(--text-sm); padding: var(--space-3); }
 
   /* ──────────────────────────────────────────────────────────
-   *  Mobile carousel "focus mode" — maximize the single ws card.
+   *  Mobile single-workspace view — header arrows + ONE card.
    *
-   *  Detection: .ws-grid only renders inside renderMobileWorkspaceDetail
-   *  (see app.js#2176). :has() reliably scopes these rules to that view
-   *  so we don't accidentally hide the topbar on overview / Tasks /
-   *  Roundtable. Caniuse: :has() is widely supported since 2023
-   *  (Safari 15.4+, Chrome 105+, iOS 15.4+). Fallback if a browser
-   *  doesn't support it: topbar stays visible — graceful degradation,
-   *  not broken layout.
+   *  Was a horizontal carousel (.ws-grid) — replaced 2026-05-15 with
+   *  an explicit header nav bar to avoid three carousel quirks: dots
+   *  flashing on re-render, first-card scrollLeft=0 ambiguity, and
+   *  scroll-snap mis-align. See renderMobileWorkspaceDetail in app.js.
    *
-   *  Trade-offs:
-   *    - Lose the brand label + "last refresh" timestamp at the top.
-   *      User reads freshness from run timestamps in the card itself.
-   *    - Return path: tap "Workspaces" in the bottom-nav (parent view).
+   *  Marker class: .ws-mobile-nav (only appears in this view), used
+   *  via :has() to scope topbar-hide + back-link-<p>-hide etc.
    * ────────────────────────────────────────────────────────── */
-  body:has(main .ws-grid) .topbar { display: none; }
-  body:has(main .ws-grid) main {
+  body:has(.ws-mobile-nav) .topbar { display: none; }
+  body:has(.ws-mobile-nav) main {
     padding-top: var(--space-1);
     padding-left: var(--space-2);
     padding-right: var(--space-2);
   }
   /* The `<p>` wrapper around the (hidden) back-link sits at the top of
-   * #view but is invisible — yet still claims ~32px from the default
-   * browser <p> margin. Yank it from the box model entirely. */
-  body:has(main .ws-grid) main > p:has(.back-link) {
+   * #view but the link is `display: none` on mobile. The <p> itself
+   * still claims ~32px from default browser <p> margin. Yank it. */
+  body:has(.ws-mobile-nav) main > p:has(.back-link) {
     display: none;
   }
-  /* Recompute carousel height. Reserve:
-   *   bottom-nav 64 + safe-area
-   *   dots ~20
-   *   main vertical padding ~8
-   *   gap ~12
-   *   = ~110px on a phone without notch.
-   * Use 130 as a safe rounding. Was 160 with the empty <p> baked in. */
-  body:has(main .ws-grid) .ws-grid {
-    height: calc(100dvh - 130px);
-    /* Edge-to-edge: cancel main's space-2 horizontal padding so the
-     * carousel can use full viewport width. */
-    margin: 0 calc(-1 * var(--space-2));
-    padding: 0 var(--space-2);
+
+  /* Top nav bar: [← prev] [current name] [next →]
+   * Sticky-feel by sitting flush at the top of main now that the
+   * topbar is hidden. Arrows are big tap targets; name is the focus. */
+  .ws-mobile-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     gap: var(--space-2);
+    padding: var(--space-2) var(--space-1);
+    margin-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
   }
-  /* Card width: was 100vw - space-6 (32px reservation). Now space-3
-   * (12px) — even closer to edge-to-edge while leaving a 6px sliver
-   * of the next/prev card to advertise "swipe-able". */
-  body:has(main .ws-grid) .ws-col {
-    flex: 0 0 calc(100vw - var(--space-3));
-    min-width: calc(100vw - var(--space-3));
-    padding: var(--space-2);  /* shrink internal padding 12→8 to reclaim ~16px of content area */
+  .ws-mobile-nav-title {
+    flex: 1;
+    text-align: center;
+    font-size: var(--text-lg);
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  /* Tighter dots row */
-  body:has(main .ws-grid) .ws-dots {
-    padding: var(--space-1) 0 0;
+  .ws-nav-arrow {
+    flex: 0 0 auto;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-full);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    font-size: 22px;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: manipulation;
   }
-  /* Shorter reply input: 60px felt like a "wall" of empty textarea on
-   * mobile carousel; 44px is the platform tap-target minimum and still
-   * comfortable. Expands as the user types (line-wraps). */
-  body:has(main .ws-grid) .ws-col .trigger-form textarea {
+  .ws-nav-arrow:hover,
+  .ws-nav-arrow:active {
+    background: var(--bg-elevated);
+    border-color: var(--border-strong);
+  }
+  .ws-nav-arrow:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  /* The single card below the nav bar. Fills available height. */
+  .ws-mobile-body {
+    display: flex;
+    flex-direction: column;
+    height: calc(100dvh - 140px);   /* nav bar 60 + bottom-nav 64 + safety 16 */
+  }
+  .ws-mobile-body > .ws-col {
+    flex: 1;
+    height: 100%;
+    min-height: 0;
+    padding: var(--space-2);
+  }
+  .ws-mobile-body > .ws-col .ws-timeline {
+    flex: 1 1 0;
+    max-height: none;
+    min-height: 0;
+  }
+  /* Shorter reply textarea — 60px wall on a focused single-card view
+   * was wasteful; 44px is the platform tap-target minimum, textarea
+   * still grows as user types. */
+  .ws-mobile-body > .ws-col .trigger-form textarea {
     min-height: 44px;
   }
 
