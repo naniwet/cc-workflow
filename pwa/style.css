@@ -890,6 +890,43 @@ body.is-dragging .ws-col:not(.dragging) {
 .a-row.a-deny  .a-icon, .a-row.a-deny  .a-label { color: var(--accent-red); }
 .a-row.a-warn  .a-icon, .a-row.a-warn  .a-label { color: var(--accent-amber); }
 
+/* Transcript panel — lazy-loaded full conversation history for one run.
+ * Shares <details>/<summary> visual language with .run-approvals so they
+ * read as a "drill-deeper" pair. Body is <pre> (whitespace preserved)
+ * because _formatStreamLine emits already-formatted text. */
+.run-transcript {
+  margin-top: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.run-transcript > summary {
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  list-style: none;
+}
+.run-transcript > summary::-webkit-details-marker { display: none; }
+.run-transcript > summary::before {
+  content: '▸ ';
+  display: inline-block;
+  margin-right: var(--space-1);
+  transition: transform 0.15s;
+}
+.run-transcript[open] > summary::before { transform: rotate(90deg); }
+.run-transcript-body {
+  margin: 0;
+  padding: var(--space-3);
+  font-size: var(--text-xs);
+  line-height: var(--lh-normal);
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--border-subtle);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-secondary);
+}
+
 /* ============================================================================
  *  Trigger form (chat input at column bottom)
  * ============================================================================ */
@@ -1293,6 +1330,27 @@ pre {
   color: var(--text-tertiary);
 }
 
+/* Last-run output preview — 200 chars truncated server-side by
+ * agent-run.sh#on_exit. Styled like .row-output (cyan, "claude said")
+ * so it reads as "what the cron last produced". Note: this is the
+ * ONLY visibility into cron output the PWA currently has — full output
+ * is on the server (~/.cc-state/logs/<date>.jsonl). If 200 chars is
+ * too thin we'd need to route cron through backend so runs.db captures
+ * the full row (currently cron calls agent-run directly, bypassing
+ * runner.py + the DB). */
+.loop-last-output {
+  font-size: var(--text-sm);
+  color: var(--accent-cyan);
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--accent-cyan);
+  background: var(--bg-canvas);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: var(--lh-normal);
+  opacity: 0.85;
+}
+
 /* ============================================================================
  *  Workspace name link — clicking the h2 in PC overview drills into the
  *  workspace's detail view (#workspaces/<name>). Subtle so it doesn't
@@ -1328,6 +1386,17 @@ pre {
 .ws-card:active {
   background: var(--bg-elevated);
   border-color: var(--border-strong);
+}
+/* PC: cards are rendered as <div> (not <a>) — see workspace card
+ * generator in app.js. Suppress hover-as-clickable affordance so they
+ * read as read-only summary tiles. Mobile keeps hover/click behavior. */
+@media (min-width: 769px) {
+  div.ws-card { cursor: default; }
+  div.ws-card:hover,
+  div.ws-card:active {
+    background: var(--bg-surface);
+    border-color: var(--border-subtle);
+  }
 }
 .ws-card-head {
   display: flex;

@@ -747,8 +747,18 @@ function renderMobileOverview() {
       : '';
     const promptSnippet = last?.prompt ? last.prompt.slice(0, 50) : '';
     const promptOverflow = last?.prompt && last.prompt.length > 50 ? '…' : '';
+    // PC: overview cards are read-only summary tiles (the 4-column
+    // overview already shows everything important — pending approvals,
+    // last run, trust state — drilling into a single workspace detail
+    // is redundant). Render as <div> so cursor stays default + no nav.
+    // Mobile: card IS the entry point to the carousel detail view, keep
+    // as <a> (compare bind site at line 343-350).
+    const tag = _isMobileViewport ? 'a' : 'div';
+    const href = _isMobileViewport
+      ? ` href="#workspaces/${encodeURIComponent(name)}"`
+      : '';
     return `
-      <a class="ws-card" href="#workspaces/${encodeURIComponent(name)}">
+      <${tag} class="ws-card"${href}>
         <div class="ws-card-head">
           <h3>${esc(name)}</h3>
           <span class="ws-card-provider">
@@ -770,7 +780,7 @@ function renderMobileOverview() {
         ${promptSnippet
           ? `<div class="ws-card-prompt">▸ ${esc(promptSnippet)}${promptOverflow}</div>`
           : ''}
-      </a>
+      </${tag}>
     `;
   }).join('');
 
@@ -2269,6 +2279,10 @@ function paintRunDetail(id, row) {
       <summary>Tool approvals <span class="muted" id="run-approvals-count">(loading…)</span></summary>
       <div class="run-approvals-list" id="run-approvals-list"></div>
     </details>
+    <details class="run-transcript" id="run-transcript">
+      <summary>Transcript <span class="muted" id="run-transcript-hint">(click to load)</span></summary>
+      <pre class="run-transcript-body" id="run-transcript-body">(not loaded)</pre>
+    </details>
     ${liveBlock}
   `;
   // Always populate the approvals audit panel — even for terminal runs,
@@ -2276,8 +2290,51 @@ function paintRunDetail(id, row) {
   // (they were auto-approved without a prompt). For running runs the
   // live poll re-fetches so newly-fired hooks appear during the run.
   _loadRunApprovals(id);
+  // Transcript: lazy-loaded on first expand. Loading eagerly would
+  // double the network traffic of every run-detail navigation, and 90%
+  // of the time the user only wants to see the final Output (which is
+  // already painted above). Wire the lazy load here.
+  const transcriptEl = $('view').querySelector('#run-transcript');
+  if (transcriptEl) {
+    transcriptEl.addEventListener('toggle', () => {
+      if (transcriptEl.open) _loadRunTranscript(id);
+    });
+  }
   if (status === 'running' && id) _startLiveTailPoll(id);
   else _stopLiveTailPoll();
+}
+
+// Lazy-loaded full transcript for a single run. Re-uses _formatStreamLine
+// (the same parser the Live output panel uses), so a Bash tool call shows
+// as `🔧  Bash({"command":"npx vitest"})` and its result as `↳  <stdout>`.
+// Loads once per page-view — re-clicking the <details> doesn't refetch.
+let _lastTranscriptRunId = null;
+async function _loadRunTranscript(runId) {
+  if (_lastTranscriptRunId === runId) return; // already loaded for this run
+  const body = $('view').querySelector('#run-transcript-body');
+  const hint = $('view').querySelector('#run-transcript-hint');
+  if (!body || !hint) return;
+  hint.textContent = '(loading…)';
+  let data;
+  try {
+    data = await api(`/runs/${encodeURIComponent(runId)}/tail?lines=5000`);
+  } catch (err) {
+    hint.textContent = `(load failed: ${err.message})`;
+    return;
+  }
+  if (!data.exists) {
+    body.textContent = '(no stream file — run may pre-date the stream-jsonl change, or failed before claude started)';
+    hint.textContent = '(empty)';
+    _lastTranscriptRunId = runId;
+    return;
+  }
+  const rendered = (data.lines || [])
+    .map(_formatStreamLine)
+    .filter((s) => s !== null)
+    .join('\n\n');
+  body.textContent = rendered || '(stream contained only init metadata)';
+  hint.textContent = `(${data.lines.length} events · ${data.size} bytes)`;
+  _lastTranscriptRunId = runId;
 }
 
 // Fetch + render the run's audit trail. Called on detail-page paint and
@@ -2641,6 +2698,9 @@ function loopRowHtml(loop) {
         · runs ${esc(loop.total_runs || 0)}
         · exit ${esc(last_exit)}
       </div>
+      ${loop.last_output_summary
+        ? `<div class="loop-last-output" title="Last output preview (truncated; full output is in ~/.cc-state/logs/&lt;date&gt;.jsonl on server)">↳ ${esc(loop.last_output_summary)}</div>`
+        : ''}
     </div>
   `;
 }

@@ -262,8 +262,12 @@ def tail_run(task_id: str, lines: int = 50) -> dict:
         lines: list[str]               # last `lines` jsonl lines (raw)
       }
     """
-    if lines < 1 or lines > 500:
-        raise HTTPException(400, {"error": "lines must be 1..500"})
+    # Live-tail polling uses small N (40). Run-detail "Transcript" panel
+    # fetches once with a large N to render the full per-run conversation
+    # after the run finishes. Cap 5000 is more than any realistic claude
+    # session (typical: 20-100 jsonl events even for long tasks).
+    if lines < 1 or lines > 5000:
+        raise HTTPException(400, {"error": "lines must be 1..5000"})
     row = db.get_run(task_id)
     if row is None:
         raise HTTPException(404, {"error": "run not found", "id": task_id})
