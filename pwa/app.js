@@ -2312,7 +2312,16 @@ async function _pollLiveTail(runId) {
     hint.textContent = '(no data)';
     return;
   }
-  tail.textContent = data.lines.join('\n');
+  // Format each stream-json line into something readable. Raw dump (which
+  // the previous code did) buries the actual narrative in 70+KB of
+  // init metadata (tools list, MCP inventory, slash command names, ...).
+  // The user wants to see "what's claude doing right now", not the
+  // session preamble.
+  const rendered = data.lines
+    .map(_formatStreamLine)
+    .filter((s) => s !== null)
+    .join('\n\n');
+  tail.textContent = rendered || '(stream has only init metadata so far — claude warming up)';
   // "Xs ago" with color hint: <5s green, <30s normal, >30s warning.
   const since = Math.round(data.seconds_since_update || 0);
   let color = 'var(--text-tertiary)';
@@ -2320,6 +2329,84 @@ async function _pollLiveTail(runId) {
   else if (since > 30) color = 'var(--accent-amber)';
   hint.style.color = color;
   hint.textContent = `· last update ${since}s ago · ${data.size} bytes`;
+}
+
+// Turn one raw stream-json line into a human-readable string. Returns
+// null for lines that aren't worth showing (system init metadata, etc.)
+// so the caller can filter them out.
+//
+// claude stream-json event types we see:
+//   system / init           — tools/mcp/slash-command inventory, drop
+//   assistant               — claude's reply: either text or tool call
+//   user                    — wrapper around tool execution result
+//   result                  — terminal summary (success/error + usage)
+function _formatStreamLine(raw) {
+  let obj;
+  try { obj = JSON.parse(raw); } catch { return raw.slice(0, 200); }
+  const t = obj.type;
+
+  if (t === 'system') return null;    // drop init / preflight noise
+
+  if (t === 'assistant') {
+    const content = obj.message?.content || [];
+    const parts = [];
+    for (const c of content) {
+      if (c.type === 'text' && c.text) {
+        parts.push(`🤖  ${c.text}`);
+      } else if (c.type === 'tool_use') {
+        // Compact tool-input preview — full payload would dwarf the panel
+        // (e.g. file contents inside Write). 120 chars is enough to see
+        // "what tool was called with what intent".
+        let inputPreview = '';
+        try {
+          inputPreview = JSON.stringify(c.input || {});
+        } catch { inputPreview = '<unserializable>'; }
+        if (inputPreview.length > 140) inputPreview = inputPreview.slice(0, 140) + '…';
+        parts.push(`🔧  ${c.name}(${inputPreview})`);
+      } else if (c.type === 'thinking' && c.thinking) {
+        // Extended thinking — usually verbose but interesting. Trim
+        // hard so it doesn't dominate the panel.
+        const trimmed = c.thinking.length > 200
+          ? c.thinking.slice(0, 200) + '…'
+          : c.thinking;
+        parts.push(`💭  ${trimmed}`);
+      }
+    }
+    return parts.length ? parts.join('\n') : null;
+  }
+
+  if (t === 'user') {
+    const content = obj.message?.content || [];
+    for (const c of content) {
+      if (c.type === 'tool_result') {
+        let body = c.content;
+        if (Array.isArray(body)) {
+          // tool_result.content can be an array of {type:'text', text:'...'} chunks
+          body = body
+            .map((x) => (typeof x === 'string' ? x : (x?.text || JSON.stringify(x))))
+            .join('\n');
+        } else if (typeof body !== 'string') {
+          body = JSON.stringify(body);
+        }
+        const trimmed = body.length > 300 ? body.slice(0, 300) + '…' : body;
+        return `↳  ${trimmed}`;
+      }
+    }
+    return null;
+  }
+
+  if (t === 'result') {
+    const subtype = obj.subtype || '?';
+    const usage = obj.usage || {};
+    const tokenSummary = `${usage.input_tokens || 0} in · ${usage.output_tokens || 0} out`;
+    const resultText = obj.result || '';
+    return `✓  done (${subtype}, ${tokenSummary})\n${resultText}`;
+  }
+
+  // Unknown event type — drop rather than dump JSON. If something useful
+  // is ever missed here, the raw stream is still on disk at
+  // ~/.cc-state/logs/run-<id>.stream.jsonl for full-fidelity debugging.
+  return null;
 }
 
 // ---------- Tasks view ----------
