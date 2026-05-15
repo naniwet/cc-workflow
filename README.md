@@ -32,15 +32,16 @@
 
 ## 它能干什么
 
-- **PWA**(手机/PC 浏览器都能装):3 个 tab — **Workspaces**(每个 workspace 一条时间线 + 输入框)/ **Tasks**(cron loop 列表)/ **Roundtable**(多 agent 辩论)
-- **飞书集成**:在群里 `@bot daily-digest 总结一下昨天的 commit` 就能触发,执行完结果以飞书卡片回到群里;`/use` `/where` `/ws` `/sessions` `/loops` `/run` 6 个 slash 命令
-- **Linux cron Loop**:每天 9 点拉代码、每小时巡检 PR、隔半小时跑测试都行;PWA 上每个 loop 也能手动点 **Run now**
+- **PWA**(手机/PC 浏览器都能装):3 个 tab — **Workspaces**(每个 workspace 一条时间线 + 输入框)/ **Tasks**(cron loop 列表)/ **Roundtable**(多 agent 辩论);PC 上 manifest `display: fullscreen` 加桌面后无浏览器 UI
+- **飞书集成**:在群里 `@bot daily-digest 总结一下昨天的 commit` 就能触发,执行完结果以飞书卡片回到群里;`/use` `/where` `/ws` `/sessions` `/loops` `/run` `/help` 7 个 slash 命令;cron 跑完也能自动推回飞书(每 loop 独立目的地 + 全局兜底,见下)
+- **Linux cron Loop**:每天 9 点拉代码、每小时巡检 PR、隔半小时跑测试都行;PWA 上每个 loop 也能手动点 **Run now**;cron 触发的 run 走 backend → 落 runs.db → PWA cron 卡片可点 「→ open」 进 run-detail
 - **多 provider**:通过 ccswitch-style providers.json 可切到 DeepSeek / Kimi 等 Anthropic 兼容端点
-- **每 workspace 独立配置**:provider(可改)+ trust(可改;开启后跳过工具审批)
-- **工具审批**(可选):Claude 想跑 Bash / WebFetch 时 PWA 弹 `[Approve] [Deny]`,审批通过才执行(走 Claude Code PreToolUse hook)
+- **每 workspace 独立配置**:provider(可改)+ trust(可改;开启后工具调用走 hook auto-approve)
+- **工具审批 + 审计**(可选):Claude 想跑 Bash / WebFetch 时 PWA 弹 `[Approve] [Deny]`(走 PreToolUse hook);trust=on 工作区自动通过,**但仍记录在 run-detail 的 Approvals 面板里**(read-only audit),你能看到 claude 实际执行了哪些工具
+- **完整对话 Transcript**:run-detail 页面有可折叠 Transcript 面板,展开后能看完整 stream-json 时间线(`💭 thinking / 🔧 tool_use / ↳ tool_result / 🤖 text / ✓ result`),而不只是最终 result 文本
 - **Slash 命令自动补全**(PWA):在输入框打 `/` 弹出当前 workspace 所有 skill(project + user + plugin 三层来源),Tab 补全
-- **DIY 自动 compact**:长对话接近 context 上限时,agent-run 自动调用 9 段式 summary prompt(基于 Claude Code `/compact` 反向工程),清旧 session,新 session 以 summary 续——transparent,你不会感知。撞坏了也有手动 **Reset session** 按钮兜底
-- **圆桌会议**(从 [AgentRoundtable](https://github.com/wet-/AgentRoundtable) 移植):4 角色(极简派 / 场景派 / 借鉴派 / 悲观派)+ 1 个整理员,对一个决策级问题辩论 3 轮,输出 **共识点 / 分歧轴 / 判断题**。让你做决定,不替你做决定。
+- **DIY 自动 compact**:长对话接近 context 上限时,agent-run 自动调用 9 段式 summary prompt(基于 Claude Code `/compact` 反向工程),清旧 session,新 session 以 summary 续——transparent,你不会感知。撞坏了也有手动 **Reset session** 按钮兜底;`--resume` 撞到孤儿 sid 时自动 fallback 到新会话
+- **圆桌会议**(从 [AgentRoundtable](https://github.com/wet-/AgentRoundtable) 移植):4 角色(极简派 / 场景派 / 借鉴派 / 悲观派)+ 1 个整理员,对一个决策级问题辩论 1-2 轮(可配置),输出 **共识点 / 分歧轴 / 判断题**。让你做决定,不替你做决定。
 
 ---
 
@@ -50,33 +51,37 @@
             ┌─────────────────┐                ┌──────────────────┐
             │   PWA (手机/PC) │                │   飞书 (群机器人)│
             └────────┬────────┘                └─────────┬────────┘
-                     │ HTTPS                              │ webhook
+                     │ HTTPS (Let's Encrypt)              │ webhook
                      ▼                                    ▼
         ┌──────────────────────────────────────────────────────┐
-        │  FastAPI gateway  (backend/main.py + 8765 端口)       │
+        │  FastAPI gateway  (backend/main.py + 127.0.0.1:8765)  │
         │  - 鉴权: HMAC 签名 session cookie                     │
         │  - /run /loops /workspaces /roundtables /skills        │
-        │    /approvals /im/feishu/*                            │
-        └────────┬───────────────────────────┬─────────────────┘
-                 │ subprocess                │ in-process HTTP
-                 ▼                           ▼
+        │  - /approvals/{,internal/} /loops/.../run/internal     │
+        │  - /im/feishu/*                                       │
+        └────────┬─────────────────────────────┬───────────────┘
+                 │ subprocess                  │ in-process HTTP
+                 ▼                             ▼
    ┌─────────────────────────────┐  ┌────────────────────────┐
    │  agent-run.sh (claude 包装) │  │  roundtable runner     │
-   │  + flock 并发锁 + 工具审批  │  │  4 角色 × 3 轮 LLM 调用 │
+   │  + flock 并发锁              │  │  4 角色 × 1-2 轮辩论     │
    │  + DIY auto-compact         │  │  → ~/.cc-state/         │
-   │  + session resume           │  │     roundtables/*.jsonl │
+   │  + session resume + 自愈     │  │     roundtables/*.jsonl │
    │  → ~/.cc-state/{runs,jobs,  │  │  (DeepSeek + Kimi 直 v1) │
    │     locks,logs}             │  └────────────────────────┘
    └──────────────▲──────────────┘
-                  │ 同样的执行路径
+                  │ runner.submit (统一入口)
                   │
-        ┌──────────────────────────────────────────────────────┐
+        ┌─────────┴────────────────────────────────────────────┐
         │  Linux cron  (/etc/cron.d/cc-loops)                  │
-        │  每个 cron loop 都是一个 agent-run.sh 调用            │
+        │  每行 curl POST /loops/<name>/run/internal            │
+        │  → 落 runs.db → on_finish 推回飞书(可选)             │
         └──────────────────────────────────────────────────────┘
 ```
 
 守护进程只有 2 个:`cc-workflow.service`(FastAPI)+ 系统自带的 `cron`。不上 Redis / Celery / ORM / build step。
+
+**4 个触发源(PWA / 飞书 / cron / 手动 /run)** 全走同一条 `runner.submit()` 路径,所以每个 run 都进 runs.db、都能在 PWA run-detail 看到、都能挂 on_finish 回调(飞书 push、cron 通知群)。
 
 ---
 
@@ -152,11 +157,20 @@ PWA → Tasks → `New cron loop`。两种填法:
 
 注:Add 只**注册调度**,不会立即跑一次。要立即试一下点新增的 **Run now** 按钮。
 
+cron 跑完后:
+- **PWA**:Tasks 卡片底部出现 `→ open` 链接,点进去看完整 run-detail(Output / Approvals / Transcript / Live output)
+- **飞书自动推送**(可选):走以下两条任一通路触发
+  - **per-loop 目的地**:用飞书 `/loops new <name> <描述>` + `/loops confirm` 在群里创建的 loop,自动记下当前 chat_id,以后每次 cron 跑完结果推回这个群
+  - **全局兜底**:在 `~/.cc-workflow/secrets.toml` 加 `[feishu] cron_notify_chat = "<chat_id>"`,所有 cron loop(包括 PWA 创建的)跑完都推到这个群
+  - 两个都没配 → 不推,run 仍正常进 runs.db 和 PWA
+
 ### 4. 工具审批(可选)
 
 如果某个 ws 没开 trust(默认),Claude 在跑到 Bash / WebFetch 时会暂停,PWA 那条 timeline 上出现 `[Approve] [Deny]` 按钮。点 Approve → Claude 继续;点 Deny → Claude 收到拒绝信号,自己换路或停下。
 
 想全局跳过审批?在 ws 列头点 🔒 → 切到 🔓(琥珀色锁形 = "auto-approve, treat with care")。
+
+trust=on 也**不是完全没记录**——auto-approved 的每次工具调用都会写进对应 run-detail 的 Approvals 面板(read-only audit ring buffer,最近 500 条)。所以你能事后看到 claude 实际跑了 `Bash(npx vitest)` / `Write(notes.md)` 等等,只是没让你点按钮而已。
 
 ### 5. 多 provider
 
@@ -257,11 +271,11 @@ cc-workflow/
 | 决策 | 选了什么 | 代价 / 何时翻案 |
 |---|---|---|
 | **鉴权模型** | HMAC 签名 session cookie(30 天) | Phase 1 时是 HTTP Basic,后来发现在 Quark / 微信内置浏览器对 `WWW-Authenticate` 处理不一致,Phase 2 后期换。HMAC key 自动生成于 `~/.cc-workflow/.session-secret`。 |
-| **工具审批模型** | PreToolUse hook → backend 长轮询 → PWA 弹按钮(路 2) | 路 1(`.claude/settings.json` 预批准)和路 3(`bypassPermissions` 全跳过)都保留。trust toggle 让用户在路 2 和路 3 之间一键切。 |
-| **per-workspace 配置 vs 全局** | 选 per-workspace,落到 `~/.cc-workflow/workspaces.json` | 全局 fallback 在 `config.toml`(`provider`、`default_trust`)。 |
-| **cron loop 触发** | cron 写 `/etc/cron.d/cc-loops`,POST `/loops/{name}/run` 可手动重发一次 | session_key 用 loop 名 → cron-fired 和手动 fired 共享同一个 Claude 会话(对模型来说是连续对话) |
-| **PWA 缓存策略** | service worker 网络优先,失败回落缓存 | 频繁发布的开发工具,用户拉新代码就该看到新 UI;缓存只在离线时兜底 |
-| **长对话 context 管理** | DIY auto-compact(agent-run 检测 input_tokens > 阈值时,跑 9 段式 summary prompt,清旧 session,新 session 以 summary 开场)+ PWA 手动 reset 按钮 | Claude Code 的 `/compact` 是 TUI-only,headless 不可用。Prompt 模板基于 Piebald-AI 社区反向工程版本(非 Anthropic 官方)。阈值默认 150k,可在 `config.toml` 改 `compact_threshold_tokens`。 |
+| **工具审批 + trust 模型** | 两层串联:L1 `~/.claude/settings.json#permissions.allow` 全局 allow 14 个内置 tool(Bash / Read / Write / ...); L2 PreToolUse hook 按 trust=on/off 决定 auto-approve 还是弹 PWA `[Approve][Deny]`。**trust=on 也会经过 backend,自动审批后写进 Approvals 面板 audit ring buffer**(read-only)。 | 早期 per-workspace `.claude/settings.local.json` 不被 git worktree 看到,2026-05-15 改成 user-global。GH claude-code#20449 的 file-modifying Bash 偶尔仍会弹审批,**这是 claude 上游 bug,不归我们管**;真受不了就走 [`deploy/MIGRATE-TO-NONROOT.md`](deploy/MIGRATE-TO-NONROOT.md) 切非 root + bypassPermissions。 |
+| **cron 触发路径** | cron 行用 `curl POST /loops/{name}/run/internal`(localhost-only,nginx deny 外部),backend 走 `runner.submit()` 跟 PWA / 飞书统一路径 | 早期是 cron 直接调 agent-run,bypass 整个 backend,cron-fired run 既不进 runs.db 也不能挂 on_finish。2026-05-15 重构;启动时 `cron_state.rewrite_legacy_cron_lines()` idempotent 迁移老格式。 |
+| **per-workspace 配置 vs 全局** | 选 per-workspace,落到 `~/.cc-workflow/workspaces.json` | 全局 fallback 在 `config.toml`(`provider`、`default_trust`)+ `secrets.toml`(`[feishu] cron_notify_chat` 兜底 cron 通知群)。 |
+| **PWA 缓存策略** | service worker 网络优先 + 强制 `cache: 'no-store'` 绕过浏览器 HTTP cache | 频繁发布的开发工具,nginx `expires 1h` 会让浏览器服坏掉的旧 app.js 给新 SW(turning network-first into cache-first under the hood);SW 自己的 cache.open(VERSION) 是唯一的离线兜底。 |
+| **长对话 context 管理** | DIY auto-compact(agent-run 检测 input_tokens > 阈值时,跑 9 段式 summary prompt,清旧 session,新 session 以 summary 开场)+ PWA 手动 reset 按钮;`--resume <stale-sid>` 撞到 claude 内部 session 不存在时自动重试 | Claude Code 的 `/compact` 是 TUI-only,headless 不可用。Prompt 模板基于 Piebald-AI 社区反向工程版本(非 Anthropic 官方)。阈值默认 150k,可在 `config.toml` 改 `compact_threshold_tokens`。 |
 
 完整决策演进:[docs/archive/01-prd.md 附录 A/B](docs/archive/01-prd.md)。
 
@@ -273,6 +287,7 @@ cc-workflow/
 |---|---|---|
 | **README.md(本文)** | 当前架构 + 怎么用 | 首次接触 / 日常 reference |
 | [deploy/INSTALL.md](deploy/INSTALL.md) | 完整部署 step-by-step | 第一次装,或装新机器 |
+| [deploy/MIGRATE-TO-NONROOT.md](deploy/MIGRATE-TO-NONROOT.md) | Plan B:切非 root 跑(为 claude-code#20449 兜底) | trust=on 频繁被 file-modifying Bash 命令挡住时 |
 | [docs/feishu-usage.md](docs/feishu-usage.md) | 飞书端完整使用说明(slash 命令清单 / 触发 / 圆桌推送 / 排错) | 配好飞书集成后,日常使用查询 |
 | [docs/archive/](docs/archive/) | 历史设计文档(PRD / dev-plan / test-plan / handoff / future) | 想理解某个决策**为什么**当时那样定 / 想看 P1 未实现的设计 |
 

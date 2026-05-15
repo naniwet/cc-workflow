@@ -2,22 +2,29 @@
 
 Target: Ubuntu 22.04 / 24.04 cloud server, single-user.
 
-Estimated time: 10 minutes (excluding LLM API key signups).
+Estimated time: 10 minutes (excluding LLM API key signups + Let's Encrypt
+DNS).
 
-> **⚠️ Heads-up on the service user.** The steps below install everything
-> under `/root/` and run the backend as `root`. This works, but recent
-> Claude CLI refuses `--dangerously-skip-permissions` (the flag agent-run
-> uses for trust=on workspaces) when running as root. Two options:
+> **Deployment model (2026-05-15 update).** The default install runs
+> everything as `root` under `/root/`. Earlier docs warned that
+> `trust=on` workspaces wouldn't work under root because Claude CLI
+> rejects `--dangerously-skip-permissions` for uid 0 — that's been
+> worked around: backend now plants a global
+> `~/.claude/settings.json#permissions.allow` list at startup so
+> claude's L1 permission check passes for every tool we know about,
+> and the PreToolUse hook (`cc-approve-hook`) reads `CCW_TRUST` env to
+> decide auto-approve vs. PWA prompt. So **root is fine**.
 >
-> - **New install — recommended:** install under root first as documented,
->   then run [`scripts/migrate-to-non-root.sh`](../scripts/migrate-to-non-root.sh)
->   which flips you over to a dedicated `ccw` user. The script is idempotent
->   and keeps your data.
-> - **Already running as root and don't care about trust=on:** ignore. The
->   only loss is auto-approve for trust=on workspaces; everything else works.
->
-> See [§9 Non-root deployment](#9-non-root-deployment) at the bottom for
-> what the migration actually does.
+> One known edge case stays:
+> [claude-code#20449](https://github.com/anthropics/claude-code/issues/20449)
+> — some file-modifying Bash commands (mkdir / touch / cp / mv ...)
+> still prompt even with allow rules, because claude's permission
+> system doesn't inspect actual file paths touched by Bash. If this
+> bites you and you really want zero-prompt trust=on, switch to a
+> non-root deployment per [`MIGRATE-TO-NONROOT.md`](MIGRATE-TO-NONROOT.md)
+> — under non-root, `--permission-mode bypassPermissions` works and
+> bypasses L1 entirely. For 95% of users, root + global allow list +
+> the PreToolUse hook is enough.
 
 ## 0. Prerequisites
 
@@ -92,6 +99,15 @@ app_id            = "cli_xxx"
 app_secret        = "xxx"
 encrypt_key       = "xxx"           # 飞书后台 → 事件订阅 → 加密策略
 default_workspace = "test-repo"     # used when message has no [prefix]
+
+# Optional: where cron-fired runs push their result by default.
+# - Loops created via the Feishu `/loops new` flow remember the chat
+#   they were created in and push there (overrides this).
+# - Loops created via the PWA fall back to cron_notify_chat.
+# - Empty = no auto-push; output stays in PWA only.
+# To find a chat_id, send any message in that chat and look at the
+# backend log: `journalctl -u cc-workflow | grep chat_id`.
+cron_notify_chat  = ""
 ```
 
 Create `/root/.cc-workflow/providers.json` (ccswitch-style):
@@ -132,11 +148,22 @@ install -m 755 /root/projects/cc-workflow/agent-run.sh /usr/local/bin/agent-run
 
 (Or `ln -sf` if you want edits to flow through without reinstall.)
 
-## 3.5. Install the tool-approval hook (路 2 — recommended)
+## 3.5. Install the tool-approval hook + global allow list
 
-The cc-approve-hook lets Claude pause mid-run on Bash/WebFetch calls and
-surface `[Approve] [Deny]` buttons in the PWA. Workspaces marked
-`trust: true` short-circuit this and never prompt.
+Two pieces wire together to make trust=on / trust=off behave the way
+the PWA promises:
+
+1. **PreToolUse hook** (`cc-approve-hook.sh` below) — fires on every
+   Bash / WebFetch tool call. Calls back to backend; backend either
+   auto-approves (trust=on) or queues a `[Approve] [Deny]` in the PWA
+   (trust=off). Either way the call is logged in run-detail's Approvals
+   audit panel.
+2. **Global allow list** — backend writes
+   `~/.claude/settings.json#permissions.allow` at startup
+   (`ws_settings.sync_global_allow_rules`) so claude's *internal* L1
+   permission check passes for every tool we know about. Without this,
+   trust=on workspaces would still hit L1 prompts because hooks fire
+   *after* L1 approves.
 
 ```bash
 # 1. Install the hook script
@@ -205,20 +232,70 @@ Then open `http://<server-ip>/pwa/` in a browser — basic-auth prompt → after
 auth you should see the **Workspaces** view. From there, **+ New workspace**
 to bootstrap your first repo dir.
 
-## 7. (Optional) HTTPS — Phase 3
+## 7. HTTPS (strongly recommended once you have a domain)
+
+Without HTTPS:
+- The browser refuses to register the Service Worker on remote origins,
+  so the PWA's offline fallback + version-bump UX never engages.
+- iOS Safari won't let you "Add to Home Screen" in standalone/fullscreen
+  display mode on plain HTTP origins.
+- Cookies don't get the `Secure` flag (auth.set_session_cookie checks
+  `X-Forwarded-Proto` from nginx).
+
+DNS your domain to the server first, then:
 
 ```bash
 apt install -y certbot python3-certbot-nginx
 certbot --nginx -d <your-domain>
+# When prompted, pick option 2 (Redirect — make all requests redirect to HTTPS).
 ```
 
-certbot will edit `/etc/nginx/sites-available/cc-workflow` in place to add a
-TLS server block + auto-renewal. After this you can also add HSTS to the
-hardened nginx config:
+certbot edits `/etc/nginx/sites-enabled/cc-workflow` in place: adds a
+`listen 443 ssl` block with cert paths, and either appends a redirect
+or rewrites the existing port-80 block. Auto-renewal is set up via
+`/etc/cron.d/certbot` (verify with `systemctl list-timers | grep certbot`).
+
+Verify everything is wired correctly:
+
+```bash
+curl -I http://<your-domain>/pwa/     # → 301 Moved Permanently
+curl -I https://<your-domain>/pwa/    # → 200 OK
+# Set-Cookie should carry `Secure`:
+curl -i -c /tmp/c.txt -X POST https://<your-domain>/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"YOU","password":"YOU"}' | grep -i set-cookie
+# Expect: Set-Cookie: ccw_session=...; HttpOnly; Secure; SameSite=Strict
+```
+
+**Heads up — the repo's `deploy/nginx.conf` is still HTTP-only.**
+certbot's edits live on the server, not in the repo. If you want
+infra-as-code, manually diff the server's
+`/etc/nginx/sites-enabled/cc-workflow` against `deploy/nginx.conf` and
+flow the TLS additions back to git. Common additions to consider:
 
 ```nginx
-add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+# Force HTTP/2 (better PWA perf — multiplexes the parallel /workspaces
+# /sessions /loops fetches on first paint).
+listen 443 ssl http2;
+
+# Strict-Transport-Security: tell browsers "for the next 1y, always
+# use HTTPS for this host". Only deploy this when you're sure HTTPS
+# is stable — once cached, browsers won't fall back to HTTP for the
+# duration (so a misconfigured renewal can lock you out).
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 ```
+
+**Switching from a previously-deployed IP origin?** Two things to do
+on the client side:
+
+1. **Feishu open-platform console** → 事件订阅 → change webhook URL
+   from `http://<IP>/im/feishu/webhook` to
+   `https://<your-domain>/im/feishu/webhook`. Feishu will re-do the
+   challenge handshake; backend handles it transparently.
+2. **`pwa_base_url` in `config.toml`** — if you set this previously
+   to `http://<IP>`, update to `https://<your-domain>` and
+   `systemctl restart cc-workflow`. Used by `reply_from_run` to append
+   a "full output" link when Feishu replies get truncated.
 
 ## 8. (Optional) Feishu webhook
 
@@ -238,36 +315,56 @@ warn — get HTTPS up first per step 7.)
 |---|---|
 | `systemctl status cc-workflow` red | `journalctl -u cc-workflow --since "10 min ago" -t cc-workflow` |
 | Browser shows nginx 502 | Backend down — `systemctl status cc-workflow` |
-| Browser shows nginx 504 | Backend stuck — long agent-run or LLM call exceeding 60s |
-| PWA doesn't see latest deploy | Service worker cache — hard-refresh (Cmd+Shift+R) or wait 1h |
-| Cron line written but never fires | `journalctl -u cron --since "10 min ago" \| grep cc-loops` |
+| Browser shows nginx 504 | Backend stuck — long agent-run or LLM call exceeding 60s (consider raising `proxy_read_timeout`) |
+| PWA stuck on "Loading…" after deploy | Stale browser HTTP cache feeding the SW. Clear site data for the domain (Chrome → 长按 URL → 站点设置 → Clear data) or open in private mode. SW v31+ uses `cache: 'no-store'` to prevent this. |
+| Mobile PWA can't see data even when curl works | Same as above — clear site data / open private mode. After SW v31+ the issue self-heals on next visit. |
+| Cron line written but never fires | `journalctl -u cron --since "10 min ago" \| grep cc-loops`. Also `cat /etc/cron.d/cc-loops` and confirm the line is `curl ...` (not legacy `agent-run ...`); if legacy, restart the backend to trigger `cron_state.rewrite_legacy_cron_lines()`. |
+| Cron fires but PWA cron card has no "→ open" link | Means `last_run_id` isn't populated — possibly an old run from before the cron-through-backend refactor. Future cron runs will fill it in. |
+| Cron auto-push to Feishu doesn't fire | Need either per-loop `chat_id` (set when loop created via `/loops new` in Feishu) or global `[feishu].cron_notify_chat` in secrets.toml. Verify with `cat ~/.cc-state/jobs/<name>.json \| jq .chat_id`. |
 | `/cron/parse-nl` 502 | `providers.json` profile has empty env, or the LLM endpoint is unreachable |
+| 401 redirect doesn't fire from PWA | Stale SW serving old app.js without `_redirectingToLogin` guard. Same fix as "Stuck on Loading…" above — clear site data. |
+| Run shows "exit 66 · No conversation found with session ID" | `--resume <sid>` pointing to a session claude no longer knows about. agent-run.sh auto-recovers (clears the sid + retries fresh) since 2026-05-15; if you still see this, server is on a pre-`17e5b8a` agent-run.sh — `cp ~/projects/cc-workflow/agent-run.sh /usr/local/bin/agent-run`. |
 
 ## Update
 
 ```bash
 cd /root/projects/cc-workflow
 git pull
-systemctl restart cc-workflow        # only needed if backend/* changed
-# nginx reload only needed if deploy/nginx.conf changed
-# PWA hard-refresh only needed if pwa/* changed (browser SW caches them)
+
+# IMPORTANT: agent-run.sh is COPIED to /usr/local/bin/ in step 3, not
+# symlinked. After a pull that touches agent-run.sh, you MUST re-copy:
+cp agent-run.sh /usr/local/bin/agent-run
+chmod +x /usr/local/bin/agent-run
+
+systemctl restart cc-workflow        # picks up backend/* + triggers
+                                     # cron_state.rewrite_legacy_cron_lines()
+                                     # to migrate cron format if needed
+# nginx reload only needed if deploy/nginx.conf changed (after certbot
+# you maintain /etc/nginx/sites-enabled/cc-workflow manually anyway)
+# PWA: SW v31+ uses cache: no-store so updates flow without hard-refresh.
+# If you're still on older SW, hard-refresh once or clear site data.
 ```
 
-> If you migrated to non-root (§9), the paths are `/home/ccw/cc-workflow`
+> If you migrated to non-root (Plan B), the paths are `/home/ccw/cc-workflow`
 > and you should `sudo -u ccw git pull` so the working tree stays owned
 > by `ccw`. The systemd unit + nginx reload commands stay the same.
 
-## 9. Switching the backend to a non-root user
+## 9. (Plan B) Switching the backend to a non-root user
 
-By default, the backend runs as `root`. This works for everything except
-`trust=on` workspaces — recent Claude CLI refuses
-`--dangerously-skip-permissions` when invoked as root, so any tool call
-that would normally be auto-approved gets stuck on a "cannot be used with
-root/sudo" error. The fix is to launch the backend as a dedicated non-root
-user (`ccw`).
+You generally **do not need this anymore.** The global-allow-list
+mechanism (§3.5) plus the PreToolUse hook make trust=on workspaces
+work under root for ~95% of tool calls. Run as root, save yourself the
+migration hassle.
 
-Two flavors of migration are available. **Pick one based on how much you
-want to rearrange:**
+The remaining 5% is [claude-code#20449](https://github.com/anthropics/claude-code/issues/20449)
+— some file-modifying Bash commands (mkdir / touch / cp / mv ...)
+prompt even with allow rules. If that's a daily annoyance for you and
+you want a clean "trust=on means trust, period" UX, migrate to a
+dedicated `ccw` user. Under non-root, agent-run uses
+`--permission-mode bypassPermissions` which short-circuits L1 entirely.
+
+The full step-by-step migration plan (idempotent, with rollback) is in
+[`MIGRATE-TO-NONROOT.md`](MIGRATE-TO-NONROOT.md). Two flavors:
 
 ### 9a. Keep paths under /root (minimal disruption — recommended)
 
