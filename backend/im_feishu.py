@@ -603,6 +603,16 @@ def _loops_confirm(chat_id: str) -> dict:
             prompt=plan["prompt"],
             engine="claude",
         )
+        # Remember which chat this loop came from so cron-fired runs can
+        # push the result back there automatically (reply_from_cron_run).
+        # If this update fails we just won't auto-push — the loop still
+        # runs fine on schedule, output stays in the PWA. Don't block
+        # confirm on it.
+        try:
+            cron_state.update_job_fields(plan["name"], chat_id=chat_id)
+            job["chat_id"] = chat_id    # local view stays consistent
+        except Exception:    # noqa: BLE001
+            pass
     except FileExistsError:
         _pending_loop_plans.pop(chat_id, None)
         reply_to_chat(chat_id, f"loop {plan['name']!r} 同名已存在(可能其他 chat 抢先建了)。请换个 name 重试。")
@@ -919,6 +929,44 @@ def reply_from_run(run: dict) -> None:
         return
     chat_id = sk[len("feishu-"):]
     reply_to_chat(chat_id, _format_reply(run))
+
+
+def reply_from_cron_run(run: dict, *, loop_name: str) -> None:
+    """on_finish callback for cron-fired runs.
+
+    Picks the Feishu destination chat in this order:
+      1. jobs/<name>.json#chat_id   — set when the loop was created via
+                                       Feishu /loops new (so cron output
+                                       returns to the chat that made the
+                                       loop). Per-loop.
+      2. secrets.toml [feishu].cron_notify_chat — global fallback. Useful
+                                       for loops created from the PWA
+                                       that should still buzz a Feishu
+                                       group when they finish.
+      3. None → no push. Loop still ran fine; output is in the PWA.
+
+    Silently no-op when Feishu isn't configured (e.g. no app_id/secret).
+    """
+    if not run:
+        return
+    # Per-loop chat_id, if set when the loop was created via Feishu.
+    target_chat = None
+    try:
+        from . import cron_state
+        job = cron_state.get_job(loop_name) or {}
+        target_chat = job.get("chat_id")
+    except Exception:    # noqa: BLE001
+        target_chat = None
+    # Global fallback from secrets.toml#feishu.cron_notify_chat.
+    if not target_chat:
+        sec = _secrets()
+        target_chat = (sec.get("cron_notify_chat") or "").strip() or None
+    if not target_chat:
+        return    # No destination configured — silently skip.
+    # Decorate the standard reply with a "cron · <loop>" prefix so the
+    # recipient can tell at a glance this is autonomous output.
+    text = f"⏰ cron · {loop_name}\n{_format_reply(run)}"
+    reply_to_chat(target_chat, text)
 
 
 # ---------- interactive cards (P0-5b/c/d) ----------

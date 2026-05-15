@@ -1330,6 +1330,19 @@ pre {
   color: var(--text-tertiary);
 }
 
+/* Link from a cron card to its most recent run-detail page. Subtle —
+ * blends into the muted .loop-stats line until you hover. Only visible
+ * after the loop has fired at least once under the curl-trigger flow
+ * (legacy agent-run-direct entries don't populate last_run_id). */
+.loop-run-link, .loop-run-link:visited {
+  color: var(--accent-blue);
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+}
+.loop-run-link:hover {
+  border-bottom-color: var(--accent-blue);
+}
+
 /* Last-run output preview — 200 chars truncated server-side by
  * agent-run.sh#on_exit. Styled like .row-output (cyan, "claude said")
  * so it reads as "what the cron last produced". Note: this is the

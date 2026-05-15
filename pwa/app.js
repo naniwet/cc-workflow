@@ -2719,9 +2719,12 @@ function loopRowHtml(loop) {
         <span title="${esc(lastAbs)}">last ${esc(lastRel)}</span>
         · runs ${esc(loop.total_runs || 0)}
         · exit ${esc(last_exit)}
+        ${loop.last_run_id
+          ? ` · <a href="#runs/${encodeURIComponent(loop.last_run_id)}" class="loop-run-link" title="Open last run-detail (full output + transcript + tool approvals)">→ open</a>`
+          : ''}
       </div>
       ${loop.last_output_summary
-        ? `<div class="loop-last-output" title="Last output preview (truncated; full output is in ~/.cc-state/logs/&lt;date&gt;.jsonl on server)">↳ ${esc(loop.last_output_summary)}</div>`
+        ? `<div class="loop-last-output" title="Last output preview (truncated; full output on the run-detail page)">↳ ${esc(loop.last_output_summary)}</div>`
         : ''}
     </div>
   `;

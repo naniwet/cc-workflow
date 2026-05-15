@@ -47,6 +47,7 @@ def submit(
     provider: Optional[str] = None,
     permission_mode: Optional[str] = None,
     trust: bool = False,
+    job_name: Optional[str] = None,
     on_finish: Optional[OnFinish] = None,
 ) -> None:
     db.insert_queued_run(
@@ -59,7 +60,7 @@ def submit(
     )
     threading.Thread(
         target=_execute,
-        args=(run_id, workspace, prompt, engine, session_key, source, provider, permission_mode, trust, on_finish),
+        args=(run_id, workspace, prompt, engine, session_key, source, provider, permission_mode, trust, job_name, on_finish),
         name=f"agent-run-{run_id}",
         daemon=True,
     ).start()
@@ -75,6 +76,7 @@ def _execute(
     provider: Optional[str],
     permission_mode: Optional[str],
     trust: bool,
+    job_name: Optional[str],
     on_finish: Optional[OnFinish],
 ) -> None:
     db.set_running(run_id)
@@ -86,6 +88,13 @@ def _execute(
         argv += ["--provider", provider]
     if permission_mode:
         argv += ["--permission-mode", permission_mode]
+    # Pass --job-name when the caller is a cron-trigger or PWA "Run now"
+    # for an existing loop — agent-run uses this to update
+    # ~/.cc-state/jobs/<name>.json (last_run_at / last_exit / etc).
+    # Backend's on_finish callback adds last_run_id on top via
+    # cron_state.update_job_fields (disjoint fields, no race).
+    if job_name:
+        argv += ["--job-name", job_name]
     # Pass run context to agent-run's environment so the claude
     # PreToolUse hook (cc-approve-hook.sh) can identify which run is
     # asking for approval. CCW_TRUST controls the hook's short-circuit

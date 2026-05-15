@@ -37,6 +37,12 @@ from . import config
 
 CC_LOOPS_PATH = Path("/etc/cron.d/cc-loops")
 AGENT_RUN_BIN = "/usr/local/bin/agent-run"
+# Where the backend listens for the localhost-only cron trigger. Cron
+# rows curl this endpoint instead of calling agent-run directly — that's
+# how cron-fired runs get into runs.db, become navigable from the PWA's
+# run-detail page, and become eligible for Feishu push-back via
+# runner.submit's on_finish callback. See main.py:run_loop_internal.
+BACKEND_LOOPBACK = "http://127.0.0.1:8765"
 # Wrapper installed by `scripts/install-cc-loops` — used when backend is
 # not running as root, so we can atomically replace /etc/cron.d/cc-loops
 # (which must be root-owned for cron to honor it). See deploy/cc-workflow.sudoers
@@ -96,49 +102,100 @@ def list_jobs() -> list[dict]:
 
 # ---------- cron file parser (read-side enrichment for list_jobs) ----------
 
-# Match a single marker-bounded block in /etc/cron.d/cc-loops. The cron line
-# itself is the first non-# line after BEGIN; we keep capturing the comment
-# lines too just so the parser is tolerant of future "# created @ ..." style
-# annotations.
+# Match a single marker-bounded block in /etc/cron.d/cc-loops. Two block
+# shapes are accepted:
+#
+#   Legacy (pre-2026-05-15): the cron line invokes agent-run directly
+#   and carries workspace/prompt as positional args inline.
+#
+#   Current: the cron line curls a localhost-only backend endpoint that
+#   triggers runner.submit(). Workspace/prompt are stored as `# meta:`
+#   header lines inside the block so the file is still self-describing
+#   AND list_jobs() can answer "what does this cron do?" without making
+#   the curl line itself carry them.
+#
+# `body` captures everything between BEGIN and END (header comments +
+# cron line); both _parse_cron_line variants extract from this blob.
 _BLOCK_RE = re.compile(
     r"# === BEGIN cc-job: (?P<name>[A-Za-z0-9._-]+) ===\n"
-    r"(?:#[^\n]*\n)*"                                   # zero or more # comment lines
-    r"(?P<line>[^#\n][^\n]*)\n"                         # the actual cron line
+    r"(?P<body>.*?)"
     r"# === END cc-job: (?P=name) ===",
-    re.MULTILINE,
+    re.DOTALL,
 )
 
+# Header-comment KV lines used by the new-format block, e.g.
+#   # meta: workspace=pivot-table
+#   # meta: prompt="跑一下 vitest"
+#   # meta: engine=claude
+_META_RE = re.compile(r"^# meta: (?P<k>[a-z_]+)=(?P<v>.*)$", re.MULTILINE)
 
-def _parse_cron_line(line: str) -> Optional[dict]:
-    """Pull schedule + workspace + prompt + engine out of a cc-loops cron line.
 
-    Expected shape (matches add_cron_loop()'s writer):
-      <m> <h> <dom> <mon> <dow> root <agent-run-path> --engine=<X> \
-      <ws> <prompt> <name> --source cron --job-name <name>
+def _parse_block_body(body: str) -> Optional[dict]:
+    """Return {schedule, workspace, prompt, engine} for one cc-job block,
+    handling both legacy (agent-run-on-cron-line) and current (curl-trigger
+    with `# meta:` headers) formats."""
+    # Find the actual cron line — first non-comment, non-blank line.
+    cron_line = ""
+    for ln in body.splitlines():
+        stripped = ln.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        cron_line = ln
+        break
+    if not cron_line:
+        return None
 
-    Where workspace, prompt, and name are shlex-quoted by the writer when
-    they contain shell metacharacters. We use shlex.split() to undo that.
-    """
-    parts = line.split(None, 5)                         # 5 sched fields + the rest
+    parts = cron_line.split(None, 5)
     if len(parts) < 6:
         return None
     schedule = " ".join(parts[:5])
+    tail = parts[5]
+
+    # Heuristic: legacy lines invoke agent-run, current lines invoke
+    # curl + the loopback endpoint. Cheap-and-correct discriminator.
+    if "agent-run" in tail and "/loops/" not in tail:
+        return _parse_legacy_tail(schedule, tail)
+    if "/loops/" in tail and "/run/internal" in tail:
+        meta = {m.group("k"): _unquote_meta(m.group("v")) for m in _META_RE.finditer(body)}
+        workspace = meta.get("workspace") or ""
+        prompt = meta.get("prompt") or ""
+        engine = meta.get("engine") or "claude"
+        if not workspace or not prompt:
+            return None
+        return {
+            "schedule": schedule,
+            "workspace": workspace,
+            "prompt": prompt,
+            "engine": engine,
+        }
+    return None
+
+
+def _unquote_meta(v: str) -> str:
+    """Reverse the shlex.quote we did when writing `# meta: prompt=...`.
+    Tolerant — accepts unquoted values too (engine=claude)."""
+    v = v.strip()
+    if not v:
+        return ""
     try:
-        tokens = shlex.split(parts[5])
+        # shlex.split returns the unquoted form when input is one quoted token.
+        toks = shlex.split(v)
+        return toks[0] if toks else ""
+    except ValueError:
+        return v
+
+
+def _parse_legacy_tail(schedule: str, tail: str) -> Optional[dict]:
+    """Legacy `<user> agent-run --engine=X ws prompt name --source cron --job-name name` tail."""
+    try:
+        tokens = shlex.split(tail)
     except ValueError:
         return None
     if len(tokens) < 6:
         return None
-    # tokens[0] is the cron USER field. Used to be hardcoded "root"; now
-    # varies by deployment (root vs ccw). We don't validate it — if it's
-    # there in the cron file, cron will run agent-run as that user, and
-    # that's the user we want to honor.
-
-    # Walk tokens after the agent-run path. Collect positionals; pick out
-    # the engine value from either --engine=X or --engine X form.
     engine = "claude"
     positionals: list[str] = []
-    i = 2                                               # skip USER + agent-run path
+    i = 2  # skip USER + agent-run path
     while i < len(tokens):
         t = tokens[i]
         if t.startswith("--engine="):
@@ -148,13 +205,11 @@ def _parse_cron_line(line: str) -> Optional[dict]:
             if i < len(tokens):
                 engine = tokens[i]
         elif t.startswith("--"):
-            # Any other flag — assume `--flag value` and skip the value.
             if "=" not in t:
                 i += 1
         else:
             positionals.append(t)
         i += 1
-
     if len(positionals) < 3:
         return None
     return {
@@ -176,7 +231,7 @@ def _parse_cc_loops() -> dict:
         return {}
     out: dict = {}
     for m in _BLOCK_RE.finditer(content):
-        parsed = _parse_cron_line(m.group("line"))
+        parsed = _parse_block_body(m.group("body"))
         if parsed:
             out[m.group("name")] = parsed
     return out
@@ -292,6 +347,25 @@ def _ensure_header(existing: str) -> str:
     return existing or header
 
 
+def _build_block(*, name: str, schedule: str, workspace: str, prompt: str, engine: str) -> str:
+    """Build the new-format cron block text (header `# meta:` lines + curl trigger)."""
+    cron_line = (
+        f"{schedule} {_cron_user()} curl -fsS -X POST "
+        f"{BACKEND_LOOPBACK}/loops/{name}/run/internal "
+        f"-H 'Content-Type: application/json' -d '{{}}' "
+        f">/dev/null 2>&1"
+    )
+    return (
+        f"# === BEGIN cc-job: {name} ===\n"
+        f"# created @ {int(time.time())}\n"
+        f"# meta: workspace={shlex.quote(workspace)}\n"
+        f"# meta: prompt={shlex.quote(prompt)}\n"
+        f"# meta: engine={engine}\n"
+        f"{cron_line}\n"
+        f"# === END cc-job: {name} ===\n"
+    )
+
+
 def add_cron_loop(
     *,
     name: str,
@@ -305,6 +379,13 @@ def add_cron_loop(
     Raises:
         ValueError on bad name / schedule / workspace.
         FileExistsError if a loop with this name already exists.
+
+    New cron-line format (2026-05-15):
+      The line itself just curls a localhost-only backend endpoint;
+      workspace/prompt/engine live in `# meta:` header lines inside
+      the block. This routes cron-fired runs through runner.submit
+      (same path as PWA / Feishu) so they end up in runs.db and can
+      drive Feishu push-back via on_finish callback.
     """
     _validate_name(name)
     parts = (schedule or "").split()
@@ -315,26 +396,103 @@ def add_cron_loop(
     if _job_file(name).exists():
         raise FileExistsError(f"loop {name!r} already exists")
 
-    # shlex.quote keeps the prompt safe inside a cron shell line.
-    quoted_prompt = shlex.quote(prompt)
-    cron_line = (
-        f"{schedule} {_cron_user()} {AGENT_RUN_BIN} --engine={engine} "
-        f"{shlex.quote(workspace)} {quoted_prompt} {name} "
-        f"--source cron --job-name {name}"
+    block = _build_block(
+        name=name, schedule=schedule, workspace=workspace, prompt=prompt, engine=engine,
     )
-    block = (
-        f"# === BEGIN cc-job: {name} ===\n"
-        f"# created @ {int(time.time())}\n"
-        f"{cron_line}\n"
-        f"# === END cc-job: {name} ===\n"
-    )
-
     existing = CC_LOOPS_PATH.read_text(encoding="utf-8") if CC_LOOPS_PATH.exists() else ""
     existing = _ensure_header(existing)
     new_content = existing.rstrip() + "\n\n" + block
     _write_cron_file(new_content)
     _init_job_state(name)
     return get_job(name) or {"name": name}
+
+
+def update_job_fields(name: str, **fields) -> Optional[dict]:
+    """Atomic merge of arbitrary fields into jobs/<name>.json.
+
+    Used by backend's on_finish callback to plant:
+      - last_run_id          (so PWA's cron card links to run-detail)
+    And by Feishu's `_loops_confirm` to plant:
+      - chat_id              (so cron auto-push knows where to send)
+
+    Both writers (agent-run's job_finish + this) use mktemp+os.replace,
+    so concurrent writes don't tear — last-writer-wins on the contested
+    field, but disjoint-field writes (typical case) merge cleanly.
+    Returns the merged job dict, or None if jobs/<name>.json missing.
+    """
+    fp = _job_file(name)
+    data = get_job(name)
+    if data is None:
+        return None
+    for k, v in fields.items():
+        data[k] = v
+    tmp = fp.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, fp)
+    return data
+
+
+def rewrite_legacy_cron_lines() -> int:
+    """Migrate any pre-2026-05-15 cc-loops entries to the curl-trigger format.
+
+    Idempotent: blocks already in the new format are detected and skipped.
+    Called from main._on_startup so a `git pull && systemctl restart`
+    auto-upgrades the cron file in place.
+
+    Returns the count of blocks rewritten. 0 means the file was already
+    fresh (or missing entirely).
+    """
+    if not CC_LOOPS_PATH.exists():
+        return 0
+    try:
+        content = CC_LOOPS_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+
+    rewritten = 0
+    blocks_out: list[tuple[int, int, str]] = []  # (start, end, replacement)
+
+    for m in _BLOCK_RE.finditer(content):
+        name = m.group("name")
+        body = m.group("body")
+        # Skip if already new format (contains the curl trigger line).
+        if "/run/internal" in body:
+            continue
+        parsed = _parse_block_body(body)
+        if not parsed:
+            # Unparseable — leave as-is, log once via stderr (don't fail
+            # startup over one busted block).
+            print(
+                f"cron_state.rewrite_legacy_cron_lines: skipping unparseable block {name!r}",
+                flush=True,
+            )
+            continue
+        # Pull schedule from the legacy line (now in parsed["schedule"])
+        # and the rest from the parsed fields. We need to preserve any
+        # other comments in the legacy body (the `# created @ ts` line)
+        # — only the cron line itself + missing meta headers change.
+        new_block = _build_block(
+            name=name,
+            schedule=parsed["schedule"],
+            workspace=parsed["workspace"],
+            prompt=parsed["prompt"],
+            engine=parsed["engine"],
+        )
+        # m.end() points right after the END marker, which is what we
+        # want to replace up to. new_block has its own trailing newline.
+        blocks_out.append((m.start(), m.end(), new_block.rstrip("\n")))
+        rewritten += 1
+
+    if rewritten == 0:
+        return 0
+
+    # Apply replacements right-to-left so earlier offsets stay valid.
+    new_content = content
+    for start, end, repl in reversed(blocks_out):
+        new_content = new_content[:start] + repl + new_content[end:]
+
+    _write_cron_file(new_content)
+    return rewritten
 
 
 def remove_cron_loop(name: str) -> bool:

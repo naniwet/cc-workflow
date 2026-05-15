@@ -34,6 +34,7 @@ Routes:
   GET    /runs/{run_id}/approvals              session   (read-only audit, incl. auto_approved)
   POST   /approvals/internal/pending           localhost-only (claude hook creates entry)
   GET    /approvals/internal/{id}/wait         localhost-only (claude hook long-polls)
+  POST   /loops/{name}/run/internal            localhost-only (cron timer triggers run)
   POST   /im/feishu/webhook                    Feishu signature (NOT session)
   POST   /im/feishu/card_callback              Feishu signature (NOT session) — P0-5d
   /pwa/*                                       static, unprotected layer (login.html lives here)
@@ -86,6 +87,17 @@ def _on_startup() -> None:
         ws_settings.sync_global_allow_rules()
     except Exception:    # noqa: BLE001
         pass
+    # Migrate /etc/cron.d/cc-loops entries that still use the legacy
+    # agent-run-on-cron-line format to the curl-trigger format. After
+    # this, cron-fired runs go through runner.submit() like any other
+    # source, so they land in runs.db (= PWA run-detail) and become
+    # eligible for Feishu push-back via on_finish callback.
+    try:
+        n = cron_state.rewrite_legacy_cron_lines()
+        if n > 0:
+            print(f"cron_state: rewrote {n} legacy cron block(s) → curl-trigger format", flush=True)
+    except Exception as e:    # noqa: BLE001
+        print(f"cron_state.rewrite_legacy_cron_lines failed: {e}", flush=True)
     _verify_agent_run_capabilities()
 
 
@@ -809,6 +821,29 @@ def create_loop(req: NewLoopRequest) -> dict:
     return result
 
 
+def _build_loop_on_finish(name: str, source: str):
+    """Shared callback factory for /loops/{name}/run and /run/internal.
+
+    - Always: write last_run_id into ~/.cc-state/jobs/<name>.json so the
+      PWA cron card can link straight to run-detail.
+    - When source=="cron": also push a reply back to Feishu (per-loop
+      chat_id from job state, falling back to global cron_notify_chat).
+    """
+    def _on_finish(run: dict) -> None:
+        # 1. Plant last_run_id (disjoint from agent-run's job_finish writer)
+        try:
+            cron_state.update_job_fields(name, last_run_id=run.get("id"))
+        except Exception:    # noqa: BLE001 — never crash the runner thread
+            pass
+        # 2. Feishu push-back (cron only — PWA "Run now" doesn't need it)
+        if source == "cron":
+            try:
+                im_feishu.reply_from_cron_run(run, loop_name=name)
+            except Exception:    # noqa: BLE001
+                pass
+    return _on_finish
+
+
 @app.post("/loops/{name}/run", dependencies=PROTECT, status_code=202)
 def run_loop_now(name: str) -> dict:
     """Fire one immediate run of an existing cron loop on demand.
@@ -846,6 +881,54 @@ def run_loop_now(name: str) -> dict:
         provider=ws_settings.provider_for(workspace),
         permission_mode=ws_settings.permission_mode_for(workspace),
         trust=ws_settings.trust_for(workspace),
+        job_name=name,
+        on_finish=_build_loop_on_finish(name, "pwa"),
+    )
+    return {"task_id": run_id, "status": "queued", "name": name}
+
+
+@app.post("/loops/{name}/run/internal", status_code=202)
+def run_loop_internal(name: str) -> dict:
+    """Localhost-only trigger fired by /etc/cron.d/cc-loops curl lines.
+
+    SAME submit() path as run_loop_now() — the difference is source="cron"
+    (not "pwa") so the audit trail / Feishu callback can distinguish
+    "user clicked Run now in PWA" vs "system cron timer expired". nginx
+    denies this path to external traffic; the curl call from cron is
+    same-host loopback only.
+
+    No auth: the localhost-only boundary is enforced at the nginx layer
+    (location ~ /loops/.+/run/internal { deny all; }), mirroring how
+    /approvals/internal/* is gated. If you accidentally lose the nginx
+    rule, the failure mode is "anyone on the internet can trigger your
+    cron loops" — not catastrophic but worth flagging in a deploy
+    smoke test.
+    """
+    jobs = cron_state.list_jobs()
+    job = next((j for j in jobs if j.get("name") == name), None)
+    if job is None:
+        raise HTTPException(404, {"error": "loop not found", "name": name})
+    workspace = job.get("workspace")
+    prompt = job.get("prompt")
+    engine = job.get("engine") or ws_settings.engine_for(workspace or "")
+    if not workspace or not prompt:
+        raise HTTPException(
+            500,
+            {"error": "loop spec missing in cron file — try Delete + re-Add", "name": name},
+        )
+    run_id = db.new_run_id()
+    runner.submit(
+        run_id=run_id,
+        workspace=workspace,
+        prompt=prompt,
+        engine=engine,
+        session_key=name,
+        source="cron",
+        provider=ws_settings.provider_for(workspace),
+        permission_mode=ws_settings.permission_mode_for(workspace),
+        trust=ws_settings.trust_for(workspace),
+        job_name=name,
+        on_finish=_build_loop_on_finish(name, "cron"),
     )
     return {"task_id": run_id, "status": "queued", "name": name}
 
