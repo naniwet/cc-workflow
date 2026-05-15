@@ -2379,49 +2379,123 @@ function paintRunDetail(id, row) {
   const transcriptEl = $('view').querySelector('#run-transcript');
   if (transcriptEl) {
     transcriptEl.addEventListener('toggle', () => {
-      if (transcriptEl.open) _loadRunTranscript(id);
+      if (transcriptEl.open) {
+        _loadRunTranscript(id);
+      } else {
+        // User collapsed — stop the polling timer to save bandwidth.
+        // State is preserved in _transcriptLineCount[id], so re-expand
+        // resumes from where we left off (no re-render of past lines).
+        _stopTranscriptPoll();
+      }
     });
   }
   if (status === 'running' && id) _startLiveTailPoll(id);
   else _stopLiveTailPoll();
 }
 
-// Lazy-loaded full transcript for a single run. Re-uses _formatStreamLine
-// (the same parser the Live output panel uses), so a Bash tool call shows
-// as `🔧  Bash({"command":"npx vitest"})` and its result as `↳  <stdout>`.
-// Loads once per page-view — re-clicking the <details> doesn't refetch.
-let _lastTranscriptRunId = null;
+// Transcript panel: initial load on user expand, then poll-and-append
+// while the <details> stays open. Each poll fetches the full tail (up
+// to 5000 lines), compares against the count we've already rendered,
+// and only appends the NEW suffix — no full rebuild, no flicker.
+//
+// State per run id:
+//   _transcriptLineCount[runId] = how many lines we've already shown
+// Plus one global poll timer (only one transcript is open at a time —
+// the user is on a single run-detail page).
+const _transcriptLineCount = {};
+let _transcriptPollTimer = null;
+let _transcriptPollRunId = null;
+
+function _stopTranscriptPoll() {
+  if (_transcriptPollTimer) { clearInterval(_transcriptPollTimer); _transcriptPollTimer = null; }
+  _transcriptPollRunId = null;
+}
+
+function _startTranscriptPoll(runId) {
+  _stopTranscriptPoll();
+  _transcriptPollRunId = runId;
+  // 5s feels right — Transcript is "settled history", not realtime tail.
+  // Live output already polls every 2.5s for the firehose view.
+  _transcriptPollTimer = setInterval(() => _pollRunTranscript(runId), 5000);
+}
+
 async function _loadRunTranscript(runId) {
-  if (_lastTranscriptRunId === runId) return; // already loaded for this run
+  // Reset state for this run if we haven't seen it before.
+  if (!(runId in _transcriptLineCount)) {
+    _transcriptLineCount[runId] = 0;
+    const body = $('view').querySelector('#run-transcript-body');
+    if (body) body.textContent = '';   // clear "(not loaded)" placeholder
+  }
+  await _pollRunTranscript(runId);
+  // After the first load, start the auto-refresh loop. It bails on its
+  // own when the <details> is collapsed (see _pollRunTranscript).
+  _startTranscriptPoll(runId);
+}
+
+async function _pollRunTranscript(runId) {
+  // Bail if user collapsed the panel or navigated away.
+  const details = $('view').querySelector('#run-transcript');
+  if (!details || !details.open || location.hash !== `#runs/${runId}`) {
+    _stopTranscriptPoll();
+    return;
+  }
   const body = $('view').querySelector('#run-transcript-body');
   const hint = $('view').querySelector('#run-transcript-hint');
   if (!body || !hint) return;
-  hint.textContent = '(loading…)';
+
+  if (_transcriptLineCount[runId] === 0) hint.textContent = '(loading…)';
+
   let data;
   try {
     data = await api(`/runs/${encodeURIComponent(runId)}/tail?lines=5000`);
   } catch (err) {
-    hint.textContent = `(load failed: ${err.message})`;
+    if (_transcriptLineCount[runId] === 0) {
+      hint.textContent = `(load failed: ${err.message})`;
+    }
     return;
   }
   if (!data.exists) {
-    body.textContent = '(no stream file — run may pre-date the stream-jsonl change, or failed before claude started)';
-    hint.textContent = '(empty)';
-    _lastTranscriptRunId = runId;
+    if (_transcriptLineCount[runId] === 0) {
+      body.textContent = '(no stream file — run may pre-date the stream-jsonl change, or failed before claude started)';
+      hint.textContent = '(empty)';
+    }
     return;
   }
-  const rendered = (data.lines || [])
+
+  const totalLines = (data.lines || []).length;
+  const already = _transcriptLineCount[runId] || 0;
+  if (totalLines <= already) {
+    // No new lines — only refresh the hint counters.
+    hint.textContent = `(${totalLines} events · ${data.size} bytes)`;
+    return;
+  }
+
+  // Append only the NEW lines. _formatStreamLine drops null (init
+  // metadata etc) so we don't render those.
+  const newLines = data.lines.slice(already);
+  const formatted = newLines
     .map(_formatStreamLine)
     .filter((s) => s !== null)
     .join('\n\n');
-  body.textContent = rendered || '(stream contained only init metadata)';
-  hint.textContent = `(${data.lines.length} events · ${data.size} bytes)`;
-  _lastTranscriptRunId = runId;
+  if (formatted) {
+    // Append as text node — preserves existing rendered text + the
+    // user's scroll position inside the <pre>. Prepend a separator
+    // newline if there's already content above.
+    const sep = body.textContent && !body.textContent.endsWith('\n\n') ? '\n\n' : '';
+    body.appendChild(document.createTextNode(sep + formatted));
+  }
+  _transcriptLineCount[runId] = totalLines;
+  hint.textContent = `(${totalLines} events · ${data.size} bytes)`;
 }
 
-// Fetch + render the run's audit trail. Called on detail-page paint and
-// re-called from the live poll loop so trust=on auto-approved entries
-// trickle in as the hook fires.
+// Fetch + render the run's audit trail. Append-style update:
+//   - Existing entry, status unchanged → DO NOTHING (no DOM write)
+//   - Existing entry, status changed (pending → approved etc) →
+//     swap that one row in place
+//   - New entry → insertAdjacentHTML('beforeend')
+//   - Removed entries → not handled (audit ring buffer is grow-only
+//     up to 500 items, and bounded by the run's lifetime)
+// Result: incremental UI updates, no flash, no rebuild of unchanged rows.
 async function _loadRunApprovals(runId) {
   let entries;
   try {
@@ -2433,19 +2507,41 @@ async function _loadRunApprovals(runId) {
   const list = $('view').querySelector('#run-approvals-list');
   const count = $('view').querySelector('#run-approvals-count');
   if (!list || !count) return;
-  // Build target HTML first, then skip the write if unchanged — same
-  // anti-flicker trick as _pollLiveTail. Re-assigning innerHTML on every
-  // tick (even with identical content) tears down + re-creates the
-  // child <div>s, which the user perceives as a flash.
-  const html = (!entries || entries.length === 0)
-    ? '<p class="muted">No tool calls intercepted yet.</p>'
-    : entries.map(_renderApprovalEntry).join('');
-  const countLabel = `(${(entries || []).length})`;
-  if (html !== _lastApprovalsRender) {
-    list.innerHTML = html;
-    count.textContent = countLabel;
-    _lastApprovalsRender = html;
+
+  const empty = !entries || entries.length === 0;
+  if (empty) {
+    // Show empty state only if it isn't already there — avoid touching
+    // DOM on every poll just to re-set the same placeholder text.
+    if (!list.querySelector('p.empty-placeholder')) {
+      list.innerHTML = '<p class="muted empty-placeholder">No tool calls intercepted yet.</p>';
+    }
+    count.textContent = '(0)';
+    return;
   }
+
+  // Clear the empty placeholder if present (first entry arriving).
+  const placeholder = list.querySelector('p.empty-placeholder');
+  if (placeholder) placeholder.remove();
+
+  // Diff loop: for each entry, find by data-approval-id.
+  for (const entry of entries) {
+    const sel = `[data-approval-id="${entry.approval_id}"]`;
+    const existing = list.querySelector(sel);
+    if (existing) {
+      // Status flip (pending → approved/denied/expired): replace that
+      // one row. Everything else stays untouched.
+      if (existing.dataset.status !== entry.status) {
+        existing.outerHTML = _renderApprovalEntry(entry);
+      }
+      // No change → leave DOM alone.
+    } else {
+      // New entry → append at the bottom. Backend returns oldest-first
+      // (list_audit_for_run), so chronological order is preserved.
+      list.insertAdjacentHTML('beforeend', _renderApprovalEntry(entry));
+    }
+  }
+
+  count.textContent = `(${entries.length})`;
 }
 
 // Render one Approval audit entry into a single line. Status icons:
@@ -2466,8 +2562,14 @@ function _renderApprovalEntry(a) {
   const when = ts ? new Date(ts * 1000).toLocaleTimeString() : '';
   const label = a.status === 'auto_approved' ? 'auto-approved' : a.status;
   const summary = _approvalToolSummary(a.tool_name, a.tool_input || {});
+  // data-approval-id + data-status: used by _loadRunApprovals to
+  // diff-update incrementally (find existing row by id, swap only if
+  // status changed). Without these, the diff layer has no way to
+  // match incoming entries back to live DOM nodes.
   return `
-    <div class="a-row ${cls}">
+    <div class="a-row ${cls}"
+         data-approval-id="${esc(a.approval_id)}"
+         data-status="${esc(a.status)}">
       <span class="a-icon">${icon}</span>
       <span class="a-label">${esc(label)}</span>
       <code class="a-tool">${esc(a.tool_name)}(${esc(summary)})</code>
@@ -2518,12 +2620,11 @@ function _approvalToolSummary(name, input) {
 // Cancelled when navigating away or when the run flips to terminal.
 let _liveTailTimer = null;
 let _liveTailRunId = null;
-// Cache last-rendered strings so we can skip DOM writes when nothing
-// changed. Otherwise the 2.5s poll re-writes textContent on every tick,
-// which the browser repaints — looks like the panel is "flickering"
-// even when content is identical (cost the user one "一闪一闪" report).
+// Cache the last-rendered Live-output text so the 2.5s poll skips
+// DOM writes when content is identical. _loadRunApprovals doesn't
+// need an equivalent — its diff-loop already does per-row identity
+// matching via data-approval-id, no string compare needed.
 let _lastTailRender = '';
-let _lastApprovalsRender = '';
 
 function _stopLiveTailPoll() {
   if (_liveTailTimer) { clearInterval(_liveTailTimer); _liveTailTimer = null; }
@@ -2533,7 +2634,6 @@ function _stopLiveTailPoll() {
   if (_liveTailRunId) delete _lastPaintedStatus[_liveTailRunId];
   _liveTailRunId = null;
   _lastTailRender = '';
-  _lastApprovalsRender = '';
 }
 
 function _startLiveTailPoll(runId) {
