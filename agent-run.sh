@@ -117,7 +117,7 @@ done
 # error rather than silently working in a half-broken state.
 [[ "$ENGINE" == "claude" ]] || die "$EX_USAGE" "engine must be claude (codex support removed; got: $ENGINE)"
 case "$SOURCE" in pwa|feishu|cron|manual) ;; *) die "$EX_USAGE" "bad --source: $SOURCE" ;; esac
-case "$PERMISSION_MODE" in acceptEdits|bypassPermissions|plan|default|dontAsk|auto) ;; *) die "$EX_USAGE" "bad --permission-mode: $PERMISSION_MODE (want acceptEdits|bypassPermissions|plan|default|dontAsk|auto)" ;; esac
+case "$PERMISSION_MODE" in acceptEdits|bypassPermissions|plan|default) ;; *) die "$EX_USAGE" "bad --permission-mode: $PERMISSION_MODE (want acceptEdits|bypassPermissions|plan|default)" ;; esac
 [[ ${#POSITIONAL[@]} -ge 2 ]] || { usage; die "$EX_USAGE" "need <workspace> and <prompt>"; }
 [[ ${#POSITIONAL[@]} -le 3 ]] || die "$EX_USAGE" "too many positional args"
 

@@ -104,6 +104,12 @@ def trust_for(workspace: str) -> bool:
 def permission_mode_for(workspace: str) -> str:
     """Map trust=on/off → claude's `--permission-mode`, runtime-aware.
 
+    Claude Code CLI accepts exactly four modes:
+      `default` / `acceptEdits` / `plan` / `bypassPermissions`.
+    (Earlier this file referenced `dontAsk` and `auto` — those were
+    a hallucination, do NOT add them back. The CLI rejects them at
+    arg-parse and `agent-run.sh`'s validator does too.)
+
     trust=off → `acceptEdits` always. Edit/Write auto-allowed; Bash /
                 WebFetch hit L1 (sync_global_allow_rules planted the
                 allow list so they pass), then fire PreToolUse hook
@@ -111,30 +117,23 @@ def permission_mode_for(workspace: str) -> str:
     trust=on  → depends on the backend's effective uid:
                   uid != 0 (ccw)  → `bypassPermissions` — claude
                                     skips L1 entirely.
-                  uid == 0 (root) → `dontAsk` — claude executes
-                                    everything in the allow list
-                                    without prompting, and silently
-                                    no-ops anything not in the list.
-                                    Crucially: claude CLI does NOT
-                                    reject dontAsk under uid 0 the
-                                    way it does bypassPermissions,
-                                    so this is the root-mode
-                                    equivalent of "skip all prompts".
+                  uid == 0 (root) → `acceptEdits` — claude CLI
+                                    refuses `bypassPermissions`
+                                    under uid 0 for safety, so we
+                                    fall back. Bash/Write/Read are
+                                    in the global allow list and
+                                    pass L1; the PreToolUse hook
+                                    sees CCW_TRUST=on and
+                                    auto-approves the rest.
 
-    Compared to `acceptEdits` (the previous root fallback):
-      - acceptEdits auto-allows only Edit/Write + a hardcoded subset
-        of Bash (mkdir/touch/cp/mv/rm/rmdir/sed); other tools still
-        prompt → in headless `-p` mode that means "silently fail"
-      - dontAsk skips prompts for EVERYTHING in the allow list (we
-        plant 14 entries via sync_global_allow_rules), which IS most
-        of what trust=on users actually want
-
-    What dontAsk doesn't help with: hardcoded protections claude has
-    on its OWN config files (`~/.claude/settings.json` etc) — those
-    can't be skipped by any mode. But writes to `~/.claude/skills/`,
-    `~/.claude/commands/`, `~/.claude/agents/` are doc'd as allowed
-    even in strict modes, so the common "install a skill" workflow
-    should work.
+    Known limitation under root + trust=on: some hardcoded protections
+    claude has on its OWN config files (`~/.claude/settings.json` etc)
+    cannot be bypassed by any mode. Writes to `~/.claude/skills/`,
+    `~/.claude/commands/`, `~/.claude/agents/` are doc'd as allowed,
+    so the common "install a skill" workflow should work; deeper
+    `~/.claude/` writes may silently fail. Migrating the systemd
+    service to a non-root user (see deploy/MIGRATE-TO-NONROOT.md,
+    flagged EXPERIMENTAL) is the long-term fix.
 
     Runtime detection: uid is checked at call time so the same code
     works in either root or non-root deployment without edits.
@@ -142,7 +141,7 @@ def permission_mode_for(workspace: str) -> str:
     if not trust_for(workspace):
         return "acceptEdits"
     if os.geteuid() == 0:
-        return "dontAsk"  # root-safe; skips prompts for items in allow list
+        return "acceptEdits"  # bypassPermissions rejected under uid 0; hook layer carries trust
     return "bypassPermissions"
 
 
