@@ -102,28 +102,41 @@ def trust_for(workspace: str) -> bool:
 
 
 def permission_mode_for(workspace: str) -> str:
-    """Map trust=on/off to claude's `--permission-mode` value.
+    """Map trust=on/off → claude's `--permission-mode`, runtime-aware.
 
-    trust=on  → `bypassPermissions`  — claude skips its L1 permission
-                check entirely. Catches the edge cases that the global
-                allow list couldn't (GH claude-code#20449's
-                file-modifying Bash quirks, hardcoded protections on
-                ~/.claude/ writes, etc.). Requires uid != 0 — claude
-                CLI rejects bypassPermissions under root since late-
-                2026. See deploy/INSTALL.md §9a for the non-root
-                migration that makes this safe.
-    trust=off → `acceptEdits`        — default mode. Edit/Write are
-                auto-allowed; Bash/WebFetch hit L1 (which sync_global_-
-                allow_rules pre-populates so they pass), then fire the
-                PreToolUse hook → backend → PWA approval queue.
+    trust=off → `acceptEdits` always. Edit/Write auto-allowed; Bash /
+                WebFetch hit L1 (sync_global_allow_rules planted the
+                allow list so they pass), then fire PreToolUse hook
+                → backend → PWA approval queue.
+    trust=on  → depends on the backend's effective uid:
+                  uid != 0 (ccw)  → `bypassPermissions` — claude
+                                    skips L1 entirely. Catches the
+                                    edge cases the global allow list
+                                    couldn't (GH claude-code#20449
+                                    Bash quirks, ~/.claude/ writes,
+                                    etc.).
+                  uid == 0 (root) → falls back to `acceptEdits`,
+                                    because claude CLI refuses
+                                    bypassPermissions under root.
+                                    trust=on still works via global
+                                    allow list + auto-approving hook,
+                                    just with the edge-case gaps.
 
-    Pre-history (before 2026-05-15): backend ran as root, so this
-    function had to return "acceptEdits" unconditionally and trust=on
-    was implemented entirely at the hook layer. After the
-    migrate-grant-acl.sh / migrate-to-non-root.sh switch to User=ccw,
-    bypassPermissions works and is the cleaner trust=on implementation.
+    Runtime detection means the SAME code works in either deployment
+    mode: cf6d400 / 902b9ef migration to User=ccw, or a future rollback
+    to User=root. No hardcoded assumption about which user the
+    backend runs as. If you `systemctl edit cc-workflow` to flip User=
+    back to root and restart, this function notices and degrades
+    gracefully on the next /run.
     """
-    return "bypassPermissions" if trust_for(workspace) else "acceptEdits"
+    if not trust_for(workspace):
+        return "acceptEdits"
+    # trust=on path. Check uid at call time (NOT at module import) so
+    # systemd unit changes take effect on next restart without needing
+    # a code change here.
+    if os.geteuid() == 0:
+        return "acceptEdits"  # safe fallback; hook + L1 allow list still cover most cases
+    return "bypassPermissions"
 
 
 # ---- global claude settings sync ----------------------------------------
