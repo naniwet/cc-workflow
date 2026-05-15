@@ -177,18 +177,9 @@ main {
 /* ============================================================================
  *  Workspaces grid — used ONLY by the mobile carousel detail view now.
  *  PC overview uses .ws-layout > .ws-row (row-based, defined further down).
- *  The desktop / tablet @media rules below are dead in practice (PC takes
- *  the .ws-layout path, mobile takes carousel) but kept as harmless
- *  fallbacks for the brief pre-JS render moment.
+ *  Layout rules below cover PC (.ws-row containers in renderDesktopOverview)
+ *  and the mobile single-card detail view (.ws-mobile-body).
  * ============================================================================ */
-.ws-grid {
-  display: grid;
-  gap: var(--space-3);
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-@media (max-width: 1100px) { .ws-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 600px)  { .ws-grid { grid-template-columns: 1fr; } }
-
 .ws-col {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -1487,28 +1478,34 @@ pre {
 }
 
 /* ============================================================================
- *  Bottom nav + dot indicator — desktop hides both
+ *  Bottom nav — desktop hides
  * ============================================================================ */
 .bottom-nav { display: none; }
-.ws-dots    { display: none; }
 
 /* ============================================================================
- *  Mobile (≤ 768px) — carousel + bottom-nav + sticky chat input
+ *  Mobile (≤ 768px) — bottom-nav + sticky chat input
  *
  *  Layout on phone:
  *      ┌───────────────┐
  *      │  topbar       │ ← brand + status only (top tabs hidden)
- *      │               │
+ *      │               │     (hidden entirely on ws-detail page via :has())
  *      │  Workspaces   │
+ *      │  [‹] name [›] │ ← ws-mobile-nav (only on single-ws detail)
  *      │  ┌─────────┐  │
- *      │  │ ws-col  │← scroll-snap; flick L/R between workspaces
- *      │  │  …      │  │
- *      │  │ [textarea Run] │ ← sticky at column bottom (= viewport bottom)
+ *      │  │ ws-col  │  │
+ *      │  │ [textarea Run] │
  *      │  └─────────┘  │
- *      │  ◯ ◉ ◯ ◯      │ ← dots
  *      ├───────────────┤
- *      │ ⊞    ☑         │ ← bottom-nav
+ *      │ ⊞    ☑    ⊙   │ ← bottom-nav
  *      └───────────────┘
+ *
+ *  History note (2026-05-15): The mobile single-ws detail was a
+ *  horizontal scroll-snap carousel with bottom dots; replaced with the
+ *  explicit [‹][›] arrows above. Removed in this commit:
+ *    - .ws-grid (flex/scroll-snap container)
+ *    - .ws-dots / .ws-dot (dot indicators)
+ *    - setupCarousel() + IntersectionObserver in app.js
+ *    - carouselScroll snapshot/restore plumbing
  * ============================================================================ */
 @media (max-width: 768px) {
 
@@ -1525,60 +1522,13 @@ pre {
   }
   h1 { font-size: var(--text-h3); margin: var(--space-2) 0 var(--space-3); }
 
-  /* Workspaces grid → horizontal carousel with native scroll-snap.
-     CSS-only mechanism — no touch-event JS, browser handles momentum + snap. */
-  .ws-grid {
-    display: flex;
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    margin: 0 calc(-1 * var(--space-3));    /* eat main's padding edge-to-edge */
-    padding: 0 var(--space-3);
-    gap: var(--space-3);
-    /* Fixed height: viewport minus topbar (~50) + h1 row (~50) + dots (~30) +
-       bottom-nav (~64) + padding (~24). dvh respects iOS dynamic toolbar. */
-    height: calc(100dvh - 220px);
-  }
-  .ws-grid::-webkit-scrollbar { display: none; }
-
-  .ws-col {
-    flex: 0 0 calc(100vw - var(--space-6));
-    min-width: calc(100vw - var(--space-6));
-    scroll-snap-align: center;
-    scroll-snap-stop: always;
-    height: 100%;
-    min-height: 0;                          /* let timeline flex shrink properly */
-  }
-
-  /* Inside a fixed-height column: timeline grows to fill, form pinned at bottom */
+  /* On mobile-detail (.ws-mobile-body), the single workspace card needs
+   * the same flex-shrinking timeline rules the desktop column has. */
   .ws-timeline {
     flex: 1 1 0;
     max-height: none;                       /* override the 360px desktop cap */
     min-height: 0;
   }
-
-  /* Dots — one per workspace, active widens into a pill */
-  .ws-dots {
-    display: flex;
-    justify-content: center;
-    gap: var(--space-2);
-    padding: var(--space-3) 0 var(--space-1);
-  }
-  .ws-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: var(--radius-full);
-    background: var(--border-strong);
-    border: none;
-    cursor: pointer;
-    padding: 0;
-    transition: width var(--t-base), background var(--t-base);
-  }
-  .ws-dot.active { background: var(--accent-blue); width: 22px; }
-  .ws-dot:focus-visible { outline: 2px solid var(--accent-blue-faint); outline-offset: 2px; }
 
   /* Bottom nav — fixed, thumb-reach, safe-area-aware */
   .bottom-nav {
@@ -1610,10 +1560,9 @@ pre {
   .bottom-tab svg { width: 22px; height: 22px; display: block; }
 
   /* Larger tap targets — minimum 44px height for inputs / buttons */
-  button, .provider-inline, .ws-dot, .bottom-tab, .add-form > summary {
+  button, .provider-inline, .bottom-tab, .add-form > summary {
     min-height: 44px;
   }
-  .ws-dot { min-height: 7px; }              /* dots stay small visually but tap area is wider via padding */
 
   /* Slightly larger base text on mobile so reading isn't strenuous */
   body { font-size: var(--text-md); }

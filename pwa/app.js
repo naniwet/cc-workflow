@@ -414,11 +414,9 @@ const runDetailCache = {};                          // id → row (status=done/f
 const drafts = {};                                  // key: form-id, val: name → value
 const detailsOpen = {};                             // key: details-id, val: bool
 const timelineScroll = {};                          // key: ws name → {scrollTop, atBottom}
-const carouselScroll = { left: 0 };                 // mobile carousel scrollLeft
-
-// IntersectionObserver for the mobile workspace carousel — disconnect+rebuild
-// on every renderWorkspacesView so it's bound to the live DOM.
-let _carouselObserver = null;
+// (Mobile carousel + IntersectionObserver were removed 2026-05-15;
+// replaced by explicit header [‹][›] arrow navigation. See
+// renderMobileWorkspaceDetail.)
 
 // PC row-based layout. Persisted as localStorage['ws-layout'] — a 2D
 // array of workspace names, one inner array per row. e.g.
@@ -552,15 +550,6 @@ function snapshotDrafts() {
       atBottom: Math.abs(t.scrollHeight - t.clientHeight - t.scrollTop) < 40,
     };
   }
-  // Mobile carousel: which workspace is currently snapped into view.
-  // Capture scrollLeft UNCONDITIONALLY (including 0). The earlier `> 0`
-  // guard had a bug: scrolling LEFT back to the first card resets
-  // scrollLeft to 0, this branch skipped saving it, restoreDrafts then
-  // wrote back the LAST positive value (e.g. card-2's 800px) — so the
-  // user got yanked back to whichever card was last centered. Now any
-  // scroll position survives the next polling re-render.
-  const grid = document.querySelector('.ws-grid');
-  if (grid) carouselScroll.left = grid.scrollLeft;
 }
 
 function restoreDrafts() {
@@ -591,14 +580,6 @@ function restoreDrafts() {
       t.scrollTop = saved.scrollTop;
     }
   }
-  // Mobile carousel: restore which workspace was in view. Without this,
-  // every 3s polling cycle would snap the user back to workspace #1.
-  // Restore unconditionally. carouselScroll.left=0 IS a valid value
-  // (means "first card"), the earlier truthy-check skipped it and let
-  // the freshly-rebuilt grid stay at its default scrollLeft=0 — which
-  // happened to look correct only when the user was already on card 0.
-  const grid = document.querySelector('.ws-grid');
-  if (grid) grid.scrollLeft = carouselScroll.left;
 }
 
 function clearDraft(formId) {
@@ -1237,7 +1218,6 @@ function bindOverviewHandlers() {
   const newWsForm = $('view').querySelector('form[data-form-id="new-ws"]');
   newWsForm?.addEventListener('submit', onAddWorkspace);
   bindWorkspaceColHandlers($('view'));
-  setupCarousel();
   setupDragReorder();
 }
 
@@ -1427,13 +1407,11 @@ function _providerRadioRowHtml(name, value, label, selected) {
 //     horizontal midpoint
 // HTML5 drag API does the heavy lifting (momentum, drag image, etc).
 function setupDragReorder() {
-  // Bind from #view directly — PC overview puts .ws-col under .ws-layout
-  // > .ws-row, while the mobile-detail carousel puts them under .ws-grid.
-  // Earlier this function only queried .ws-grid, so PC card-drop handlers
-  // never got attached (only the row-gap handlers, bound elsewhere). That
-  // made card-to-card dragging visually start but drop with no effect.
-  // .ws-drag-handle is only emitted in non-detail mode so the handle
-  // selector naturally skips mobile carousel.
+  // Bind from #view directly — PC overview puts .ws-col under
+  // .ws-layout > .ws-row. (Mobile single-ws detail also has a .ws-col
+  // but inside .ws-mobile-body, where drag is irrelevant because
+  // there's only one card; the .ws-drag-handle is emitted only in
+  // non-detail mode, so handle binding naturally skips it.)
   for (const col of $('view').querySelectorAll('.ws-col')) {
     col.addEventListener('dragover', onColDragOver);
     col.addEventListener('dragleave', onColDragLeave);
@@ -1576,44 +1554,10 @@ function onRowGapDrop(e) {
   render();
 }
 
-// Wire up the mobile carousel: each .ws-col is a scroll-snap target inside
-// .ws-grid. IntersectionObserver tracks which column is centered; clicking
-// a dot scrolls to that column. On desktop where .ws-grid is `display: grid`
-// (not a scroll container), all columns intersect 100% — the observer fires
-// once on init but the dots are CSS `display: none` so the no-op is invisible.
-function setupCarousel() {
-  if (_carouselObserver) {
-    _carouselObserver.disconnect();
-    _carouselObserver = null;
-  }
-  const grid = $('view').querySelector('.ws-grid');
-  const dots = [...$('view').querySelectorAll('.ws-dot')];
-  if (!grid || dots.length === 0) return;
-
-  const cols = [...grid.children];
-
-  _carouselObserver = new IntersectionObserver((entries) => {
-    let bestIdx = -1, bestRatio = 0;
-    for (const e of entries) {
-      const idx = cols.indexOf(e.target);
-      if (idx < 0) continue;
-      if (e.intersectionRatio > bestRatio) {
-        bestRatio = e.intersectionRatio;
-        bestIdx = idx;
-      }
-    }
-    if (bestIdx >= 0) {
-      dots.forEach((d, i) => d.classList.toggle('active', i === bestIdx));
-    }
-  }, { root: grid, threshold: [0.25, 0.5, 0.75, 1] });
-
-  cols.forEach((c) => _carouselObserver.observe(c));
-  dots.forEach((d, i) => {
-    d.addEventListener('click', () => {
-      cols[i]?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-    });
-  });
-}
+// setupCarousel() + _carouselObserver removed 2026-05-15 alongside the
+// mobile carousel itself. Replaced by explicit [‹][›] arrows in
+// renderMobileWorkspaceDetail. If the carousel ever comes back, git
+// history has the previous implementation.
 
 // Effective per-workspace trust (mirrors backend ws_settings.trust_for):
 //   explicit setting > config.toml default_trust > false
@@ -2181,9 +2125,10 @@ async function onTriggerSubmit(e) {
 // Drilled-into-one-workspace mode. Renders differently on PC vs mobile:
 //   PC      : single .ws-col centered, wider, more history rows (30 vs 10).
 //             Trigger form is still at the bottom of the column.
-//   Mobile  : the full carousel (all workspaces), scrolled to <name> on
-//             fresh navigation. Swipe between siblings. Pre-existing
-//             setupCarousel / dot-indicator wiring all applies.
+//   Mobile  : header arrow bar [‹] <name> [›] + the same single .ws-col
+//             below. Arrows replaceState to the prev/next workspace (no
+//             history pollution). Replaced the earlier swipe-carousel
+//             on 2026-05-15.
 function renderWorkspaceDetailView(startName, opts = {}) {
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
   if (isMobile) {
