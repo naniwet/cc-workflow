@@ -710,8 +710,10 @@ body.is-dragging .ws-col:not(.dragging) {
   margin-left: var(--space-2);
 }
 .run-live-tail {
-  max-height: 300px;
-  overflow-y: auto;
+  /* No max-height / inner scroll — moved to the bottom of run-detail
+   * (2026-05-15), let the page scroll instead. Two-finger inner scroll
+   * on mobile + box-within-box scroll on PC both got annoying once Live
+   * output started containing 100KB Write tool_use payloads. */
   font-size: var(--text-xs);
   line-height: var(--lh-normal);
   background: var(--bg-canvas);

@@ -2261,7 +2261,6 @@ function paintRunDetail(id, row) {
       ${startedAt ? ` · ${esc(startedAt)}` : ''}
     </div>
     ${cancelBtn ? `<div class="run-actions">${cancelBtn}</div>` : ''}
-    ${liveBlock}
     <h3>Prompt</h3>
     <pre>${esc(row.prompt || '')}</pre>
     <h3>Output</h3>
@@ -2270,6 +2269,7 @@ function paintRunDetail(id, row) {
       <summary>Tool approvals <span class="muted" id="run-approvals-count">(loading…)</span></summary>
       <div class="run-approvals-list" id="run-approvals-list"></div>
     </details>
+    ${liveBlock}
   `;
   // Always populate the approvals audit panel — even for terminal runs,
   // since under trust=on the user wants to see what tool calls fired
