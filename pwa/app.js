@@ -784,7 +784,13 @@ function renderMobileOverview() {
     `;
   }).join('');
 
-  const newWsProviderOptions = _providerOptionsHtml('', true);
+  // Same picker component as the PC overview variant uses — was
+  // accidentally declared as `newWsProviderOptions` after the
+  // <select>→radio-list refactor, leaving the `${newWsProviderPicker}`
+  // template reference below dangling. Surfaced as "fetch failed:
+  // newWsProviderPicker is not defined" on mobile (this function is the
+  // mobile renderWorkspacesView path; PC uses renderDesktopOverview).
+  const newWsProviderPicker = _newWsProviderPickerHtml();
 
   $('view').innerHTML = `
     <h1>Workspaces</h1>
