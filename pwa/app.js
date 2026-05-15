@@ -297,6 +297,19 @@ let lastData = {
   roundtables: [],                      // list summaries from GET /roundtables
 };
 
+// Module-level hash of the last rendered lastData. Skip render() when
+// the structural snapshot is unchanged — `elapsed_s` of running runs
+// ticks every 3s but isn't a real state event (the "Xs ago" indicator
+// in Live output already conveys liveness), so we strip it from the
+// hash. Real events (new run, status flip, new pending approval, new
+// cron loop, etc.) all show up as non-trivial diffs and DO trigger
+// render. Net effect: full-view innerHTML rewrites are now event-
+// driven, not 3-second-periodic. Navigation paints the new view via
+// the hashchange → render listener (no hash reset needed: lastData
+// is unchanged at the navigation moment, so subsequent polls also
+// skip — the new view stays painted as drawn).
+let _lastDataHash = '';
+
 async function refreshAll() {
   try {
     const [ws, sess, lp, providers, cfg, approvals, roundtables] = await Promise.all([
@@ -336,6 +349,16 @@ async function refreshAll() {
     };
     clearError();
     $('status').textContent = '· ' + new Date().toLocaleTimeString();
+    // Skip re-render when nothing meaningful changed. `elapsed_s` is
+    // replaced with 0 so the running-run timer alone doesn't trip the
+    // diff — see _lastDataHash comment above. JSON.stringify with a
+    // replacer is O(n) on lastData (≈10 small objects in practice);
+    // measured negligible vs. the full render() pass we're skipping.
+    const hash = JSON.stringify(lastData, (k, v) =>
+      k === 'elapsed_s' ? 0 : v,
+    );
+    if (hash === _lastDataHash) return;
+    _lastDataHash = hash;
     render();
   } catch (e) {
     // Swallow the "not authenticated; redirecting…" toast — the user is
