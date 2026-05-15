@@ -18,7 +18,7 @@
 // Bump VERSION on breaking SW changes so the activate handler purges
 // any older cache buckets.
 
-const VERSION = 'cc-v30';
+const VERSION = 'cc-v31';
 const SHELL = [
   '/pwa/',
   '/pwa/index.html',
@@ -50,8 +50,17 @@ self.addEventListener('fetch', (event) => {
 
   // Network-first: try server, refresh cache on success, fall back to
   // cache only when the network fails (offline / server down).
+  //
+  // `cache: 'no-store'` forces the fetch to bypass the BROWSER HTTP
+  // cache. Without this, nginx's `expires 1h` on /pwa/ would let the
+  // browser serve a stale app.js to the SW's "network-first" call —
+  // turning network-first into "cache-first under the hood". Bit us
+  // after HTTPS migration: stale app.js (without the
+  // newWsProviderPicker fix) → renderMobileOverview ReferenceError →
+  // "Loading…" stuck forever. The SW's own caches.open(VERSION) is
+  // the only offline fallback we want.
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: 'no-store' })
       .then((resp) => {
         if (resp.ok && resp.status === 200) {
           const copy = resp.clone();
