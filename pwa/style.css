@@ -1971,10 +1971,16 @@ pre {
    collapse another — but the JS re-renders on selection, which naturally
    collapses everything (the new DOM defaults to closed). Fine UX:
    "click → pick → done" without a stale half-open row sitting around. */
+/* Aligned visually with .form-picker (border-strong / bg-canvas /
+ * text-md / shared chevron + hover + [open] rules). Only the SUMMARY
+ * LAYOUT differs — role pickers show "{role name} ... {current model}"
+ * (two spans), whereas .form-picker shows just "{current label}".
+ * Same chrome, different content = "one dropdown shape, used in
+ * multiple form positions". */
 .rt-role-picker {
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: var(--bg-surface);
+  background: var(--bg-canvas);
   overflow: hidden;
 }
 .rt-role-picker > summary {
@@ -1986,19 +1992,23 @@ pre {
   cursor: pointer;
   list-style: none;
   user-select: none;
-  font-size: var(--text-sm);
+  color: var(--text-primary);
+  font-size: var(--text-md);
 }
 .rt-role-picker > summary::-webkit-details-marker { display: none; }
 .rt-role-picker > summary::after {
   content: '▾';
   color: var(--text-tertiary);
   font-size: 10px;
-  margin-left: var(--space-1);
+  flex: 0 0 auto;
   transition: transform var(--t-base);
 }
 .rt-role-picker[open] > summary::after { transform: rotate(180deg); }
 .rt-role-picker > summary:hover { background: var(--bg-elevated); }
-.rt-role-picker[open] > summary { background: var(--bg-elevated); }
+.rt-role-picker[open] > summary {
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
 
 .rt-role-name {
   flex: 0 0 auto;
