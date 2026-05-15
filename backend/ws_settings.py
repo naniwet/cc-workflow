@@ -102,25 +102,28 @@ def trust_for(workspace: str) -> bool:
 
 
 def permission_mode_for(workspace: str) -> str:
-    """Always return 'acceptEdits' — never 'bypassPermissions'.
+    """Map trust=on/off to claude's `--permission-mode` value.
 
-    Why not respect trust here:
-    Claude CLI's 'bypassPermissions' refuses to run as uid 0 (root) since
-    late-2026, breaking trust=on workspaces under the standard root-mode
-    backend deployment. We work around it by populating
-    ~/.claude/settings.json's `permissions.allow` list (see
-    sync_global_allow_rules below) — that's claude's native way to
-    declare "auto-approve this tool" and does NOT trigger the root check.
+    trust=on  → `bypassPermissions`  — claude skips its L1 permission
+                check entirely. Catches the edge cases that the global
+                allow list couldn't (GH claude-code#20449's
+                file-modifying Bash quirks, hardcoded protections on
+                ~/.claude/ writes, etc.). Requires uid != 0 — claude
+                CLI rejects bypassPermissions under root since late-
+                2026. See deploy/INSTALL.md §9a for the non-root
+                migration that makes this safe.
+    trust=off → `acceptEdits`        — default mode. Edit/Write are
+                auto-allowed; Bash/WebFetch hit L1 (which sync_global_-
+                allow_rules pre-populates so they pass), then fire the
+                PreToolUse hook → backend → PWA approval queue.
 
-    The PreToolUse hook (cc-approve-hook.sh) is still wired in via
-    ~/.claude/settings.json and handles the trust=off case: it forwards
-    Bash/WebFetch tool calls to the backend's approval queue so the PWA
-    can show [Approve]/[Deny] buttons.
-
-    Function name kept for back-compat; semantically it's now
-    "always acceptEdits — trust is decided by the hook layer".
+    Pre-history (before 2026-05-15): backend ran as root, so this
+    function had to return "acceptEdits" unconditionally and trust=on
+    was implemented entirely at the hook layer. After the
+    migrate-grant-acl.sh / migrate-to-non-root.sh switch to User=ccw,
+    bypassPermissions works and is the cleaner trust=on implementation.
     """
-    return "acceptEdits"
+    return "bypassPermissions" if trust_for(workspace) else "acceptEdits"
 
 
 # ---- global claude settings sync ----------------------------------------
