@@ -74,6 +74,14 @@ app = FastAPI(title="cc-workflow", version="0.1.0")
 def _on_startup() -> None:
     db.init()
     _reap_orphan_runs()
+    # Backfill .claude/settings.local.json for every existing workspace
+    # from current trust state. Makes the new trust→file mechanism
+    # immediately reflect what's already in workspaces.json without
+    # waiting for users to re-toggle each one.
+    try:
+        ws_settings.sync_all_trust_to_claude_settings()
+    except Exception:    # noqa: BLE001
+        pass
     _verify_agent_run_capabilities()
 
 
@@ -470,6 +478,14 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
     else:
         data.pop(name, None)
     ws_settings.save(data)
+    # If trust changed, mirror it into the workspace's claude project
+    # settings file so claude actually picks up the new policy on the
+    # NEXT agent-run (existing in-flight runs aren't affected).
+    if "trust" in sent:
+        try:
+            ws_settings.sync_trust_to_claude_settings(name)
+        except Exception:    # noqa: BLE001 — best effort; surfaces on next run if broken
+            pass
     return current
 
 
@@ -728,6 +744,14 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
     # the current global default into the workspace.
     data[req.name] = settings
     ws_settings.save(data)
+    # Initialize the project's claude settings.local.json to reflect
+    # the trust state we just settled on. If trust=on (or trust=None
+    # and the global default is on), this writes allow=["*"]; otherwise
+    # no-op.
+    try:
+        ws_settings.sync_trust_to_claude_settings(req.name)
+    except Exception:    # noqa: BLE001
+        pass
 
     return {
         "ok": True, "name": req.name, "path": str(target),
