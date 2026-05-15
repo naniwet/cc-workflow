@@ -2266,9 +2266,107 @@ function paintRunDetail(id, row) {
     <pre>${esc(row.prompt || '')}</pre>
     <h3>Output</h3>
     <div class="md-output">${row.output ? renderMarkdown(row.output) : '<p class="muted">(empty)</p>'}</div>
+    <details class="run-approvals" id="run-approvals">
+      <summary>Tool approvals <span class="muted" id="run-approvals-count">(loading…)</span></summary>
+      <div class="run-approvals-list" id="run-approvals-list"></div>
+    </details>
   `;
+  // Always populate the approvals audit panel — even for terminal runs,
+  // since under trust=on the user wants to see what tool calls fired
+  // (they were auto-approved without a prompt). For running runs the
+  // live poll re-fetches so newly-fired hooks appear during the run.
+  _loadRunApprovals(id);
   if (status === 'running' && id) _startLiveTailPoll(id);
   else _stopLiveTailPoll();
+}
+
+// Fetch + render the run's audit trail. Called on detail-page paint and
+// re-called from the live poll loop so trust=on auto-approved entries
+// trickle in as the hook fires.
+async function _loadRunApprovals(runId) {
+  let entries;
+  try {
+    entries = await api(`/runs/${encodeURIComponent(runId)}/approvals`);
+  } catch (err) {
+    // Detail page may have been replaced — bail silently.
+    return;
+  }
+  const list = $('view').querySelector('#run-approvals-list');
+  const count = $('view').querySelector('#run-approvals-count');
+  if (!list || !count) return;
+  if (!entries || entries.length === 0) {
+    list.innerHTML = '<p class="muted">No tool calls intercepted yet.</p>';
+    count.textContent = '(0)';
+    return;
+  }
+  count.textContent = `(${entries.length})`;
+  list.innerHTML = entries.map(_renderApprovalEntry).join('');
+}
+
+// Render one Approval audit entry into a single line. Status icons:
+//   ✓ approved / auto_approved  — green
+//   ✗ denied                     — red
+//   ⌛ expired                    — amber
+//   ⏳ pending                    — amber (still in-flight)
+function _renderApprovalEntry(a) {
+  const ICON = {
+    approved:      ['✓', 'a-ok'],
+    auto_approved: ['✓', 'a-auto'],
+    denied:        ['✗', 'a-deny'],
+    expired:       ['⌛', 'a-warn'],
+    pending:       ['⏳', 'a-warn'],
+  };
+  const [icon, cls] = ICON[a.status] || ['•', 'a-unknown'];
+  const ts = a.decided_at || a.created_at;
+  const when = ts ? new Date(ts * 1000).toLocaleTimeString() : '';
+  const label = a.status === 'auto_approved' ? 'auto-approved' : a.status;
+  const summary = _approvalToolSummary(a.tool_name, a.tool_input || {});
+  return `
+    <div class="a-row ${cls}">
+      <span class="a-icon">${icon}</span>
+      <span class="a-label">${esc(label)}</span>
+      <code class="a-tool">${esc(a.tool_name)}(${esc(summary)})</code>
+      <span class="a-time muted">${esc(when)}</span>
+    </div>
+  `;
+}
+
+// Pull the "key" arg out of tool_input so the audit row reads like
+// "Bash(npx vitest run)" instead of dumping the whole JSON. Falls back
+// to a stringified preview for unknown tools.
+function _approvalToolSummary(name, input) {
+  if (!input || typeof input !== 'object') return '';
+  // Hand-picked priority: each tool has one or two args that capture
+  // intent. Order matters — Bash.description before Bash.command would
+  // give a less useful preview.
+  const FIELD = {
+    Bash: 'command',
+    BashOutput: 'bash_id',
+    KillShell: 'shell_id',
+    Read: 'file_path',
+    Edit: 'file_path',
+    Write: 'file_path',
+    NotebookEdit: 'notebook_path',
+    Glob: 'pattern',
+    Grep: 'pattern',
+    WebFetch: 'url',
+    WebSearch: 'query',
+    SlashCommand: 'command',
+    Task: 'description',
+  };
+  const key = FIELD[name];
+  let v = key && input[key];
+  if (v == null) {
+    // Unknown tool — pick the first string-ish field.
+    const first = Object.values(input).find((x) => typeof x === 'string');
+    v = first || '';
+  }
+  v = String(v);
+  // Tool inputs can be paragraph-long (Task descriptions, multi-line
+  // bash). Trim aggressively for the audit row — full payload is
+  // recoverable from the backend log if needed.
+  if (v.length > 80) v = v.slice(0, 77) + '…';
+  return v.replace(/\s+/g, ' ');
 }
 
 // Live output polling — runs only on the detail page of a 'running' run.
@@ -2329,6 +2427,9 @@ async function _pollLiveTail(runId) {
   else if (since > 30) color = 'var(--accent-amber)';
   hint.style.color = color;
   hint.textContent = `· last update ${since}s ago · ${data.size} bytes`;
+  // Audit trail refresh — new tool-calls fire continuously during a
+  // running run. Cheap (in-memory ring buffer, returns ≤100 entries).
+  _loadRunApprovals(runId);
 }
 
 // Turn one raw stream-json line into a human-readable string. Returns

@@ -24,10 +24,19 @@ BACKEND="${CCW_BACKEND_URL:-http://127.0.0.1:8765}"
 # server-side wait_for_decision agrees on when to expire.
 TIMEOUT=300
 
-# --- short-circuit for trusted workspaces ---
-if [[ "${CCW_TRUST:-false}" == "true" ]]; then
-    exit 0
-fi
+# We used to short-circuit here for trust=on workspaces (exit 0 without
+# telling backend). That made trust=on tool calls completely invisible to
+# the PWA. Now we ALWAYS round-trip through backend: the backend sees
+# CCW_TRUST=true and auto-decides the approval as `auto_approved`,
+# returning ~instantly so claude doesn't block, but recording the entry
+# in the audit ring so the PWA can show "auto-approved Bash(...)" in
+# the run detail's Approvals panel.
+#
+# Result: trust=on remains zero-friction, but tool-call usage is now
+# visible after the fact. If anyone ever wires up a circuit-breaker
+# case that DOES route through this hook even under trust=on, the user
+# would see it as a real pending approval (auto-approved would only
+# fire if backend actually marks it that way).
 
 # --- parse PreToolUse JSON from stdin ---
 # Claude sends: { "session_id", "transcript_path", "tool_name",
@@ -46,12 +55,20 @@ if [[ -z "$TOOL_NAME" ]]; then
 fi
 
 # --- ask backend ---
+# Include CCW_TRUST so backend can decide whether to auto-approve.
+# Bash booleans are "true" / "false" strings; jq --argjson turns the
+# string into a real JSON boolean for the body.
+TRUST_FLAG="${CCW_TRUST:-false}"
+if [[ "$TRUST_FLAG" != "true" && "$TRUST_FLAG" != "false" ]]; then
+    TRUST_FLAG="false"
+fi
 BODY="$(jq -nc \
     --arg rid "${CCW_RUN_ID:-unknown}" \
     --arg ws  "${CCW_WORKSPACE:-unknown}" \
     --arg tn  "$TOOL_NAME" \
     --argjson ti "$TOOL_INPUT_JSON" \
-    '{run_id:$rid, workspace:$ws, tool_name:$tn, tool_input:$ti}')"
+    --argjson tr "$TRUST_FLAG" \
+    '{run_id:$rid, workspace:$ws, tool_name:$tn, tool_input:$ti, trust:$tr}')"
 
 AID="$(curl -fsS -X POST "$BACKEND/approvals/internal/pending" \
         -H 'Content-Type: application/json' -d "$BODY" \
@@ -71,7 +88,9 @@ STATUS="$(curl -fsS --max-time $((TIMEOUT + 10)) \
           | jq -r '.status // empty')"
 
 case "$STATUS" in
-    approved)
+    approved|auto_approved)
+        # auto_approved = backend saw trust=on and decided instantly.
+        # Behaviorally identical to a manual approve.
         exit 0
         ;;
     denied)

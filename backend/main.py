@@ -31,6 +31,7 @@ Routes:
   POST   /cron/parse-nl                        session
   GET    /approvals/pending                    session
   POST   /approvals/{id}/decision              session
+  GET    /runs/{run_id}/approvals              session   (read-only audit, incl. auto_approved)
   POST   /approvals/internal/pending           localhost-only (claude hook creates entry)
   GET    /approvals/internal/{id}/wait         localhost-only (claude hook long-polls)
   POST   /im/feishu/webhook                    Feishu signature (NOT session)
@@ -1163,6 +1164,10 @@ class PendingApprovalRequest(BaseModel):
     workspace: str = Field(..., min_length=1, max_length=128)
     tool_name: str = Field(..., min_length=1, max_length=64)
     tool_input: dict = Field(default_factory=dict)
+    # When the run was submitted with trust=on, backend auto-approves the
+    # request at creation so the hook returns ~instantly. Default false so
+    # older hook versions still get the manual-prompt behavior.
+    trust: bool = False
 
 
 @app.post("/approvals/internal/pending")
@@ -1172,6 +1177,7 @@ def post_pending_approval(req: PendingApprovalRequest) -> dict:
         workspace=req.workspace,
         tool_name=req.tool_name,
         tool_input=req.tool_input,
+        trust=req.trust,
     )
     return {"approval_id": aid}
 
@@ -1201,6 +1207,16 @@ def post_approval_decision(approval_id: str, req: DecisionRequest) -> dict:
     if a is None:
         raise HTTPException(404, {"error": "approval not found"})
     return {"ok": True, "approval_id": approval_id, "status": a.status}
+
+
+@app.get("/runs/{run_id}/approvals", dependencies=PROTECT)
+def list_run_approvals(run_id: str) -> list[dict]:
+    """Read-only audit trail for one run — every tool-call PreToolUse hook
+    that fired during this run, including auto-approved ones under
+    trust=on. PWA renders this in the run-detail "Approvals" panel so
+    the user can see what claude actually did even when no approval
+    prompt was surfaced."""
+    return [a.public() for a in approvals.list_audit_for_run(run_id)]
 
 
 # ---------- Feishu webhook (T+1.5d — P0-4) ----------

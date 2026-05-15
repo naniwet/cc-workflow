@@ -817,6 +817,78 @@ body.is-dragging .ws-col:not(.dragging) {
 }
 
 /* ============================================================================
+ *  Run-detail "Tool approvals" audit panel — collapsible read-only list
+ *  of every PreToolUse hook firing for the run, including the trust=on
+ *  auto_approved entries that the user never had to click. The point of
+ *  this panel is *visibility*: under trust=on the .approval-pending
+ *  block (above) never appears, but the user still wants to know what
+ *  claude actually ran.
+ * ============================================================================ */
+.run-approvals {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0;
+}
+.run-approvals > summary {
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  list-style: none;
+}
+.run-approvals > summary::-webkit-details-marker { display: none; }
+.run-approvals > summary::before {
+  content: '▸ ';
+  display: inline-block;
+  margin-right: var(--space-1);
+  transition: transform 0.15s;
+}
+.run-approvals[open] > summary::before { transform: rotate(90deg); }
+.run-approvals-list {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.a-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug);
+  flex-wrap: wrap;
+}
+.a-row .a-icon { flex-shrink: 0; font-weight: 700; width: 1.2em; text-align: center; }
+.a-row .a-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.a-row .a-tool {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--bg-canvas);
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  word-break: break-all;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.a-row .a-time { font-size: var(--text-xs); flex-shrink: 0; }
+/* Color the icon + label per status — keeps the row scannable. */
+.a-row.a-ok    .a-icon, .a-row.a-ok    .a-label { color: var(--accent-green); }
+.a-row.a-auto  .a-icon, .a-row.a-auto  .a-label { color: var(--accent-green); opacity: 0.75; }
+.a-row.a-deny  .a-icon, .a-row.a-deny  .a-label { color: var(--accent-red); }
+.a-row.a-warn  .a-icon, .a-row.a-warn  .a-label { color: var(--accent-amber); }
+
+/* ============================================================================
  *  Trigger form (chat input at column bottom)
  * ============================================================================ */
 .ws-col .trigger-form {
