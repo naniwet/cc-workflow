@@ -338,6 +338,16 @@ def _handle_slash(cmd: str, rest: str, chat_id: str) -> Optional[dict]:
                 tip += f"\n当前默认: {current}"
             reply_to_chat(chat_id, tip)
             return {"ok": True, "slash": "use", "missing_arg": True}
+        if not _workspace_exists(ws):
+            # Refuse the bind — prevents the "you /use'd a workspace then
+            # someone (maybe even you) deleted it; now every message in
+            # this chat fails" scenario.
+            reply_to_chat(
+                chat_id,
+                f"找不到 workspace: {ws}\n"
+                f"先在 PWA → Workspaces → + New workspace 建一个,或 /ws 看现有列表。",
+            )
+            return {"ok": True, "slash": "use", "not_found": True}
         chats = _load_chat_ws()
         chats[chat_id] = {"workspace": ws}
         _save_chat_ws(chats)
@@ -353,8 +363,18 @@ def _handle_slash(cmd: str, rest: str, chat_id: str) -> Optional[dict]:
         chats = _load_chat_ws()
         chat_default = (chats.get(chat_id) or {}).get("workspace")
         global_default = _secrets().get("default_workspace") or "test-repo"
-        if chat_default:
+        if chat_default and _workspace_exists(chat_default):
             body = f"当前 workspace: {chat_default}\n(per-chat /use 设置;全局默认是 {global_default})"
+        elif chat_default:
+            # Bound workspace was deleted. Clean up the binding silently
+            # and tell the user what happened.
+            _clear_chat_workspace(chat_id)
+            body = (
+                f"⚠️ 之前 /use 绑定的 workspace `{chat_default}` 已被删除,"
+                f"已自动清除本聊天的绑定。\n"
+                f"当前回到全局默认: {global_default}\n"
+                f"重新指定: /use <existing-workspace-name>(/ws 看列表)"
+            )
         else:
             body = f"当前 workspace: {global_default}\n(全局默认 — /use <name> 改成本聊天专属)"
         reply_to_chat(chat_id, body)
@@ -650,10 +670,16 @@ def _resolve_default_workspace(chat_id: str) -> str:
     Same priority as _resolve_workspace, minus the [prefix] override
     (since /loops new doesn't accept a [prefix]) — i.e. chat /use'd
     default > [feishu].default_workspace > "test-repo".
+
+    Validates the chat-bound name against _workspace_exists; stale
+    binding (workspace deleted via PWA) auto-clears and falls
+    through to the global default.
     """
     chat_default = (_load_chat_ws().get(chat_id) or {}).get("workspace")
-    if chat_default:
+    if chat_default and _workspace_exists(chat_default):
         return chat_default
+    if chat_default:
+        _clear_chat_workspace(chat_id)
     return _secrets().get("default_workspace") or "test-repo"
 
 
@@ -804,6 +830,45 @@ def _save_chat_ws(data: dict) -> None:
     os.replace(tmp, _CHAT_WS_FILE)
 
 
+def _workspace_exists(name: str) -> bool:
+    """True if a workspace named `name` is still usable.
+
+    "Usable" = listed in workspaces.json AND has the on-disk git dir
+    that agent-run.sh will look for. Both checks matter because the
+    Feishu chat-binding (feishu_chats.json) survives backend restarts
+    and PWA deletes — so a chat's /use'd workspace can outlive the
+    workspace itself, and we want to detect that stale state before
+    submitting a doomed run.
+
+    Symptom this prevents (2026-05-15 in-field): user deletes a
+    workspace via PWA, then sends ANY message to the Feishu bot in
+    a chat that had /use'd that workspace. Without this check, every
+    message goes to a non-existent workspace, agent-run dies with
+    EX_USAGE, and the user sees a confusing "workspace not a git
+    repo: /root/workspaces/<deleted>" instead of "I'll use the
+    default workspace instead, you can /use <other> to rebind".
+    """
+    if not name:
+        return False
+    try:
+        from . import ws_settings
+        if name not in ws_settings.load():
+            return False
+    except Exception:    # noqa: BLE001 — defensive: never break Feishu over a config read
+        pass
+    return (config.WORKSPACES_DIR / name / ".git").is_dir()
+
+
+def _clear_chat_workspace(chat_id: str) -> None:
+    """Drop the chat's /use'd workspace binding. Called when we detect
+    the bound workspace was deleted out-of-band (from PWA). Next message
+    in this chat falls back to the global default."""
+    chats = _load_chat_ws()
+    if chat_id in chats:
+        chats.pop(chat_id, None)
+        _save_chat_ws(chats)
+
+
 def _resolve_workspace(chat_id: str, text: str) -> "tuple[str, str]":
     """Pick (workspace, prompt) using the 4-tier priority documented at the
     top of this module.
@@ -811,6 +876,12 @@ def _resolve_workspace(chat_id: str, text: str) -> "tuple[str, str]":
         2. /use'd default for this chat
         3. secrets.toml [feishu].default_workspace
         4. "test-repo" hard fallback
+
+    Tier 2 is validated against _workspace_exists: if the chat's
+    /use'd workspace was deleted from PWA out-of-band, fall through
+    to tier 3 + 4 instead of returning a name that agent-run will
+    immediately reject. The stale binding is auto-cleared so future
+    messages don't re-trigger the same check.
     """
     m = _PREFIX_RE.match(text)
     if m:
@@ -818,8 +889,11 @@ def _resolve_workspace(chat_id: str, text: str) -> "tuple[str, str]":
 
     if chat_id:
         chat_default = (_load_chat_ws().get(chat_id) or {}).get("workspace")
-        if chat_default:
+        if chat_default and _workspace_exists(chat_default):
             return chat_default, text
+        # Stale binding (workspace deleted from PWA). Drop it.
+        if chat_default:
+            _clear_chat_workspace(chat_id)
 
     return _secrets().get("default_workspace") or "test-repo", text
 
