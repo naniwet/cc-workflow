@@ -5,26 +5,31 @@ Target: Ubuntu 22.04 / 24.04 cloud server, single-user.
 Estimated time: 10 minutes (excluding LLM API key signups + Let's Encrypt
 DNS).
 
-> **Deployment model (2026-05-15 update).** The default install runs
-> everything as `root` under `/root/`. Earlier docs warned that
-> `trust=on` workspaces wouldn't work under root because Claude CLI
-> rejects `--dangerously-skip-permissions` for uid 0 — that's been
-> worked around: backend now plants a global
-> `~/.claude/settings.json#permissions.allow` list at startup so
-> claude's L1 permission check passes for every tool we know about,
-> and the PreToolUse hook (`cc-approve-hook`) reads `CCW_TRUST` env to
-> decide auto-approve vs. PWA prompt. So **root is fine**.
+> **Deployment model — root is the only recommended setup
+> (2026-05-15).** The backend runs as `root`, all data lives under
+> `/root/`. Trust=on works for ~95% of cases via:
+>   - `~/.claude/settings.json#permissions.allow` global list,
+>     planted at backend startup by `ws_settings.sync_global_-
+>     allow_rules`
+>   - PreToolUse hook (`cc-approve-hook`) reading `CCW_TRUST` env
+>     to either auto-approve or surface to the PWA queue
 >
-> One known edge case stays:
-> [claude-code#20449](https://github.com/anthropics/claude-code/issues/20449)
+> **Known limitation:** [claude-code#20449](https://github.com/anthropics/claude-code/issues/20449)
 > — some file-modifying Bash commands (mkdir / touch / cp / mv ...)
-> still prompt even with allow rules, because claude's permission
-> system doesn't inspect actual file paths touched by Bash. If this
-> bites you and you really want zero-prompt trust=on, switch to a
-> non-root deployment per [`MIGRATE-TO-NONROOT.md`](MIGRATE-TO-NONROOT.md)
-> — under non-root, `--permission-mode bypassPermissions` works and
-> bypasses L1 entirely. For 95% of users, root + global allow list +
-> the PreToolUse hook is enough.
+> still prompt despite allow rules, and writes inside `~/.claude/`
+> itself are hardcoded-blocked. When you hit one of these (rare,
+> e.g. installing a skill), SSH in and run the 2-line bash by hand.
+>
+> Non-root deployment paths exist
+> ([`scripts/migrate-grant-acl.sh`](../scripts/migrate-grant-acl.sh),
+> [`MIGRATE-TO-NONROOT.md`](MIGRATE-TO-NONROOT.md)) and are designed
+> to fix the above edge cases by unlocking `bypassPermissions`. BUT
+> field-testing showed both paths cause **backend instability**
+> (Feishu webhook stops responding, claude hangs at startup) on at
+> least one production setup — root cause not pinned. **Don't run
+> these unless the edge case is a real daily nuisance AND you have
+> time to debug + roll back.** Easy rollback recipe is at the top of
+> each migration script.
 
 ## 0. Prerequisites
 
@@ -349,30 +354,49 @@ systemctl restart cc-workflow        # picks up backend/* + triggers
 > and you should `sudo -u ccw git pull` so the working tree stays owned
 > by `ccw`. The systemd unit + nginx reload commands stay the same.
 
-## 9. (Plan B) Switching the backend to a non-root user
+## 9. (EXPERIMENTAL — known to break in some setups) Non-root deployment
 
-You generally **do not need this anymore.** The global-allow-list
-mechanism (§3.5) plus the PreToolUse hook make trust=on workspaces
-work under root for ~95% of tool calls. Run as root, save yourself the
-migration hassle.
+> ⚠️ **Heads-up before you read further.** Both migration paths below
+> are designed to unlock `--permission-mode bypassPermissions` (which
+> claude rejects under uid 0) for the trust=on edge cases. In theory
+> it's clean.
+>
+> In practice (field-tested 2026-05-15 on Ubuntu 24.04 +
+> alibaba ECS), the ACL variant (9a) caused these symptoms shortly
+> after `systemctl restart`:
+> - PWA-triggered runs hung indefinitely (stream-jsonl never written)
+> - Feishu webhook stopped responding
+> - claude binary itself was reachable from ccw (so it wasn't a
+>   PATH issue), but agent-run's invocation flow froze somewhere
+>
+> Rollback to `User=root` instantly restored everything. Root cause
+> wasn't pinned down — likely a subtle ACL-on-claude-internal-files
+> issue or a uvicorn-as-ccw IO behavior we didn't catch.
+>
+> **Don't run these unless** you've hit the trust=on edge case
+> repeatedly enough that SSH'ing in to fix is genuinely annoying,
+> AND you've taken a tarball backup, AND you have time to debug
+> + roll back. Each migration script has a rollback recipe at its
+> top.
+
+You generally **do not need this.** The global-allow-list mechanism
+(§3.5) plus the PreToolUse hook make trust=on workspaces work under
+root for ~95% of tool calls. Run as root and SSH for the rest.
 
 The remaining 5% is [claude-code#20449](https://github.com/anthropics/claude-code/issues/20449)
 — some file-modifying Bash commands (mkdir / touch / cp / mv ...)
-prompt even with allow rules. If that's a daily annoyance for you and
-you want a clean "trust=on means trust, period" UX, migrate to a
-dedicated `ccw` user. Under non-root, agent-run uses
-`--permission-mode bypassPermissions` which short-circuits L1 entirely.
+prompt even with allow rules. AND writes inside `~/.claude/` itself
+are hardcoded-blocked. For those, SSH in and run the 2 lines yourself.
 
-The full step-by-step migration plan (idempotent, with rollback) is in
-[`MIGRATE-TO-NONROOT.md`](MIGRATE-TO-NONROOT.md). Two flavors:
+Two migration flavors are documented below for completeness:
 
-### 9a. Keep paths under /root (minimal disruption — recommended)
+### 9a. Keep paths under /root + ACLs (EXPERIMENTAL — see warning above)
 
 `ccw` runs the backend, but every config / state / workspace stays at its
 current `/root/...` location. **Ownership of every file stays root**;
 ccw gains access via POSIX ACLs (`setfacl u:ccw:rwx ...`). `/root` itself
 gets only a traverse-only ACL (`u:ccw:x`) — ccw can `cd /root`, can NOT
-`ls /root` directly. Tighter than the older `chmod 755 /root` approach.
+`ls /root` directly.
 
 ```bash
 cd /root/projects/cc-workflow

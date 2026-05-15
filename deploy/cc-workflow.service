@@ -8,35 +8,22 @@ After=network.target
 [Service]
 Type=simple
 
-# Backend launches as the dedicated `ccw` user, but ALL paths still live
-# under /root/. This is the minimal-disruption answer to "Claude CLI
-# refuses --dangerously-skip-permissions on root" since 2026-05-14: we
-# only change the launch user, not the data layout. Pre-requisites:
+# Backend launches as root. trust=on edge cases (writes to ~/.claude/,
+# some file-modifying Bash commands per claude-code#20449) hit
+# claude's L1 permission block and can't be auto-approved — for those
+# specific operations you SSH in and run them by hand. The global allow
+# list at ~/.claude/settings.json (planted by ws_settings.sync_global_-
+# allow_rules at startup) + the PreToolUse hook still cover ~95% of
+# trust=on use cases.
 #
-#   - User `ccw` exists with home `/root` and a nologin shell
-#     (useradd --no-create-home -d /root -s /usr/sbin/nologin ccw)
-#   - `/root` has `u:ccw:x` ACL so ccw can traverse it (NOT 755 — the
-#     ACL approach is more surgical than world-traversable /root)
-#   - /root/.cc-workflow, /root/.cc-state, /root/workspaces,
-#     /root/.claude, /root/projects/cc-workflow have `u:ccw:rwx`
-#     ACL (current + default) so ccw can read/write under each tree
-#     while OWNER stays root throughout
-#   - /etc/sudoers.d/cc-workflow grants ccw the install-cc-loops wrapper
-#   - cron lines in /etc/cron.d/cc-loops have USER=ccw (not root)
-#
-# scripts/migrate-grant-acl.sh does all of the above idempotently.
-#
-# HOME=/root is intentional — config.py uses Path.home() to find
-# .cc-workflow / .cc-state, and agent-run.sh uses ${HOME}/workspaces.
-# Pointing $HOME at /root keeps every reader on the same paths.
-#
-# Two alternative deployment shapes still supported but not the default:
-#   - Legacy root install:     User=root, no ACL plumbing needed
-#   - Full home migrate:       User=ccw, all data under /home/ccw/
-#                              (see deploy/MIGRATE-TO-NONROOT.md)
-User=ccw
+# Non-root deployment options exist (scripts/migrate-grant-acl.sh,
+# deploy/MIGRATE-TO-NONROOT.md) but are EXPERIMENTAL — known to cause
+# backend instability on some setups (root cause not fully pinned).
+# Don't switch unless you've hit the edge case repeatedly and read
+# both docs first. Easy rollback if it goes wrong: flip User= back to
+# root and restart.
+User=root
 WorkingDirectory=/root/projects/cc-workflow
-Environment=HOME=/root
 
 # Project-local venv — Ubuntu 24.04+ blocks system-wide pip (PEP 668).
 # First-time setup (as the ccw user after chown):

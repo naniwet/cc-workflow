@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 #
-# migrate-grant-acl.sh
+# migrate-grant-acl.sh — EXPERIMENTAL
+#
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ⚠️  KNOWN ISSUE (2026-05-15 in-field test):
+#
+# This migration completed cleanly (systemd active, ACLs applied,
+# claude --version worked for ccw) but **broke the running backend
+# in less obvious ways** — Feishu webhook stopped responding, claude
+# hung at startup for PWA-triggered runs, etc. Rolling User= back to
+# root fixed everything instantly. Root cause not pinned down.
+#
+# DON'T RUN THIS unless you (a) hit the trust=on edge case
+# (~/.claude/ writes blocked) repeatedly enough that SSH'ing in to
+# fix is genuinely annoying, AND (b) understand you may need to roll
+# back. Even then, do a tarball backup first.
+#
+# Rollback recipe lives at the bottom of this comment block.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# What it does:
 #
 # Switch the cc-workflow backend from User=root to User=ccw without
 # transferring ownership of /root/{...} to ccw. ccw gains rwx access
@@ -9,22 +28,24 @@
 # Idempotent — safe to re-run. New files inside the granted dirs
 # inherit the ACL via the default-ACL plumbing on each dir.
 #
-# Why move off root at all:
+# Why move off root at all (in theory):
 #   Recent claude CLI rejects --permission-mode bypassPermissions when
 #   invoked as uid 0. Without bypass, trust=on workspaces still get
 #   blocked by claude's L1 permission system on edge-case ops (e.g.
 #   writes to ~/.claude/<anything>). Moving the backend to uid != 0
 #   unlocks bypassPermissions, which is what trust=on was supposed to
-#   mean all along.
+#   mean all along — in theory.
 #
-# Why ACL not chown:
-#   "Give ccw access without transferring ownership" — the previous
-#   chown-based script (migrate-keep-root-paths.sh, removed
-#   2026-05-15) changed the file owner to ccw, which read weirdly
-#   under /root. ACL keeps owner=root and just adds a u:ccw:rwx
-#   permission overlay. Same functional result, cleaner semantics.
-#   For the full-isolation alternative (move data to /home/ccw),
-#   see deploy/MIGRATE-TO-NONROOT.md.
+# Rollback (if migration breaks anything):
+#   sudo sed -i 's/^User=ccw$/User=root/' /etc/systemd/system/cc-workflow.service
+#   sudo sed -i 's/^Group=ccw$/Group=root/' /etc/systemd/system/cc-workflow.service
+#   sudo sed -i 's|^Environment=HOME=/root$||' /etc/systemd/system/cc-workflow.service
+#   sudo sed -i -E 's/^([0-9*/, ]+)ccw /\1root /' /etc/cron.d/cc-loops
+#   sudo systemctl daemon-reload && sudo systemctl restart cc-workflow
+#
+# ACL grants stay (harmless — root doesn't use them, ccw is no longer
+# running). To strip the ACLs entirely:
+#   sudo setfacl -R -b /root/.claude /root/.cc-state /root/.cc-workflow /root/workspaces
 
 set -euo pipefail
 
