@@ -2992,13 +2992,72 @@ function _formatStreamLine(raw) {
 }
 
 // ---------- Tasks view ----------
+// Per-loop HTML cache so the patch path in renderTasksView can detect
+// "this row didn't change" and skip the DOM write.
+const _loopRowCache = new Map();
+
 function renderTasksView() {
   const loops = lastData.loops || [];
   const workspaces = lastData.workspaces || [];
+  const view = $('view');
+  const existingList = view.querySelector('.task-list');
+
+  // Patch path: .task-list already rendered → diff loops by name.
+  if (existingList && loops.length > 0) {
+    const existing = new Map();
+    for (const row of existingList.querySelectorAll('.loop-row[data-loop-name]')) {
+      existing.set(row.dataset.loopName, row);
+    }
+    const wantedSet = new Set(loops.map((l) => l.name));
+    // Remove rows for loops that got deleted.
+    for (const [n, row] of existing) {
+      if (!wantedSet.has(n)) {
+        row.remove();
+        _loopRowCache.delete(n);
+      }
+    }
+    // For each loop: build new HTML, compare to cached, swap if different.
+    // Same shape as renderMobileOverview's per-card diff.
+    for (const loop of loops) {
+      const name = loop.name;
+      const newHtml = loopRowHtml(loop);
+      const cached = _loopRowCache.get(name);
+      const existingRow = existing.get(name);
+      if (existingRow) {
+        if (cached === newHtml) continue;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = newHtml.trim();
+        const fresh = tmp.firstElementChild;
+        existingRow.replaceWith(fresh);
+        _loopRowCache.set(name, newHtml);
+        // Re-bind handlers on the freshly-swapped row.
+        for (const b of fresh.querySelectorAll('.run-now-btn, .pause-btn, .resume-btn, .delete-btn')) {
+          b.addEventListener('click', onLoopAction);
+        }
+      } else {
+        existingList.insertAdjacentHTML('beforeend', newHtml);
+        _loopRowCache.set(name, newHtml);
+        // Bind the new row's handlers.
+        const fresh = existingList.querySelector(`.loop-row[data-loop-name="${esc(name)}"]`);
+        if (fresh) {
+          for (const b of fresh.querySelectorAll('.run-now-btn, .pause-btn, .resume-btn, .delete-btn')) {
+            b.addEventListener('click', onLoopAction);
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  // Full rewrite path (initial render OR transition from empty to populated).
   const rows = loops.length
-    ? loops.map(loopRowHtml).join('')
+    ? loops.map((loop) => {
+        const html = loopRowHtml(loop);
+        _loopRowCache.set(loop.name, html);
+        return html;
+      }).join('')
     : '<p class="muted">No cron loops yet. Use the form above.</p>';
-  $('view').innerHTML = `
+  view.innerHTML = `
     <h1>Tasks (cron)</h1>
     <details class="add-form" data-details-id="add-loop">
       <summary>New cron loop</summary>
@@ -3077,7 +3136,7 @@ function loopRowHtml(loop) {
   const schedTitle = schedule && humanSched !== schedule ? ` title="${esc(schedule)}"` : '';
 
   return `
-    <div class="row loop-row">
+    <div class="row loop-row" data-loop-name="${esc(loop.name)}">
       <div class="loop-head">
         <code class="loop-name">${esc(loop.name)}</code>
         ${enabledTag}
@@ -3331,10 +3390,61 @@ function _onRtModelResetAll() {
   showToast('info', '已恢复全部默认', { ttl: 1200 });
 }
 
+// Per-row HTML cache so renderRoundtablesView's patch path can diff
+// roundtable entries by id and skip unchanged ones (same shape as
+// _loopRowCache / _mobileCardCache).
+const _rtRowCache = new Map();
+
 function renderRoundtablesView() {
   const rows = lastData.roundtables || [];
+  const view = $('view');
+  const existingList = view.querySelector('.rt-list');
+
+  // Patch path: rt-list already in DOM AND we still have rows → diff.
+  if (existingList && rows.length > 0) {
+    const existing = new Map();
+    for (const row of existingList.querySelectorAll('.rt-row[data-rt-id]')) {
+      existing.set(row.dataset.rtId, row);
+    }
+    const wantedSet = new Set(rows.map((r) => r.id));
+    // Remove rows for sessions that got deleted.
+    for (const [id, row] of existing) {
+      if (!wantedSet.has(id)) {
+        row.remove();
+        _rtRowCache.delete(id);
+      }
+    }
+    // Diff each wanted row.
+    for (const r of rows) {
+      const newHtml = _roundtableListRow(r);
+      const cached = _rtRowCache.get(r.id);
+      const existingRow = existing.get(r.id);
+      if (existingRow) {
+        if (cached === newHtml) continue;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = newHtml.trim();
+        const fresh = tmp.firstElementChild;
+        existingRow.replaceWith(fresh);
+        _rtRowCache.set(r.id, newHtml);
+        fresh.querySelector('.rt-delete')?.addEventListener('click', onDeleteRoundtable);
+      } else {
+        // New session appeared (created via PWA form or Feishu /rt)
+        existingList.insertAdjacentHTML('beforeend', newHtml);
+        _rtRowCache.set(r.id, newHtml);
+        const fresh = existingList.querySelector(`.rt-row[data-rt-id="${esc(r.id)}"]`);
+        fresh?.querySelector('.rt-delete')?.addEventListener('click', onDeleteRoundtable);
+      }
+    }
+    return;
+  }
+
+  // Full rewrite path.
   const list = rows.length
-    ? rows.map(_roundtableListRow).join('')
+    ? rows.map((r) => {
+        const html = _roundtableListRow(r);
+        _rtRowCache.set(r.id, html);
+        return html;
+      }).join('')
     : '<p class="muted">还没有圆桌会议。先写一个问题,4 个角色 + 1 个整理员会替你辩论 3 轮。</p>';
   // Form is open by default ONLY when the list is empty — otherwise the
   // existing sessions are what the user wants to see first. They can
@@ -3348,7 +3458,7 @@ function renderRoundtablesView() {
       4 个固定角色(<strong>极简派 / 场景派 / 借鉴派 / 悲观派</strong>)对一个决策问题各抒己见,
       <strong>整理员</strong>把分歧整理成 <em>共识点 / 分歧轴 / 判断题</em>。让你做决定,不替你做决定。
     </p>` : '';
-  $('view').innerHTML = `
+  view.innerHTML = `
     <h1>Roundtable</h1>
     ${blurb}
     <details class="add-form" data-details-id="add-roundtable" ${formOpen}>
@@ -3412,7 +3522,7 @@ function _roundtableListRow(r) {
       ? '✗ 出错'
       : `${r.turns_done || 0} / ${expected} 轮`;
   return `
-    <div class="rt-row">
+    <div class="rt-row" data-rt-id="${esc(r.id)}">
       <a class="rt-row-link" href="#roundtables/${encodeURIComponent(r.id)}">
         <div class="rt-row-q">${esc(r.question || '(无标题)')}</div>
         <div class="rt-row-meta">
@@ -3523,7 +3633,28 @@ const _RT_ROUND_LABELS = {
   3: 'Round 3 — 深挖 / 收回 / 回应',
 };
 
+// Sigskip for paintRoundtableDetail — same idea as _lastPaintedStatus
+// for paintRunDetail. Signature combines status + turn count + r3
+// presence, which captures every change worth re-rendering for. Pure
+// timer ticks don't show up (we don't include `elapsed` anywhere in the
+// roundtable detail view), so the most common no-op poll (running run,
+// no new turn yet) skips entirely.
+const _lastRtPainted = {};
+
 function paintRoundtableDetail(id, row) {
+  const status = row.status || 'queued';
+  const turnsDone = row.turns?.length || 0;
+  const hasR3 = !!row.r3;
+  const errorKey = row.error || '';
+  const sig = `${status}:${turnsDone}:${hasR3 ? '1' : '0'}:${errorKey}`;
+
+  const view = $('view');
+  const alreadyPainted = view.querySelector(`.rt-detail[data-rt-id="${esc(id)}"]`);
+  if (alreadyPainted && _lastRtPainted[id] === sig) {
+    return;
+  }
+  _lastRtPainted[id] = sig;
+
   // Group every non-synth turn by round. We don't hardcode {1,2} anymore —
   // critique_rounds=2 sessions have R3 critique turns (round=3, type=critique)
   // that need their own grid block.
@@ -3538,12 +3669,10 @@ function paintRoundtableDetail(id, row) {
   }
 
   const r3 = row.r3;
-  const status = row.status || 'queued';
   const when = row.started_at
     ? new Date(row.started_at * 1000).toLocaleString()
     : '';
   const expected = row.turns_expected || 9;
-  const turnsDone = row.turns?.length || 0;
 
   const errorBlock = row.error
     ? `<div class="rt-error">⚠ ${esc(row.error)}</div>`
@@ -3586,7 +3715,7 @@ function paintRoundtableDetail(id, row) {
       <span class="muted">· ${esc(turnsDone)} / ${esc(expected)} 轮</span>
     </div>
     ${errorBlock}
-    <div class="rt-detail">
+    <div class="rt-detail" data-rt-id="${esc(id)}">
       ${synthBlock}
       ${roundBlocks.join('')}
     </div>
