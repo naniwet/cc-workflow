@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Optional
 
 from . import config
@@ -106,139 +107,112 @@ def permission_mode_for(workspace: str) -> str:
     Why not respect trust here:
     Claude CLI's 'bypassPermissions' refuses to run as uid 0 (root) since
     late-2026, breaking trust=on workspaces under the standard root-mode
-    backend deployment. We don't need claude's own --flag bypass anyway:
-    when trust=on, we write a project-level `.claude/settings.local.json`
-    with `permissions.allow = ["*"]` (see sync_trust_to_claude_settings),
-    which is claude's native way to declare "allow all tools without
-    asking" and does NOT trigger the root check.
+    backend deployment. We work around it by populating
+    ~/.claude/settings.json's `permissions.allow` list (see
+    sync_global_allow_rules below) — that's claude's native way to
+    declare "auto-approve this tool" and does NOT trigger the root check.
 
     The PreToolUse hook (cc-approve-hook.sh) is still wired in via
-    `~/.claude/settings.json` and handles the trust=off case: it
-    forwards Bash/WebFetch tool calls to the backend's approval queue
-    so the PWA can show [Approve]/[Deny] buttons.
+    ~/.claude/settings.json and handles the trust=off case: it forwards
+    Bash/WebFetch tool calls to the backend's approval queue so the PWA
+    can show [Approve]/[Deny] buttons.
 
     Function name kept for back-compat; semantically it's now
-    "always acceptEdits — trust is decided elsewhere".
+    "always acceptEdits — trust is decided by the hook layer".
     """
     return "acceptEdits"
 
 
-# ---- project-level claude settings sync ---------------------------------
+# ---- global claude settings sync ----------------------------------------
+#
+# History note (2026-05-15):
+# Earlier design wrote `.claude/settings.local.json` per-workspace, with
+# the allow rules toggling on/off per trust state. That broke for
+# session_key != "default" runs, because agent-run.sh creates a git
+# worktree under WORKSPACES_DIR/.wt/<ws>-<session>/ and runs claude with
+# that as cwd — but the per-workspace settings.local.json lives at
+# WORKSPACES_DIR/<ws>/.claude/, which the worktree doesn't see.
+#
+# New design: a single ~/.claude/settings.json with a blanket allow list,
+# applied globally. trust=on / trust=off differentiation moves entirely
+# to the PreToolUse hook layer (cc-approve-hook.sh reads CCW_TRUST).
+# Concept becomes cleaner:
+#   L1 (claude settings)   — uniformly "allow these tool names"
+#   L2 (PreToolUse hook)   — per-run trust decision (auto-approve or PWA)
+# claude's L1 must allow first so the hook gets a chance to fire (if L1
+# denies, the hook may not be consulted at all).
 
-# Path of the per-workspace claude settings file we manage. claude reads
-# this on startup as a project-level permission override; we write it
-# when trust=on, delete it when trust=off. Using settings.local.json
-# (not settings.json) so we don't conflict with anything the user might
-# hand-author at the same path — local.json is claude's "machine-local
-# override" slot and is in claude's default .gitignore.
-_CLAUDE_SETTINGS_NAME = "settings.local.json"
+# Tool names with confirmed blanket-allow semantics under claude's
+# settings.json `permissions.allow`. Verified 2026-05-15 against
+# https://code.claude.com/docs/en/permissions — bare tool name equals
+# `Tool(*)` and matches every invocation of that tool. MCP tools are
+# excluded (dynamic; user adds mcp__server__action entries manually).
+ALLOW_PATTERNS = [
+    "Bash",
+    "Read",
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "Glob",
+    "Grep",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "SlashCommand",
+    "TodoWrite",
+    "BashOutput",
+    "KillShell",
+]
 
 
-def _claude_settings_path(workspace: str):
-    return config.WORKSPACES_DIR / workspace / ".claude" / _CLAUDE_SETTINGS_NAME
+def _claude_global_settings_path() -> Path:
+    """~/.claude/settings.json — claude's user-level settings file."""
+    return Path.home() / ".claude" / "settings.json"
 
 
-def sync_trust_to_claude_settings(workspace: str) -> None:
-    """Make the workspace's claude project settings reflect its trust state.
+def sync_global_allow_rules() -> None:
+    """Ensure ~/.claude/settings.json#permissions.allow contains our
+    blanket allow list. Preserves any other keys (especially the
+    PreToolUse hook config installed by deploy/INSTALL.md — clobbering
+    that would silently break the PWA approval queue).
 
-    trust=on  → write `.claude/settings.local.json` with allow=["*"], i.e.
-                "all tools auto-approved without asking, via claude's
-                native permission system" (not via our hook).
-    trust=off → remove that file, so claude falls back to its default
-                (= ask for Bash/WebFetch), and our hook handles the
-                approval round-trip via PWA.
+    Called once at backend startup. Idempotent: re-running rewrites only
+    `permissions.allow`, leaving `hooks`/`env`/anything else alone.
 
-    Called by main.py whenever trust changes for a workspace, and at
-    startup to backfill existing workspaces.
+    Why global (not per-workspace): see the history note above —
+    worktree-mode runs (session_key != "default") don't see
+    per-workspace .claude/settings.local.json.
 
-    Safe to call repeatedly: write is atomic (tmp + rename), unlink is
-    missing_ok. Doesn't fail loud — broken file write surfaces as the
-    user noticing trust=on isn't auto-approving and reading the log.
+    Why we don't honor trust=on/off here: trust differentiation is the
+    PreToolUse hook's job. L1 always allows; the hook decides whether
+    to round-trip through PWA approval (trust=off) or auto-approve via
+    backend (trust=on).
     """
-    settings_path = _claude_settings_path(workspace)
-    ws_root = config.WORKSPACES_DIR / workspace
-    if not ws_root.is_dir():
-        return  # workspace gone; nothing to sync
-    if trust_for(workspace):
-        # Explicit tool list — claude doesn't support `"*"` wildcard at
-        # the tool-name level (verified against
-        # https://code.claude.com/docs/en/permissions.md). Listing each
-        # tool by name is equivalent in effect to "allow everything".
-        # `Bash` alone matches ALL bash invocations (no argument
-        # filtering needed for trust=on).
-        #
-        # Note: this does NOT skip claude's built-in safety circuit
-        # breakers (e.g. `rm -rf /`, `rm -rf ~` still prompt). That's
-        # by design — claude refuses to remove these even under
-        # `--permission-mode bypassPermissions`. We accept the same
-        # safety floor; the workflows trust=on is meant to streamline
-        # don't include filesystem-bombing commands.
-        #
-        # MCP tools (mcp__*) are NOT included — they're dynamic and
-        # vary per server. If you install an MCP and want trust=on to
-        # cover it too, add the specific mcp__<name>__<tool> entries
-        # to ~/.claude/settings.json by hand.
-        body = {
-            "_managed_by": "cc-workflow",
-            "_doc": (
-                "Auto-generated by cc-workflow. Toggle trust via the "
-                "workspace ⋯ menu in the PWA; don't hand-edit. "
-                "trust=on writes this allow list (claude auto-approves "
-                "every listed tool); trust=off deletes the file "
-                "(claude defaults to ask, our PreToolUse hook routes "
-                "Bash/WebFetch through PWA approval)."
-            ),
-            "permissions": {
-                "allow": [
-                    "Bash",
-                    "Read",
-                    "Edit",
-                    "Write",
-                    "NotebookEdit",
-                    "Glob",
-                    "Grep",
-                    "WebFetch",
-                    "WebSearch",
-                    "Task",
-                    "SlashCommand",
-                    "TodoWrite",
-                    "BashOutput",
-                    "KillShell",
-                ]
-            },
-        }
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = settings_path.with_suffix(".tmp")
-        try:
-            tmp.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, settings_path)
-        except OSError:
-            # Best-effort. If permissions or disk fail, log and move on —
-            # trust=on simply won't be auto-approved until the user
-            # re-toggles after the underlying issue is fixed.
-            try: tmp.unlink(missing_ok=True)
-            except OSError: pass
-    else:
-        try:
-            settings_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        # Tidy up empty .claude/ dir if we just removed the only thing.
-        # Failure (non-empty / not exists) is fine — we don't own the dir.
-        try:
-            settings_path.parent.rmdir()
-        except OSError:
-            pass
+    path = _claude_global_settings_path()
+    if not path.parent.exists():
+        # ~/.claude doesn't exist yet — claude has never been initialized
+        # on this host. Skip silently; agent-run will fail loud later
+        # with a more diagnosable error than a permission-mismatch tangle.
+        return
 
-
-def sync_all_trust_to_claude_settings() -> None:
-    """Backfill every existing workspace's settings.local.json from current
-    trust state. Run at backend startup so a fresh deploy / new install
-    of this code immediately reflects the trust matrix without waiting
-    for the user to re-toggle each workspace."""
-    from . import ui_cards
-    for ws in ui_cards._discover_workspaces():
+    existing: dict = {}
+    if path.exists():
         try:
-            sync_trust_to_claude_settings(ws)
-        except Exception:    # noqa: BLE001 — never let a single broken ws break startup
-            pass
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(existing, dict):
+                existing = {}
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+
+    perms = existing.setdefault("permissions", {})
+    perms["allow"] = list(ALLOW_PATTERNS)
+
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        # Best-effort — broken write surfaces as the user noticing
+        # trust=on tools still prompt. Don't crash startup over it.
+        try: tmp.unlink(missing_ok=True)
+        except OSError: pass

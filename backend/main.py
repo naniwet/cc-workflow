@@ -75,12 +75,15 @@ app = FastAPI(title="cc-workflow", version="0.1.0")
 def _on_startup() -> None:
     db.init()
     _reap_orphan_runs()
-    # Backfill .claude/settings.local.json for every existing workspace
-    # from current trust state. Makes the new trust→file mechanism
-    # immediately reflect what's already in workspaces.json without
-    # waiting for users to re-toggle each one.
+    # Plant our blanket `permissions.allow` list into ~/.claude/settings.json
+    # so claude's L1 permission check passes for every tool we know about,
+    # in every cwd (workspace root AND git worktree). Trust=on/off
+    # differentiation is delegated to the PreToolUse hook layer
+    # (cc-approve-hook reads CCW_TRUST). Replaced the older per-workspace
+    # .claude/settings.local.json sync on 2026-05-15 — that path was
+    # invisible to worktree runs.
     try:
-        ws_settings.sync_all_trust_to_claude_settings()
+        ws_settings.sync_global_allow_rules()
     except Exception:    # noqa: BLE001
         pass
     _verify_agent_run_capabilities()
@@ -483,14 +486,11 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
     else:
         data.pop(name, None)
     ws_settings.save(data)
-    # If trust changed, mirror it into the workspace's claude project
-    # settings file so claude actually picks up the new policy on the
-    # NEXT agent-run (existing in-flight runs aren't affected).
-    if "trust" in sent:
-        try:
-            ws_settings.sync_trust_to_claude_settings(name)
-        except Exception:    # noqa: BLE001 — best effort; surfaces on next run if broken
-            pass
+    # No claude-settings sync needed here: allow rules are global (see
+    # sync_global_allow_rules in ws_settings.py), and trust=on/off
+    # differentiation happens in the PreToolUse hook via CCW_TRUST env
+    # at run-spawn time. Was: per-workspace settings.local.json sync
+    # (removed 2026-05-15).
     return current
 
 
@@ -749,14 +749,10 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
     # the current global default into the workspace.
     data[req.name] = settings
     ws_settings.save(data)
-    # Initialize the project's claude settings.local.json to reflect
-    # the trust state we just settled on. If trust=on (or trust=None
-    # and the global default is on), this writes allow=["*"]; otherwise
-    # no-op.
-    try:
-        ws_settings.sync_trust_to_claude_settings(req.name)
-    except Exception:    # noqa: BLE001
-        pass
+    # No per-workspace claude-settings sync — allow rules live globally
+    # in ~/.claude/settings.json (planted at backend startup via
+    # sync_global_allow_rules). Trust=on/off is decided per-run by the
+    # PreToolUse hook reading CCW_TRUST.
 
     return {
         "ok": True, "name": req.name, "path": str(target),
