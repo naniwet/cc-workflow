@@ -677,7 +677,32 @@ function renderDesktopOverview() {
        </div>`
     : '';
 
-  $('view').innerHTML = `
+  // Patch path: if .ws-layout is already in DOM AND the set of rendered
+  // workspace names matches the set we want to render, skip the full
+  // innerHTML rewrite and just diff-update each column's timeline.
+  // The set-match check catches "no workspaces added/removed/hidden
+  // since last render"; reordering inside the layout is fine because
+  // _patchWorkspaceCard finds columns by data-ws, not by position.
+  const view = $('view');
+  const layoutEl = view.querySelector('.ws-layout');
+  if (layoutEl) {
+    const existingNames = new Set(
+      [...view.querySelectorAll('.ws-timeline[data-ws]')].map((el) => el.dataset.ws),
+    );
+    const wantedNames = new Set(
+      layout.flat().filter((n) => groups[n]),
+    );
+    const sameSet = existingNames.size === wantedNames.size
+      && [...wantedNames].every((n) => existingNames.has(n));
+    if (sameSet) {
+      for (const n of wantedNames) {
+        _patchWorkspaceCard(n, groups[n] || { active: [], queued: [], recent: [] });
+      }
+      return;
+    }
+  }
+
+  view.innerHTML = `
     <h1>Workspaces</h1>
     <details class="add-form" data-details-id="add-ws">
       <summary>New workspace</summary>
@@ -750,79 +775,124 @@ function onRestoreBtnClick(e) {
   render();
 }
 
+// Build the HTML for one workspace card on the mobile overview list.
+// Extracted from renderMobileOverview so the patch path can call it
+// per-card to diff against the cached last-rendered HTML.
+function _mobileWsCardHtml(name, data) {
+  const all = [
+    ...(data.active || []),
+    ...(data.queued || []),
+    ...(data.recent || []),
+  ];
+  all.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));   // newest first
+  const last = all[0];
+  const wsProvider =
+    lastData.wsSettings[name]?.provider || lastData.globalProvider || '';
+  const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
+  const trusted = effectiveTrust(name);
+  const trustBadge = trusted ? `<span class="ws-card-trust" title="Auto-approves tools">${ICONS.unlock}</span>` : '';
+  const pendingCount = pendingApprovalsForWorkspace(name).length;
+  const pendingBadge = pendingCount > 0
+    ? `<span class="ws-card-pending" title="${pendingCount} pending approval${pendingCount > 1 ? 's' : ''}">${ICONS.warning}${pendingCount} 待批准</span>`
+    : '';
+  const promptSnippet = last?.prompt ? last.prompt.slice(0, 50) : '';
+  const promptOverflow = last?.prompt && last.prompt.length > 50 ? '…' : '';
+  // PC: overview cards are read-only summary tiles. Mobile: card IS the
+  // entry point to the carousel detail view, keep as <a>.
+  const tag = _isMobileViewport ? 'a' : 'div';
+  const href = _isMobileViewport
+    ? ` href="#workspaces/${encodeURIComponent(name)}"`
+    : '';
+  return `
+    <${tag} class="ws-card" data-card-name="${esc(name)}"${href}>
+      <div class="ws-card-head">
+        <h3>${esc(name)}</h3>
+        <span class="ws-card-provider">
+          ${wsProvider ? `<span class="ws-card-provider-name">${esc(wsProvider)}</span>` : '<span class="muted">—</span>'}
+          <span class="ws-engine" data-engine="${esc(wsEngine)}">${esc(wsEngine)}</span>${trustBadge}
+        </span>
+      </div>
+      ${pendingBadge ? `<div class="ws-card-pending-row">${pendingBadge}</div>` : ''}
+      ${last
+        ? `<div class="ws-card-meta">
+             ${statusTag(last.status || '?')}
+             <span class="muted">
+               ${last.elapsed_s != null ? `· ${esc(last.elapsed_s)}s` : ''}
+               ${last.source ? `· ${esc(last.source)}` : ''}
+               ${last.started_at ? `· ${esc(timeAgo(last.started_at))}` : ''}
+             </span>
+           </div>`
+        : '<div class="ws-card-meta muted">(no runs yet)</div>'}
+      ${promptSnippet
+        ? `<div class="ws-card-prompt">▸ ${esc(promptSnippet)}${promptOverflow}</div>`
+        : ''}
+    </${tag}>
+  `;
+}
+
+// Per-card HTML cache so renderMobileOverview's patch path can detect
+// "this card didn't change" and skip the DOM write entirely.
+const _mobileCardCache = new Map();
+
 // Mobile overview = compact card list. Each card is a hyperlink that
 // drills into the carousel detail view via #workspaces/<name>. The "+ New
 // workspace" form stays available at the top of the list, same form as PC.
 function renderMobileOverview() {
   const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
   const sortedNames = Object.keys(groups).sort();
+  const view = $('view');
+  const existingList = view.querySelector('.ws-list');
 
+  // Patch path: .ws-list already in DOM → diff cards
+  if (existingList) {
+    const existing = new Map();
+    for (const card of existingList.querySelectorAll('.ws-card[data-card-name]')) {
+      existing.set(card.dataset.cardName, card);
+    }
+    const wantedSet = new Set(sortedNames);
+    // Remove cards that disappeared (workspace deleted).
+    for (const [n, card] of existing) {
+      if (!wantedSet.has(n)) {
+        card.remove();
+        _mobileCardCache.delete(n);
+      }
+    }
+    // For each wanted name: build new HTML, compare to cached, swap if changed.
+    for (const name of sortedNames) {
+      const data = groups[name] || { active: [], queued: [], recent: [] };
+      const newHtml = _mobileWsCardHtml(name, data);
+      const cached = _mobileCardCache.get(name);
+      const existingCard = existing.get(name);
+      if (existingCard) {
+        if (cached === newHtml) continue;     // identical → skip DOM
+        const tmp = document.createElement('div');
+        tmp.innerHTML = newHtml.trim();
+        existingCard.replaceWith(tmp.firstElementChild);
+        _mobileCardCache.set(name, newHtml);
+      } else {
+        // New workspace appeared → append at end. The full-rewrite path
+        // sorts alphabetically; the patch path appends and accepts that
+        // sort order may drift after add. Rare (you don't make new ws
+        // every poll). If it matters, refresh the page.
+        existingList.insertAdjacentHTML('beforeend', newHtml);
+        _mobileCardCache.set(name, newHtml);
+      }
+    }
+    return;
+  }
+
+  // Full rewrite path: building the initial DOM for this view.
   const cards = sortedNames.map((name) => {
     const data = groups[name] || { active: [], queued: [], recent: [] };
-    const all = [
-      ...(data.active || []),
-      ...(data.queued || []),
-      ...(data.recent || []),
-    ];
-    all.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));     // newest first
-    const last = all[0];
-    const wsProvider =
-      lastData.wsSettings[name]?.provider || lastData.globalProvider || '';
-    const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
-    const trusted = effectiveTrust(name);
-    const trustBadge = trusted ? `<span class="ws-card-trust" title="Auto-approves tools">${ICONS.unlock}</span>` : '';
-    const pendingCount = pendingApprovalsForWorkspace(name).length;
-    const pendingBadge = pendingCount > 0
-      ? `<span class="ws-card-pending" title="${pendingCount} pending approval${pendingCount > 1 ? 's' : ''}">${ICONS.warning}${pendingCount} 待批准</span>`
-      : '';
-    const promptSnippet = last?.prompt ? last.prompt.slice(0, 50) : '';
-    const promptOverflow = last?.prompt && last.prompt.length > 50 ? '…' : '';
-    // PC: overview cards are read-only summary tiles (the 4-column
-    // overview already shows everything important — pending approvals,
-    // last run, trust state — drilling into a single workspace detail
-    // is redundant). Render as <div> so cursor stays default + no nav.
-    // Mobile: card IS the entry point to the carousel detail view, keep
-    // as <a> (compare bind site at line 343-350).
-    const tag = _isMobileViewport ? 'a' : 'div';
-    const href = _isMobileViewport
-      ? ` href="#workspaces/${encodeURIComponent(name)}"`
-      : '';
-    return `
-      <${tag} class="ws-card"${href}>
-        <div class="ws-card-head">
-          <h3>${esc(name)}</h3>
-          <span class="ws-card-provider">
-            ${wsProvider ? `<span class="ws-card-provider-name">${esc(wsProvider)}</span>` : '<span class="muted">—</span>'}
-            <span class="ws-engine" data-engine="${esc(wsEngine)}">${esc(wsEngine)}</span>${trustBadge}
-          </span>
-        </div>
-        ${pendingBadge ? `<div class="ws-card-pending-row">${pendingBadge}</div>` : ''}
-        ${last
-          ? `<div class="ws-card-meta">
-               ${statusTag(last.status || '?')}
-               <span class="muted">
-                 ${last.elapsed_s != null ? `· ${esc(last.elapsed_s)}s` : ''}
-                 ${last.source ? `· ${esc(last.source)}` : ''}
-                 ${last.started_at ? `· ${esc(timeAgo(last.started_at))}` : ''}
-               </span>
-             </div>`
-          : '<div class="ws-card-meta muted">(no runs yet)</div>'}
-        ${promptSnippet
-          ? `<div class="ws-card-prompt">▸ ${esc(promptSnippet)}${promptOverflow}</div>`
-          : ''}
-      </${tag}>
-    `;
+    const html = _mobileWsCardHtml(name, data);
+    _mobileCardCache.set(name, html);
+    return html;
   }).join('');
 
-  // Same picker component as the PC overview variant uses — was
-  // accidentally declared as `newWsProviderOptions` after the
-  // <select>→radio-list refactor, leaving the `${newWsProviderPicker}`
-  // template reference below dangling. Surfaced as "fetch failed:
-  // newWsProviderPicker is not defined" on mobile (this function is the
-  // mobile renderWorkspacesView path; PC uses renderDesktopOverview).
+  // Same picker component as the PC overview variant uses.
   const newWsProviderPicker = _newWsProviderPickerHtml();
 
-  $('view').innerHTML = `
+  view.innerHTML = `
     <h1>Workspaces</h1>
     <details class="add-form" data-details-id="add-ws">
       <summary>New workspace</summary>
@@ -849,7 +919,7 @@ function renderMobileOverview() {
       : `<p class="muted">No workspaces yet. Use the form above.</p>`}
   `;
 
-  const newWsForm = $('view').querySelector('form[data-form-id="new-ws"]');
+  const newWsForm = view.querySelector('form[data-form-id="new-ws"]');
   newWsForm?.addEventListener('submit', onAddWorkspace);
 }
 
@@ -2253,10 +2323,16 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
 //   missing from new set → remove
 // Doesn't touch the header / form / approval-pending row — those
 // rarely change and a full path is taken on isFreshNav anyway.
-function _patchWorkspaceCard(name, data) {
+function _patchWorkspaceCard(name, data, opts = {}) {
   const view = $('view');
   const timeline = view.querySelector(`.ws-timeline[data-ws="${esc(name)}"]`);
   if (!timeline) return;     // unexpected; let the next poll fall through to full rewrite
+
+  // maxRows must match the value workspaceColHtml used when first
+  // rendering this view (otherwise the diff loop's visible-window
+  // would mismatch the rows the user actually sees). PC overview
+  // uses 10, PC single-ws detail uses 30, mobile detail uses 10.
+  const maxRows = opts.maxRows ?? 10;
 
   const all = [
     ...(data.active || []),
@@ -2264,7 +2340,7 @@ function _patchWorkspaceCard(name, data) {
     ...(data.recent || []),
   ];
   all.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
-  const visible = all.slice(-10);   // matches workspaceColHtml's default maxRows
+  const visible = all.slice(-maxRows);
   const visibleIds = new Set(visible.map((r) => r.id || ''));
 
   // Index of existing DOM rows by run id.
@@ -2349,12 +2425,23 @@ function renderDesktopWorkspaceDetail(name) {
   }
   const data = groups[name];
 
-  $('view').innerHTML = `
+  // Patch path: same workspace already painted → diff-update only.
+  // Note _patchWorkspaceCard caps the visible window at 10 rows;
+  // desktop detail wants 30 — handled below by re-passing maxRows
+  // to the patch helper (see _patchWorkspaceCard signature).
+  const view = $('view');
+  const existingTimeline = view.querySelector(`.ws-timeline[data-ws="${esc(name)}"]`);
+  if (existingTimeline) {
+    _patchWorkspaceCard(name, data, { maxRows: 30 });
+    return;
+  }
+
+  view.innerHTML = `
     <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
     ${workspaceColHtml(name, data, { maxRows: 30, detail: true, extraClass: 'ws-col-detail' })}
   `;
 
-  bindWorkspaceColHandlers($('view'));
+  bindWorkspaceColHandlers(view);
 }
 
 // ---------- Run detail view (#runs/<id>) ----------
