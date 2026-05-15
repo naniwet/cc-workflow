@@ -57,7 +57,12 @@ chmod 755 "${ROOT_HOME}"
 # script header documents.
 
 step "3. chown data dirs to ${SERVICE_USER}"
-for sub in .cc-workflow .cc-state workspaces; do
+# .claude is claude CLI's own home (history.jsonl, projects/<session>.jsonl,
+# settings.json, plugins/, optional .credentials.json). ccw needs r/w on
+# all of it — without this claude silently hangs when it can't append to
+# history.jsonl on startup. Originally missed in the May 14 migration
+# script and added 2026-05-15 after a real "你好" prompt hung 145s.
+for sub in .cc-workflow .cc-state workspaces .claude; do
     target="${ROOT_HOME}/${sub}"
     if [[ -d "${target}" ]]; then
         chown -R "${SERVICE_USER}:${SERVICE_USER}" "${target}"
