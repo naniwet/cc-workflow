@@ -773,9 +773,6 @@ body.is-dragging .ws-col:not(.dragging) {
  * (.run-actions) and a hit target you actually have to aim at. Red
  * theme communicates "destructive"; not pre-disabled so the click +
  * confirm path is the only barrier between intent and action. */
-.run-actions {
-  margin: var(--space-2) 0 var(--space-4);
-}
 .run-cancel-btn {
   display: inline-flex;
   align-items: center;
@@ -801,38 +798,6 @@ body.is-dragging .ws-col:not(.dragging) {
  * Pre-formatted (no markdown render) so the user sees raw stream-jsonl
  * lines the way claude emits them. Capped height so a long stream
  * doesn't push the Prompt/Output sections off-screen. */
-.run-live-hint {
-  font-size: var(--text-sm);
-  font-weight: normal;
-  margin-left: var(--space-2);
-}
-.run-live-tail {
-  /* No max-height / inner scroll — moved to the bottom of run-detail
-   * (2026-05-15), let the page scroll instead. Two-finger inner scroll
-   * on mobile + box-within-box scroll on PC both got annoying once Live
-   * output started containing 100KB Write tool_use payloads. */
-  font-size: var(--text-xs);
-  line-height: var(--lh-normal);
-  background: var(--bg-canvas);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3);
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--text-secondary);
-}
-.row-prompt, .row-output {
-  font-size: var(--text-sm);
-  padding-left: var(--space-1);
-  word-break: break-word;
-  overflow-wrap: break-word;
-  white-space: pre-wrap;
-  line-height: var(--lh-normal);
-}
-.row-prompt { color: var(--text-secondary); }      /* you said — dim gray */
-.row-output { color: var(--accent-cyan); }         /* claude said — cyan (info), NOT green (status) */
-.row-time   { cursor: help; }                      /* hover for absolute timestamp */
-.row-time:hover { text-decoration: underline dotted; }
 
 /* ============================================================================
  *  Pending tool-approval block — appears after a "running" run row when
@@ -923,36 +888,6 @@ body.is-dragging .ws-col:not(.dragging) {
  *  block (above) never appears, but the user still wants to know what
  *  claude actually ran.
  * ============================================================================ */
-.run-approvals {
-  margin-top: var(--space-4);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: 0;
-}
-.run-approvals > summary {
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-  font-weight: 500;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  list-style: none;
-}
-.run-approvals > summary::-webkit-details-marker { display: none; }
-.run-approvals > summary::before {
-  content: '▸ ';
-  display: inline-block;
-  margin-right: var(--space-1);
-  transition: transform 0.15s;
-}
-.run-approvals[open] > summary::before { transform: rotate(90deg); }
-.run-approvals-list {
-  padding: var(--space-2) var(--space-3) var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  max-height: 320px;
-  overflow-y: auto;
-}
 .a-row {
   display: flex;
   align-items: baseline;
@@ -991,39 +926,6 @@ body.is-dragging .ws-col:not(.dragging) {
  * Shares <details>/<summary> visual language with .run-approvals so they
  * read as a "drill-deeper" pair. Body is <pre> (whitespace preserved)
  * because _formatStreamLine emits already-formatted text. */
-.run-transcript {
-  margin-top: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-}
-.run-transcript > summary {
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-  font-weight: 500;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  list-style: none;
-}
-.run-transcript > summary::-webkit-details-marker { display: none; }
-.run-transcript > summary::before {
-  content: '▸ ';
-  display: inline-block;
-  margin-right: var(--space-1);
-  transition: transform 0.15s;
-}
-.run-transcript[open] > summary::before { transform: rotate(90deg); }
-.run-transcript-body {
-  margin: 0;
-  padding: var(--space-3);
-  font-size: var(--text-xs);
-  line-height: var(--lh-normal);
-  background: var(--bg-canvas);
-  border-top: 1px solid var(--border-subtle);
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--text-secondary);
-}
-
 /* ============================================================================
  *  Trigger form (chat input at column bottom)
  * ============================================================================ */
@@ -1286,71 +1188,11 @@ label {
   .back-link { display: none; }
 }
 
-.run-meta {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  margin: var(--space-2) 0 var(--space-5);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: center;
-}
-.run-meta code { color: var(--accent-blue); font-family: var(--font-mono); }
-
 /* Markdown rendering for run-detail Output section. Style headings,
  * lists, inline code, and fenced code blocks so Claude's typical output
  * (** bold **, ## h2, - bullets, ``` code ```) reads naturally. Mostly
  * inherits from body color/font; just sets sensible spacing.
  */
-.md-output {
-  font-size: var(--text-md);
-  line-height: var(--lh-relaxed);
-  color: var(--text-primary);
-  word-break: break-word;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3) var(--space-4);
-  margin: var(--space-2) 0;
-}
-.md-output > *:first-child { margin-top: 0; }
-.md-output > *:last-child { margin-bottom: 0; }
-.md-output h1, .md-output h2, .md-output h3 {
-  margin: var(--space-4) 0 var(--space-2);
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.md-output h1 { font-size: var(--text-xl); }
-.md-output h2 { font-size: var(--text-lg); }
-.md-output h3 { font-size: var(--text-md); }
-.md-output p { margin: var(--space-2) 0; }
-.md-output ul { margin: var(--space-2) 0; padding-left: var(--space-5); }
-.md-output li { margin: 2px 0; }
-.md-output strong { color: var(--text-primary); font-weight: 600; }
-.md-output em { color: var(--text-primary); font-style: italic; }
-.md-output code {
-  background: var(--bg-elevated);
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 0.92em;
-  font-family: var(--font-mono);
-  color: var(--accent-blue);
-}
-.md-output pre.md-code {
-  background: var(--bg-canvas);
-  border: 1px solid var(--border-subtle);
-  padding: var(--space-3);
-  border-radius: var(--radius-sm);
-  overflow-x: auto;
-  margin: var(--space-2) 0;
-}
-.md-output pre.md-code code {
-  background: transparent;
-  padding: 0;
-  font-size: var(--text-sm);
-  color: var(--text-primary);
-}
-
 pre {
   background: var(--bg-surface);
   padding: var(--space-3) var(--space-4);
@@ -1533,19 +1375,6 @@ pre {
   color: var(--text-primary) !important;  /* override .row code's accent-blue */
   font-size: var(--text-md);
 }
-.loop-actions {
-  display: flex;
-  gap: var(--space-2);
-  margin-left: auto;
-  flex-shrink: 0;
-}
-.loop-actions button { min-height: auto; padding: var(--space-1) var(--space-3); font-size: var(--text-sm); }
-
-.loop-spec {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-.loop-spec code { color: var(--accent-blue); font-size: var(--text-sm); font-family: var(--font-mono); }
 .loop-when {
   color: var(--accent-blue);
   font-weight: 500;
@@ -1555,7 +1384,6 @@ pre {
 }
 .loop-when[title] { cursor: help; }
 .loop-when[title]:hover { text-decoration: underline dotted; }
-.task-next { color: var(--accent-blue); }
 .task-dot {
   width: 8px;
   height: 8px;
@@ -1566,53 +1394,10 @@ pre {
 .task-dot.done { background: var(--accent-green); }
 .task-dot.failed { background: var(--accent-red); }
 .task-dot.paused { background: var(--text-disabled); }
-.task-state {
-  align-self: flex-end;
-  text-align: right;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: var(--text-micro);
-  font-weight: 600;
-  line-height: var(--lh-tight);
-}
-.task-state span {
-  color: var(--text-tertiary);
-  font-weight: 400;
-}
-.task-state-running { color: var(--accent-cyan); }
-.task-state-failed { color: var(--accent-red); }
-
-.loop-prompt {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: break-word;
-  line-height: var(--lh-normal);
-  padding: var(--space-1) var(--space-2);
-  border-left: 2px solid var(--border-strong);
-  background: var(--bg-canvas);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-.loop-stats {
-  font-size: var(--text-sm);
-  color: var(--text-tertiary);
-}
-
 /* Link from a cron card to its most recent run-detail page. Subtle —
  * blends into the muted .loop-stats line until you hover. Only visible
  * after the loop has fired at least once under the curl-trigger flow
  * (legacy agent-run-direct entries don't populate last_run_id). */
-.loop-run-link, .loop-run-link:visited {
-  color: var(--accent-blue);
-  text-decoration: none;
-  border-bottom: 1px dashed transparent;
-}
-.loop-run-link:hover {
-  border-bottom-color: var(--accent-blue);
-}
-
 /* Last-run output preview — 200 chars truncated server-side by
  * agent-run.sh#on_exit. Styled like .row-output (cyan, "claude said")
  * so it reads as "what the cron last produced". Note: this is the
@@ -1621,67 +1406,12 @@ pre {
  * too thin we'd need to route cron through backend so runs.db captures
  * the full row (currently cron calls agent-run directly, bypassing
  * runner.py + the DB). */
-.loop-last-output {
-  font-size: var(--text-sm);
-  color: var(--accent-cyan);
-  padding: var(--space-1) var(--space-2);
-  border-left: 2px solid var(--accent-cyan);
-  background: var(--bg-canvas);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  line-height: var(--lh-normal);
-  opacity: 0.85;
-}
-
 /* ============================================================================
  *  Cron job's "history (N runs)" foldout — shows up to 5 most recent
  *  runs so the user can pick the right one when several have fired.
  *  Default collapsed; the most recent run is already linked from the
  *  stats row's "→ open".
  * ============================================================================ */
-.loop-history {
-  margin-top: var(--space-1);
-  font-size: var(--text-sm);
-}
-.loop-history > summary {
-  cursor: pointer;
-  color: var(--text-muted);
-  list-style: none;
-  user-select: none;
-  padding: var(--space-1) 0;
-}
-.loop-history > summary::-webkit-details-marker { display: none; }
-.loop-history > summary::before {
-  content: '▸ ';
-  display: inline-block;
-  transition: transform var(--t-base);
-}
-.loop-history[open] > summary::before { content: '▾ '; }
-.loop-history > summary:hover { color: var(--text-secondary); }
-
-.loop-hist-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-1) 0 var(--space-1) var(--space-3);
-  border-left: 2px solid var(--border-subtle);
-  margin-left: var(--space-1);
-}
-.loop-hist-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex-wrap: wrap;
-  color: var(--text-secondary);
-  text-decoration: none;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  transition: background var(--t-base);
-}
-.loop-hist-row:hover { background: var(--bg-elevated); color: var(--text-primary); }
-.loop-hist-row code { font-size: var(--text-xs); }
-
 /* ============================================================================
  *  Workspace name link — clicking the h2 in PC overview drills into the
  *  workspace's detail view (#workspaces/<name>). Subtle so it doesn't
@@ -2290,7 +2020,6 @@ pre {
 
   /* Slightly larger base text on mobile so reading isn't strenuous */
   body { font-size: var(--text-md); }
-  .row-prompt, .row-output { font-size: var(--text-base); }
 
   /* Detail page <pre>: stay readable on narrow viewport */
   pre { font-size: var(--text-sm); padding: var(--space-3); }
