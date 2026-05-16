@@ -1664,8 +1664,9 @@ pre {
 /* 关键(同 mobile .workspace-session-stream 的逻辑):flex column 容器
    里子元素默认 flex-shrink:1,turns 自然总高超过容器时会被压缩进去,
    scrollHeight === clientHeight,overflow-y:auto 永远不触发。强制
-   flex-shrink:0 才能真正出滚动条。 */
-.ws-col-detail .ws-timeline > * { flex-shrink: 0; }
+   flex-shrink:0 才能真正出滚动条。
+   PC overview + detail 都装 .turn,通用规则。 */
+.ws-timeline > * { flex-shrink: 0; }
 
 /* ============================================================================
  *  Bottom nav — desktop hides

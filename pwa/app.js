@@ -766,23 +766,10 @@ function renderDesktopOverview() {
   // since last render"; reordering inside the layout is fine because
   // _patchWorkspaceCard finds columns by data-ws, not by position.
   const view = $('view');
-  const layoutEl = view.querySelector('.ws-layout');
-  if (layoutEl) {
-    const existingNames = new Set(
-      [...view.querySelectorAll('.ws-timeline[data-ws]')].map((el) => el.dataset.ws),
-    );
-    const wantedNames = new Set(
-      layout.flat().filter((n) => groups[n]),
-    );
-    const sameSet = existingNames.size === wantedNames.size
-      && [...wantedNames].every((n) => existingNames.has(n));
-    if (sameSet) {
-      for (const n of wantedNames) {
-        _patchWorkspaceCard(n, groups[n] || { active: [], queued: [], recent: [] });
-      }
-      return;
-    }
-  }
+  // _patchWorkspaceCard 的 diff 算法只认 .run-row,PC overview 现在也走
+  // turn-streaming(see workspaceColHtml 的注释),容器变了它就 stale 了。
+  // 改全量重画 —— refreshAll 已经做了数据 hash 去重(elapsed_s 被 mask),
+  // 一组卡片同时全量重画 4-8 张的成本可控,跟 PC detail / mobile 一致。
 
   view.innerHTML = `
     <h1>Workspaces</h1>
@@ -1348,14 +1335,12 @@ function bindWorkspaceColHandlers(root) {
     _addTapFallback(b, onApprovalClick);
   }
 
-  // PC workspace detail 现在也走 turn-streaming(workspaceColHtml 在
-  // detail=true 时渲染 .turn 而不是 .run-row),所以这里把 turn-toggle /
-  // tool-result-fold 也连一下,跟 mobile 版 _bindWorkspaceSessionHandlers
-  // 行为一致。
+  // PC overview + detail 现在都走 turn-streaming(workspaceColHtml 渲染
+  // .turn 而不是 .run-row),所以这里把 turn-toggle / tool-result-fold
+  // 一起连上,跟 mobile 版 _bindWorkspaceSessionHandlers 行为一致。
   // 先停所有正在跑的 turn-events poll —— 整页重画后老 timer 都失效了。
-  if (root.querySelector('.ws-col-detail')) {
-    _stopAllTurnEventsPolls();
-  }
+  // 无条件停:overview / detail 任一种重画都得 reset 旧 timer。
+  _stopAllTurnEventsPolls();
   for (const btn of root.querySelectorAll('.turn-toggle')) {
     btn.addEventListener('click', _onWorkspaceTurnToggle);
     _addTapFallback(btn, _onWorkspaceTurnToggle);
@@ -2108,36 +2093,24 @@ function workspaceColHtml(name, data, opts = {}) {
   const detail = !!opts.detail;
   const extraClass = opts.extraClass ?? '';
 
-  const all = [
-    ...(data.active || []),
-    ...(data.queued || []),
-    ...(data.recent || []),
-  ];
-  all.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
-  const timeline = all.slice(-maxRows);
-  // Detail 模式(PC 进入单 workspace 详情页)复用 mobile 那套 turn-streaming
-  // UI:每个 run 一个 turn,默认收起单行 summary,展开后流式渲染完整
-  // event timeline。设计图 §3.2 + §4 的体验在 PC 上也一致。
-  //
-  // Overview 模式(PC 多 workspace 网格)仍用紧凑 run-row 列表 —— 每张
-  // 卡片高度受限(max 10 行),没有展开空间。
+  // Detail + Overview 都用同一套 turn-streaming UI(设计图 §3.2 + §4)。
+  //   Detail  :expandAll=true,所有 turn 默认展开看完整 event timeline
+  //   Overview:expandAll=false,默认只有 running + 最近 1 个 completed
+  //              展开(per design 3.2),其余收起单行 summary。用户在
+  //              overview 直接点 turn 展开后能在小卡片内看 event 详情;
+  //              也可以点 workspace name 跳到 detail 看完整版。
+  // 渲染走同一个 _workspaceTurnHtml,handler / CSS 都共用。
   let timelineHtml;
-  if (detail) {
-    // PC detail 模式默认全部 turn 展开 —— 屏幕宽,顺序看完整对话 timeline
-    // 比一次次点开舒服。手动 override(workspaceTurnOverrides)能再收单条。
-    const turns = _workspaceSessionTurns(data);
-    const expandedTurns = workspaceTurnExpansion(turns, workspaceTurnOverrides, { expandAll: true });
-    timelineHtml = expandedTurns.length
-      ? expandedTurns.map(_workspaceTurnHtml).join('')
-      : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
-  } else {
-    timelineHtml = timeline.length
-      ? timeline.map((r) => {
-          const approvals = pendingApprovalsFor(r.id || '');
-          return runRowHtml(r) + approvals.map(approvalBlockHtml).join('');
-        }).join('')
-      : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
-  }
+  const turns = _workspaceSessionTurns(data);
+  const turnsToShow = detail ? turns : turns.slice(-maxRows);
+  const expandedTurns = workspaceTurnExpansion(
+    turnsToShow,
+    workspaceTurnOverrides,
+    { expandAll: detail },
+  );
+  timelineHtml = expandedTurns.length
+    ? expandedTurns.map(_workspaceTurnHtml).join('')
+    : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
