@@ -1883,6 +1883,10 @@ async function _onResetSessionClick(e) {
   try {
     const result = await api(`/workspaces/${encodeURIComponent(ws)}/session`, { method: 'DELETE' });
     const what = (result?.cleared || []).join(' + ') || '(nothing cleared)';
+    // 设计图 §3.1:New chat 旧 turn 立刻从 UI 消失。后端不删 runs.db,
+    // 前端记 cutoff = 当前 Unix 秒,_workspaceSessionTurns 过滤掉
+    // started_at < cutoff 的 run。
+    setSessionResetAt(ws, Math.floor(Date.now() / 1000));
     workspaceStreamState[ws] = { eventCount: 0, newEvents: 0, atBottom: true };
     workspaceSessionScroll[ws] = { scrollTop: 0, atBottom: true };
     showToast('success', `${ws}: new chat — ${what}`, { ttl: 2500 });
@@ -2107,7 +2111,7 @@ function workspaceColHtml(name, data, opts = {}) {
   //              也可以点 workspace name 跳到 detail 看完整版。
   // 渲染走同一个 _workspaceTurnHtml,handler / CSS 都共用。
   let timelineHtml;
-  const turns = _workspaceSessionTurns(data);
+  const turns = _workspaceSessionTurns(data, name);
   const turnsToShow = detail ? turns : turns.slice(-maxRows);
   const expandedTurns = workspaceTurnExpansion(
     turnsToShow,
@@ -2418,7 +2422,7 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
   const currentIdx = Math.max(0, sortedNames.indexOf(startName));
   const currentName = sortedNames[currentIdx];
   const data = groups[currentName] || { active: [], queued: [], recent: [] };
-  const turns = _workspaceSessionTurns(data);
+  const turns = _workspaceSessionTurns(data, currentName);
   const expandedTurns = workspaceTurnExpansion(turns, workspaceTurnOverrides);
   const eventCount = expandedTurns.length + pendingApprovalsForWorkspace(currentName).length;
   workspaceStreamState[currentName] = workspaceAutoScrollState(workspaceStreamState[currentName], {
@@ -2433,13 +2437,38 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
   _bindWorkspaceSessionHandlers(view, currentName);
 }
 
-function _workspaceSessionTurns(data) {
+// localStorage 记每个 workspace 的"上次 New chat 时戳"。后端 reset_session
+// 只清 sessions.json 的 claude_session_id,不动 runs.db —— 设计图 §3.1 又
+// 说"按齿轮 → 新对话 旧 turn 立刻从 UI 消失,不留痕迹",所以前端做一层
+// cutoff 过滤:把 started_at < cutoff 的 run 从 turn 列表里隐藏。
+// Unix 秒,跟后端 started_at 同精度。
+function sessionResetAt(ws) {
+  if (!ws) return 0;
+  try {
+    const v = localStorage.getItem(`cc.sessionResetAt.${ws}`);
+    return v ? Number(v) : 0;
+  } catch { return 0; }
+}
+function setSessionResetAt(ws, ts) {
+  if (!ws) return;
+  try { localStorage.setItem(`cc.sessionResetAt.${ws}`, String(ts)); } catch {}
+}
+
+function _workspaceSessionTurns(data, ws) {
   const byId = new Map();
   for (const r of [...(data.recent || []), ...(data.queued || []), ...(data.active || [])]) {
     const id = r.id || `${r.workspace || 'run'}-${r.started_at || byId.size}`;
     byId.set(id, { ...r, id });
   }
-  return [...byId.values()].sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+  const all = [...byId.values()].sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+  // Cutoff 过滤(只在传了 ws 的调用路径生效;不传等价于 cutoff=0,显示全部)。
+  // 进行中的 run(started_at >= cutoff)永远保留 —— 即便巧合赶上 New chat
+  // 的同一秒,也属于"新对话开始"的那一批。
+  const cutoff = sessionResetAt(ws);
+  if (cutoff > 0) {
+    return all.filter((r) => (r.started_at || 0) >= cutoff);
+  }
+  return all;
 }
 
 function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {

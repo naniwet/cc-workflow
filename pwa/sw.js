@@ -18,7 +18,7 @@
 // Bump VERSION on breaking SW changes so the activate handler purges
 // any older cache buckets.
 
-const VERSION = 'cc-v55';
+const VERSION = 'cc-v56';
 const SHELL = [
   '/pwa/',
   '/pwa/index.html',
