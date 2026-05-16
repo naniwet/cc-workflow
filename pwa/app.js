@@ -407,9 +407,16 @@ async function refreshAll() {
     const hash = JSON.stringify(lastData, (k, v) =>
       k === 'elapsed_s' ? 0 : v,
     );
-    if (hash === _lastDataHash) return;
+    if (hash === _lastDataHash) {
+      // 数据没变但仍要尝试 dispatch:上一条 active 完成的时机,active
+      // 列表变空 → 队列可以推 1 条。 dispatch 成功后 hash 才会改变,
+      // 这一遍可能正赶在"刚变空、没新 run"的中间窗,所以无条件触发一次。
+      _dispatchAllQueues();
+      return;
+    }
     _lastDataHash = hash;
     render();
+    _dispatchAllQueues();
   } catch (e) {
     // Swallow the "not authenticated; redirecting…" toast — the user is
     // already being redirected to login.html, the toast would just be
@@ -468,6 +475,85 @@ const timelineScroll = {};                          // key: ws name → {scrollT
 const workspaceSessionScroll = {};                  // key: ws name → {scrollTop, atBottom}
 const workspaceStreamState = {};                     // key: ws name → {eventCount,newEvents,atBottom}
 const workspaceTurnOverrides = {};                   // key: run id → expanded bool
+
+// 前端 prompt 队列:workspace 有 run 在跑时,用户继续发的 prompt 排队,
+// 跑完一条自动 dispatch 下一条。后端 /run 在 workspace busy 时会 409
+// (backend/main.py:231 active_in_workspace 检查),只能前端排队。
+//
+// 状态 in-memory,不持久化(localStorage 体验上不必要 —— 刷新页面 = 重
+// 来一次,队列丢了符合用户预期)。
+//
+// 每条 { id: 'q-<seq>', prompt, queuedAt }。delete 按 id 移除。
+// _dispatchAllQueues 在每次 refreshAll 后跑,检查每个有 queue 的 ws:
+// 没 active run → 取队头发出去。后端拒绝(409 / 网络)→ 塞回队头。
+const _promptQueue = {};
+let _promptQueueSeq = 0;
+
+function _enqueuePrompt(ws, prompt) {
+  if (!_promptQueue[ws]) _promptQueue[ws] = [];
+  _promptQueue[ws].push({
+    id: `q-${++_promptQueueSeq}`,
+    prompt,
+    queuedAt: Math.floor(Date.now() / 1000),
+  });
+}
+
+function _dequeuePrompt(ws, id) {
+  if (!_promptQueue[ws]) return;
+  _promptQueue[ws] = _promptQueue[ws].filter((m) => m.id !== id);
+  if (_promptQueue[ws].length === 0) delete _promptQueue[ws];
+}
+
+function _hasActiveRun(ws) {
+  const data = groupByWorkspace(lastData.workspaces, lastData.sessions)[ws];
+  if (!data) return false;
+  return (data.active || []).length > 0 || (data.queued || []).length > 0;
+}
+
+let _dispatching = new Set();   // 防 race:同一 ws 同时只能在 dispatch 一条
+
+async function _dispatchAllQueues() {
+  for (const ws of Object.keys(_promptQueue)) {
+    if (_dispatching.has(ws)) continue;
+    if (_hasActiveRun(ws)) continue;
+    const queue = _promptQueue[ws];
+    if (!queue || queue.length === 0) continue;
+    const next = queue.shift();
+    if (queue.length === 0) delete _promptQueue[ws];
+    _dispatching.add(ws);
+    try {
+      await api('/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspace: ws,
+          prompt: next.prompt,
+          session_key: `pwa-${ws}`,
+          source: 'pwa',
+        }),
+      });
+      // dispatch 后即刻 refresh + 重 render,让 UI 看到新 running turn
+      // 跟队列项消失。auto-scroll-to-bottom 已经在 onTriggerSubmit 那边
+      // 做过 atBottom=true 的设置;dispatch path 也应该跟着,模拟同一
+      // "我按了 Run"的语义。
+      workspaceSessionScroll[ws] = { scrollTop: Infinity, atBottom: true };
+      workspaceStreamState[ws] = {
+        ...(workspaceStreamState[ws] || {}),
+        atBottom: true,
+        newEvents: 0,
+      };
+      refreshAll();
+    } catch (err) {
+      // 后端拒绝(409 / 网络) → 塞回队头让用户看到 + toast
+      if (!_promptQueue[ws]) _promptQueue[ws] = [];
+      _promptQueue[ws].unshift(next);
+      showError(`queued prompt failed: ${err.message}`);
+      render();
+    } finally {
+      _dispatching.delete(ws);
+    }
+  }
+}
 
 // 全局事件过滤:默认只显示 user / reply / result(thinking + tool_use +
 // tool_result 隐藏)。tool_result 出错时无视开关一律显示 —— 错误不能
@@ -1277,19 +1363,18 @@ function _onPromptKeydown(e) {
   }
 
   if (e.key !== 'Enter') return;
-  // Cmd/Ctrl+Enter: universal "send" shortcut, works on PC + mobile.
-  // Plain Enter: send on PC only (mobile keyboards have no Shift+Enter,
-  // so plain-Enter-as-send would lock users out of multi-line prompts).
-  const modSend = e.metaKey || e.ctrlKey;
-  const plainSend = !_isMobileViewport && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey;
-  if (!modSend && !plainSend) return;
+  // 跳过 IME composition:中文/日文输入法的"按 Enter 确认候选词"会发
+  // keydown(key='Enter', isComposing=true)。不能误判为提交,否则中文
+  // 用户每选一个字都飞出去。
+  if (e.isComposing || e.keyCode === 229) return;
+  // Shift+Enter / Alt+Enter:换行,不发送。
+  if (e.shiftKey || e.altKey) return;
+  // 其余 Enter(plain / Cmd / Ctrl)= 发送。Mobile 跟 PC 一致 —— chat
+  // app 的默认心智(ChatGPT / 飞书 都一样),要换行用 Shift+Enter。
+  // 上一版 mobile gate 掉 plain Enter,用户反馈"回车发送的逻辑也不见了"。
   e.preventDefault();
-  // Find the enclosing form and ask it to submit through the normal
-  // event path (so onTriggerSubmit runs with e.preventDefault + validity
-  // checks). requestSubmit triggers the submit handler + native validation.
   const form = e.currentTarget.closest('form');
-  if (form && form.checkValidity()) form.requestSubmit();
-  else if (form) form.reportValidity();
+  if (form) form.requestSubmit();
 }
 
 function bindWorkspaceColHandlers(root) {
@@ -1369,6 +1454,20 @@ function bindWorkspaceColHandlers(root) {
   // turn 的 event load。
   _stopAllTurnEventsPolls();
   _bindTurnInteractions(root);
+  // 队列里的 × 按钮:点了从 _promptQueue 移除并重 render。
+  for (const btn of root.querySelectorAll('.queue-remove')) {
+    btn.addEventListener('click', _onQueueRemoveClick);
+    _addTapFallback(btn, _onQueueRemoveClick);
+  }
+}
+
+function _onQueueRemoveClick(e) {
+  const btn = e.currentTarget;
+  const ws = btn.dataset.ws;
+  const qid = btn.dataset.qid;
+  if (!ws || !qid) return;
+  _dequeuePrompt(ws, qid);
+  render();
 }
 
 // Turn 交互的子绑定(turn-toggle / tool-result-fold + bootstrap)。
@@ -2257,10 +2356,33 @@ function workspaceColHtml(name, data, opts = {}) {
         ${providerEngineBlock}
       </div>
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
+      ${_queueListHtml(name)}
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
-        <textarea name="prompt" placeholder="reply with only OK · Enter to send, Shift+Enter for newline" required></textarea>
+        <textarea name="prompt"></textarea>
         <button type="submit">Run</button>
       </form>
+    </div>
+  `;
+}
+
+// Render queued prompts for a workspace(workspace 已有 run 在跑 + 用户
+// 继续发的 prompt 会进这个队列;跑完一条自动 dispatch 下一条)。每条
+// 一行 + ⏳ icon + 内容 + × 删除。空队列返回空字符串。
+function _queueListHtml(ws) {
+  const items = _promptQueue[ws] || [];
+  if (items.length === 0) return '';
+  const rows = items.map((m) => `
+    <div class="queue-item" data-ws="${esc(ws)}" data-qid="${esc(m.id)}">
+      <span class="queue-icon">⏳</span>
+      <span class="queue-prompt">${esc((m.prompt.split(/\r?\n/)[0] || '').slice(0, 200))}</span>
+      <button class="queue-remove" type="button"
+              data-ws="${esc(ws)}" data-qid="${esc(m.id)}" title="Remove from queue">×</button>
+    </div>
+  `).join('');
+  return `
+    <div class="queue-list" data-ws="${esc(ws)}">
+      <div class="queue-header">已排队(${items.length}),等当前 run 完成后按顺序发出</div>
+      ${rows}
     </div>
   `;
 }
@@ -2397,6 +2519,20 @@ async function onTriggerSubmit(e) {
   const ws = form.dataset.workspace;
   const prompt = form.elements.prompt.value.trim();
   if (!prompt) return;
+  // Workspace 已有 run 在跑 / 已有排队 → 这条进队列,不调 /run。后端会
+  // 409 拒绝(workspace_busy),前端排队 + 上一条跑完自动 dispatch 才能
+  // 顺畅串起来。
+  const busy = _hasActiveRun(ws) || (_promptQueue[ws]?.length > 0);
+  if (busy) {
+    _enqueuePrompt(ws, prompt);
+    form.reset();
+    clearDraft(form.dataset.formId);
+    form.querySelector('textarea')?.blur();
+    const queueLen = (_promptQueue[ws] || []).length;
+    showToast('info', `已排队(${queueLen} 条待发)`, { ttl: 1600 });
+    render();
+    return;
+  }
   const btn = form.querySelector('button[type="submit"]') || form.querySelector('button');
   btn.disabled = true;
   btn.textContent = 'Running…';
@@ -2570,12 +2706,15 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
       <button class="workspace-new-events" type="button" data-ws="${esc(name)}" ${state.newEvents ? '' : 'hidden'}>
         ↓ ${esc(state.newEvents || 0)} new
       </button>
+      ${_queueListHtml(name)}
       <form class="trigger-form workspace-input" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
-        <textarea name="prompt" placeholder="reply with only OK · Enter to send, Shift+Enter for newline" required></textarea>
-        <button class="run-btn" type="submit" ${isRunning ? 'disabled' : ''}>Run</button>
+        <textarea name="prompt"></textarea>
+        <button class="run-btn" type="submit">Run</button>
       </form>
     </div>
   `;
+  // ↑ Run 按钮不再 disabled-on-running:队列机制接管,用户随时可以提
+  // prompt,后台串行 dispatch。
 }
 
 function _workspaceTurnHtml(turn) {
@@ -2899,12 +3038,16 @@ function _workspaceOutputHtml(output) {
   `;
 }
 
+// Mobile-only 加成绑定:scroll 监听 + workspace-new-events fab。
+// turn-toggle / tool-result-fold / _loadTurnEvents bootstrap / 停 poll
+// 这一套 bindWorkspaceColHandlers 已经做了(renderMobileWorkspaceDetail
+// 调它在前),这里再绑一次会:
+//   - turn-toggle 同一按钮挂两个 click handler,点 1 次跑 2 次 → 状态翻
+//     2 次抵消,看着像"没反应"
+//   - _loadTurnEvents 同一 runId 并发 2 次 fetch /tail,两个 async 都跑
+//     to 渲染,大量 event duplicate(用户反馈"event 经常重复")
+// 所以这里只留 mobile 特定的两个,避免跟 bindWorkspaceColHandlers 重叠。
 function _bindWorkspaceSessionHandlers(root, name) {
-  // 整页 rerender 会重建 .turn-events 容器,所有正在跑的 poll 计时器
-  // 都指向"老 DOM 实例"了 —— 先全清,避免幽灵 timer 往不存在的容器里
-  // append。新 DOM 里的 expanded turn 会在下面重新触发一次 _loadTurnEvents。
-  _stopAllTurnEventsPolls();
-
   const stream = root.querySelector('.workspace-session-stream[data-ws]');
   if (stream) {
     stream.addEventListener('scroll', () => {
@@ -2917,24 +3060,10 @@ function _bindWorkspaceSessionHandlers(root, name) {
       _syncWorkspaceNewEventsButton(name);
     }, { passive: true });
   }
-  for (const btn of root.querySelectorAll('.turn-toggle')) {
-    btn.addEventListener('click', _onWorkspaceTurnToggle);
-    _addTapFallback(btn, _onWorkspaceTurnToggle);
-  }
-  for (const btn of root.querySelectorAll('.tool-result-fold')) {
-    btn.addEventListener('click', _onToolResultExpand);
-    _addTapFallback(btn, _onToolResultExpand);
-  }
   const newEvents = root.querySelector('.workspace-new-events');
   if (newEvents) {
     newEvents.addEventListener('click', _onWorkspaceNewEventsClick);
     _addTapFallback(newEvents, _onWorkspaceNewEventsClick);
-  }
-  // Bootstrap event load for turns that mount in expanded state(运行中
-  // turn + 最近完成 turn,见 workspaceTurnExpansion)。
-  for (const turn of root.querySelectorAll('.turn.turn-expanded')) {
-    const runId = turn.dataset.runId;
-    if (runId) _loadTurnEvents(runId);
   }
 }
 

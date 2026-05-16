@@ -2121,12 +2121,68 @@ pre {
   color: var(--text-tertiary);
   font-size: var(--text-micro);
 }
+/* ---------- Prompt queue(workspace 有 run 在跑时,继续发的 prompt 排队
+              在 input form 上方显示,等当前 run 完成自动 dispatch。)---- */
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3) 0;
+  background: var(--bg-canvas);
+}
+.queue-header {
+  font-size: var(--text-micro);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+}
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+.queue-icon { flex: 0 0 auto; color: var(--accent-amber); }
+.queue-prompt {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.queue-remove {
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+.queue-remove:hover {
+  color: var(--accent-red);
+  border-color: var(--accent-red);
+  background: rgba(239, 68, 68, 0.08);
+}
+
 .event-user   .event-label { color: var(--text-secondary); }
-.event-text   .event-label { color: var(--accent-green); }
+/* Reply 之前是 green 跟 done 同色,用户误以为"运行完成"。改 accent-blue ——
+   "对话进行中的回复",跟 done 的 green 区分开。 */
+.event-text   .event-label { color: var(--accent-blue); }
 .event-thinking .event-label { color: var(--accent-purple); }
 .event-tool   .event-label { color: var(--accent-cyan); }
 .event-tool-result .event-label { color: var(--text-tertiary); }
 .event-tool-result-error .event-label { color: var(--accent-red); }
+/* event-final = Done 状态总结,green 跟 status icon 一致语义对得上。 */
 .event-final  .event-label { color: var(--accent-green); }
 /* tool_use:一行 code,name 高亮 + args 暗灰,等宽,可换行(长 path 不
    被裁断)。 */
