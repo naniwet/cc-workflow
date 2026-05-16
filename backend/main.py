@@ -982,12 +982,22 @@ def get_loops() -> list[dict]:
                 # Run was deleted (or never made it to db); skip rather
                 # than emit a {id, ...nulls} placeholder the UI can't use.
                 continue
+            # output_preview:跟 _RUN_SUMMARY_COLS 的 head+tail+elision
+            # 语义一致的 200 char 预览,给 PWA 前端 turn 卡片的 reply
+            # preview 行用。output 可能是 None / 空,兜底成空字符串。
+            output = r.get("output") or ""
+            if len(output) <= 200:
+                output_preview = output
+            else:
+                output_preview = output[:100] + "\n…\n" + output[-100:]
             runs.append({
                 "id": rid,
                 "status": r.get("status"),
                 "started_at": r.get("started_at"),
                 "finished_at": r.get("finished_at"),
+                "elapsed_s": r.get("elapsed_s"),
                 "exit_code": r.get("exit_code"),
+                "output_preview": output_preview,
             })
         j["recent_runs"] = runs
     return jobs

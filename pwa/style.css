@@ -1912,6 +1912,39 @@ pre {
    `.turn-collapsed .turn-body`(0,2,0)赢过两者 —— 这才是 tap-
    to-expand 真正生效的入口。 */
 .turn-collapsed .turn-body { display: none; }
+
+/* Collapse-foot:expanded turn body 最末尾的"▲ Collapse"按钮 ——
+   reply / events 长起来后,免得用户滚到 head chevron 才能收起。
+   宽度撑满,subtle styling 不抢眼。点击走同一个 _onWorkspaceTurnToggle。
+   collapsed 态整个 turn-body 都被 display:none 藏起来了,所以这条
+   规则自动也藏(不用单独写 `.turn-collapsed .turn-collapse-foot`)。 */
+.turn-collapse-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  margin-top: var(--space-2);
+  background: transparent;
+  color: var(--text-tertiary);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
+}
+.turn-collapse-foot:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  border-style: solid;
+}
+.turn-collapse-foot .turn-caret {
+  width: auto;
+  font-size: 11px;
+  color: inherit;
+}
 .event {
   /* 设计图 §4:每个 event 一行,左侧 72px 给 label,右侧 1fr 给 body。
      :not(:first-child) 给上下两条 event 之间一条细分隔,但 body

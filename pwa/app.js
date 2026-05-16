@@ -2634,10 +2634,21 @@ function _workspaceTurnHtml(turn) {
         ${userHeaderHtml}
         ${eventsHtml}
         ${approvals}
+        <button class="turn-collapse-foot turn-toggle" type="button"
+                data-run-id="${esc(turn.id || '')}" data-expanded="1"
+                title="Collapse this turn">
+          <span class="turn-caret">▲</span> Collapse
+        </button>
       </div>
     </article>
   `;
 }
+// ↑ collapse-foot 按钮:expanded turn body 最末尾加一个收起按钮 ——
+//   reply / events 长起来后,用户不用再滚到最顶 chevron 才能收起。
+//   class .turn-toggle 让现有 _onWorkspaceTurnToggle handler 自动绑上。
+//   data-expanded=1 hardcode 因为它只在 .turn-expanded 时 CSS 可见,
+//   点击必然是 "从展开切到收起"。CSS 用 .turn-collapsed .turn-collapse-foot
+//   { display: none } 收起态隐藏自身。
 // ↑ approvals 放在最后 —— bug:之前夹在 USER 和 events 之间,events 长出
 //   来后 approval 被推到上方,auto-scroll-to-bottom 之后用户看不到 Approve
 //   按钮。挪到 events 后面,turn 的最底部就是 [Approve][Deny],跟输入框
@@ -2929,7 +2940,12 @@ function _onWorkspaceTurnToggle(e) {
   const next = btn.dataset.expanded !== '1';
   workspaceTurnOverrides[runId] = next;
   btn.dataset.expanded = next ? '1' : '0';
-  btn.querySelector('.turn-caret').textContent = next ? '▼' : '▶';
+  // 同步整个 turn 里所有 .turn-caret(head 的 ▶/▼ + foot 的 ▲ 之类):
+  // 收起态都用 ▶,展开态都用 ▼。Foot 按钮的 ▲ 是装饰性的,被覆盖也无妨
+  // —— foot 收起时整个 CSS 隐藏,文字看不到。head 是关键,必须同步。
+  for (const caret of turn?.querySelectorAll('.turn-caret') || []) {
+    caret.textContent = next ? '▼' : '▶';
+  }
   // 用 class 控制 body 可见性,不用 [hidden] —— author 的
   // `.turn-body { display: flex }` 特异性盖过 UA 的 [hidden] {
   // display: none },attribute 视觉无效。CSS 里的
@@ -3732,16 +3748,16 @@ function renderTasksView() {
 // preservation" elsewhere in this file).
 function loopHistoryHtml(loop) {
   const runs = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
+  // 第 0 条(最新)已经在 loopRowHtml 里以 expanded turn 显式渲染了,
+  // 这里只装更老的(index 1+)。<= 1 条就直接不渲染 details。
   if (runs.length <= 1) return '';
+  const olderRuns = runs.slice(1);
   const detailsId = `loop-hist-${loop.name}`;
-  // 把每个历史 run 映射成 turn 数据,复用 _workspaceTurnHtml 渲染:
-  // 单行收起 summary,点击原地展开看 event timeline(同 workspace
-  // overview / detail 的统一交互)。
-  //
-  // cron 的 recent_runs 不带 prompt(后端不存),所以用 loop.prompt 作为
-  // 兜底 —— 同一 loop 的所有 run 用同一个 prompt,语义对得上(除非
-  // loop.prompt 中途改过,那历史 run 显示的就是新 prompt,小瑕疵)。
-  const turns = runs.map((r) => ({
+  // 历史 run 默认收起单行 summary,点开看 events。reply preview 复用
+  // 后端新加的 output_preview 字段(/loops 返回里加的)。prompt 用
+  // loop.prompt 兜底(后端 recent_runs 不存每个 run 的 prompt;同 loop
+  // 共用 loop.prompt,中途改了的话历史 run 显示新 prompt —— 小瑕疵)。
+  const turns = olderRuns.map((r) => ({
     id: r.id || '',
     status: r.status || (r.finished_at != null
       ? (r.exit_code === 0 ? 'done' : 'failed')
@@ -3750,12 +3766,13 @@ function loopHistoryHtml(loop) {
     started_at: r.started_at,
     elapsed_s: r.elapsed_s,
     exit_code: r.exit_code,
-    expanded: false,   // 历史 run 全部默认收起;<details> 自己已经一层折叠了
+    output_preview: r.output_preview || '',
+    expanded: false,
   }));
   const items = turns.map(_workspaceTurnHtml).join('');
   return `
     <details class="loop-history" data-details-id="${esc(detailsId)}">
-      <summary>history (${runs.length} runs)</summary>
+      <summary>older history (${olderRuns.length} runs)</summary>
       <div class="loop-hist-list">${items}</div>
     </details>
   `;
@@ -3797,13 +3814,23 @@ function loopRowHtml(loop) {
   const humanSched = schedule ? humanizeCron(schedule) : '—';
   const nextLabel = enabled ? nextRunLabel(schedule) : '';
   const schedTitle = schedule && humanSched !== schedule ? ` title="${esc(schedule)}"` : '';
-  const stateHtml = loopStatus === 'running'
-    ? `<div class="task-state task-state-running">running<br><span>${esc(latestRun?.started_at ? timeAgo(latestRun.started_at) : 'queued')}</span></div>`
-    : loopStatus === 'failed'
-      ? `<div class="task-state task-state-failed">failed×${esc(loop.consecutive_errors || 1)}<br><span>retry</span></div>`
-      : loopStatus === 'paused'
-        ? `<div class="task-state">paused</div>`
-        : `<div class="task-state">done<br><span>${esc(lastRel)}</span></div>`;
+  // Latest run 直接复用 turn-streaming(跟 workspace overview / detail
+  // 同一套 UI):默认展开,展现完整 event timeline。比之前的"loop-prompt
+  // + loop-stats + loop-last-output 三段堆叠"信息密度高 + 跟其他地方
+  // 视觉一致。loop 级 aggregate(runs N · exit X)挪到 loop-spec 行
+  // 紧凑展示。
+  const latestTurnHtml = latestRun
+    ? _workspaceTurnHtml({
+        id: latestRun.id || '',
+        status: latestRun.status || (latestRun.exit_code === 0 ? 'done' : 'failed'),
+        prompt: prompt || '(cron)',
+        started_at: latestRun.started_at,
+        elapsed_s: latestRun.elapsed_s,
+        exit_code: latestRun.exit_code,
+        output_preview: latestRun.output_preview || '',
+        expanded: true,
+      })
+    : '<p class="muted" style="margin:8px 0">(no runs yet — schedule will fire next)</p>';
 
   return `
     <div class="row loop-row ${loopStatus}" data-loop-name="${esc(loop.name)}">
@@ -3825,22 +3852,9 @@ function loopRowHtml(loop) {
         · <code>${esc(workspace)}</code>
         ${engine ? ` · <span class="muted">${esc(engine)}</span>` : ''}
         ${nextLabel ? ` · <span class="task-next">${esc(nextLabel)}</span>` : ''}
+        · <span class="muted">runs ${esc(loop.total_runs || 0)} · last exit ${esc(last_exit)}</span>
       </div>
-      ${stateHtml}
-      ${prompt ? `<div class="loop-prompt">▸ ${esc(prompt)}</div>` : ''}
-      <div class="loop-stats">
-        <span title="${esc(lastAbs)}">last ${esc(lastRel)}</span>
-        · runs ${esc(loop.total_runs || 0)}
-        · exit ${esc(last_exit)}
-        ${loop.last_run_id
-          ? ` · <a href="#runs/${encodeURIComponent(loop.last_run_id)}" class="loop-run-link" title="Open last run-detail (full output + transcript + tool approvals)">→ open</a>`
-          : ''}
-      </div>
-      ${latestRunning
-        ? `<div class="loop-last-output" title="A fresh run is in progress; open it for live output">↳ 当前 run ${esc(latestRun.status)} · 打开详情看实时输出</div>`
-        : loop.last_output_summary
-        ? `<div class="loop-last-output" title="Last output preview (truncated; full output on the run-detail page)">↳ ${esc(loop.last_output_summary)}</div>`
-        : ''}
+      ${latestTurnHtml}
       ${loopHistoryHtml(loop)}
     </div>
   `;
