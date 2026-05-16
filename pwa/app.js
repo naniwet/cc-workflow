@@ -3851,9 +3851,14 @@ function _sparklineHtml(loop) {
   `;
 }
 
-// 紧凑 task list row:1 行 = dot + name + state + sparkline + schedule
-// + next-fire。整行可点 → #tasks/<name> detail。无内嵌 turn,无 history
-// 折叠(设计图 §3.2:Tasks tab 是列表,详情看 stream 才进 detail 页)。
+// 紧凑 task list row:
+//   行 1 meta:dot + name + state + sparkline + schedule + next-fire + workspace
+//   行 2 prompt:▸ loop.prompt 首行(粗体)
+//   行 3 reply preview:↳ latest run output_preview(2 行 clamp)
+// 整张卡片可点 → #tasks/<name> detail。设计图 §3.2 列表紧凑,但用户反馈
+// "光 name + state 不直观,看不出 cron 干啥的",所以加 prompt + reply
+// 两行 —— 跟 workspace overview turn 的 2 行 layout 对齐,信息密度 vs
+// 列表紧凑做折中。
 function loopRowHtml(loop) {
   const loopStatus = _loopComputedStatus(loop);
   const schedule = loop.schedule || '';
@@ -3861,20 +3866,31 @@ function loopRowHtml(loop) {
   const nextLabel = loop.enabled ? nextRunLabel(schedule) : '';
   const schedTitle = schedule && humanSched !== schedule ? ` title="${esc(schedule)}"` : '';
   const stale = (loop.consecutive_errors || 0) >= 3;
+  const recentRuns = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
+  const latest = recentRuns[0];
+  const promptSummary = (loop.prompt || '').split(/\r?\n/).find((l) => l.trim()) || '';
+  const replyRaw = latest ? String(latest.output_preview || '').trim() : '';
+  const replyPreview = replyRaw
+    ? replyRaw.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && l !== '…').join(' ').slice(0, 400)
+    : '';
   return `
     <a class="row loop-row loop-row-link ${loopStatus}"
        data-loop-name="${esc(loop.name)}"
        href="#tasks/${encodeURIComponent(loop.name)}">
-      <span class="task-dot ${esc(loopStatus)}"></span>
-      <code class="loop-name">${esc(loop.name)}</code>
-      <span class="loop-row-state muted">${esc(loopStatus)}</span>
-      ${_sparklineHtml(loop)}
-      <span class="loop-row-spec muted">
-        <span${schedTitle}>${esc(humanSched)}</span>
-        · <code>${esc(loop.workspace || '—')}</code>
-        ${nextLabel ? ` · ${esc(nextLabel)}` : ''}
-        ${stale ? ` · <span class="tag-failed">stale ×${esc(loop.consecutive_errors)}</span>` : ''}
-      </span>
+      <div class="loop-row-meta">
+        <span class="task-dot ${esc(loopStatus)}"></span>
+        <code class="loop-name">${esc(loop.name)}</code>
+        <span class="loop-row-state muted">${esc(loopStatus)}</span>
+        ${_sparklineHtml(loop)}
+        <span class="loop-row-spec muted">
+          <span${schedTitle}>${esc(humanSched)}</span>
+          ${nextLabel ? ` · ${esc(nextLabel)}` : ''}
+          · <code>${esc(loop.workspace || '—')}</code>
+          ${stale ? ` · <span class="tag-failed">stale ×${esc(loop.consecutive_errors)}</span>` : ''}
+        </span>
+      </div>
+      ${promptSummary ? `<div class="loop-row-prompt">▸ ${esc(promptSummary)}</div>` : ''}
+      ${replyPreview ? `<div class="loop-row-reply">↳ ${esc(replyPreview)}</div>` : ''}
     </a>
   `;
 }

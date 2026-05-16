@@ -1370,12 +1370,17 @@ pre {
    workspace + engine + prompt preview + stats). */
 .task-list { display: flex; flex-direction: column; gap: var(--space-2); }
 
-/* Tasks tab 紧凑列表行(设计图 03 §3.2 后):每个 cron 一行 anchor,
-   整行可点 → #tasks/<name>。无展开 turn、无折叠历史 —— 详情进 detail 页。 */
+/* Tasks tab 列表行(设计图 03 §3.2 + 用户反馈"光 name + state 不直观"
+   后):flex column 3 段:
+     meta(dot+name+state+sparkline+schedule)
+     prompt(▸ loop.prompt 首行,粗体)
+     reply(↳ latest run output_preview,2 行 clamp)
+   跟 workspace overview turn 的 2 行 layout 同视觉语言。整张 anchor
+   可点 → #tasks/<name> detail。 */
 .loop-row.loop-row-link {
-  flex-direction: row !important;
-  align-items: center !important;
-  gap: var(--space-3) !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: var(--space-2) !important;
   padding: var(--space-3);
   text-decoration: none;
   color: inherit;
@@ -1392,6 +1397,13 @@ pre {
 }
 .loop-row.failed { border-color: rgba(239, 68, 68, 0.35); }
 .loop-row.paused { opacity: .55; }
+.loop-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .loop-row-state {
   min-width: 56px;
   font-size: var(--text-sm);
@@ -1403,6 +1415,27 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--text-sm);
+}
+.loop-row-prompt {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: var(--lh-tight);
+}
+.loop-row-reply {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  line-height: var(--lh-tight);
+  /* 2 行 clamp,同 .turn-reply-preview。-webkit-* 前缀全主流浏览器都
+     支持(虽然带 webkit 名字)。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 /* Sparkline:7 个小色块,每个 ~14px。设计图 03 §3.2。 */
