@@ -2423,6 +2423,16 @@ async function onTriggerSubmit(e) {
     // wouldn't repaint the timeline → new run wouldn't appear until the
     // user clicked away from the textarea.
     form.querySelector('textarea')?.blur();
+    // 用户按 Run = "我现在就在底,新 turn 是我的焦点"。强制 atBottom=true
+    // 让下一次 render 走 scrollTop=scrollHeight 路径,不是恢复 saved
+    // scrollTop(那个 saved 是用户先前展开 turn 时 scroll handler 存下的,
+    // 会把视口拽回到那条展开的 turn —— 用户反馈的 bug 1 根因)。
+    workspaceSessionScroll[ws] = { scrollTop: Infinity, atBottom: true };
+    workspaceStreamState[ws] = {
+      ...(workspaceStreamState[ws] || {}),
+      atBottom: true,
+      newEvents: 0,
+    };
     refreshAll();
   } catch (err) {
     showError(`trigger failed: ${err.message}`);

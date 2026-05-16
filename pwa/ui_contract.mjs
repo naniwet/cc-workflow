@@ -108,19 +108,26 @@ function _isRunningTurn(turn) {
 // opts.expandAll:全部默认展开(PC detail 用,屏幕宽,顺序看完整对话比
 // 一次次点开舒服)。manual override 仍然能再收起单个。
 //
-// opts.autoCollapseAfterSec:最近完成的 turn 在 done/failed 状态停留满
-// 这么多秒后,自动收起(让用户读完结果不留 clutter)。默认 6 秒,0 关闭。
-// 不影响 expandAll(PC detail 仍然全展开)和 manual override。需要传
-// opts.nowSec(测试用 deterministic time;运行时不传 → 取 Date.now)。
+// "Auto-collapse" 触发:出现 latestCompletedIdx 之后还有 running/queued
+// turn(=用户已经开始下一轮)→ 之前那条 completed 收起。没有新 running
+// 时 latest completed 一直保留展开,让用户安心读完。
+//
+// 早期版本(b4016c9 之前)用 time-based(done 6 秒后自动收起),被用户
+// 反馈"读到一半 turn 突然收起,视口跟着跳"。改成事件驱动 trigger 后
+// 没这个问题 —— 用户主动发新消息才会发生 collapse。
 export function workspaceTurnExpansion(turns, manual = {}, opts = {}) {
   const safeTurns = Array.isArray(turns) ? turns : [];
   const expandAll = !!opts.expandAll;
-  const autoCollapseAfter = opts.autoCollapseAfterSec ?? 6;
-  const now = Number(opts.nowSec ?? Math.floor(Date.now() / 1000));
   let latestCompletedIdx = -1;
+  let latestRunningIdx = -1;
   for (let i = 0; i < safeTurns.length; i++) {
-    if (!_isRunningTurn(safeTurns[i])) latestCompletedIdx = i;
+    if (_isRunningTurn(safeTurns[i])) latestRunningIdx = i;
+    else latestCompletedIdx = i;
   }
+  // 如果 latestRunningIdx > latestCompletedIdx,说明 "前面完成的 +
+  // 后面又开了新的 running",前一条 completed 应该自动 collapse 让位
+  // 给新的对话焦点。
+  const hasNewerRunning = latestRunningIdx > latestCompletedIdx;
   return safeTurns.map((turn, idx) => {
     const id = String(turn?.id ?? idx);
 
@@ -133,17 +140,12 @@ export function workspaceTurnExpansion(turns, manual = {}, opts = {}) {
     // 2. Running 永远展开
     if (_isRunningTurn(turn)) return { ...turn, id, expanded: true };
 
-    // 3. expandAll(PC detail)永远展开,不受 auto-collapse 影响
+    // 3. expandAll(PC detail)永远展开
     if (expandAll) return { ...turn, id, expanded: true };
 
-    // 4. 最近完成的 turn:默认展开,但 done 满 autoCollapseAfter 秒后收起
+    // 4. 最近完成的 turn:展开,除非后面已经有新 running turn 接力
     if (idx === latestCompletedIdx) {
-      const finishedAt = Number(turn?.finished_at)
-        || (Number(turn?.started_at || 0) + Number(turn?.elapsed_s || 0));
-      const settled = autoCollapseAfter > 0
-        && finishedAt > 0
-        && (now - finishedAt) > autoCollapseAfter;
-      return { ...turn, id, expanded: !settled };
+      return { ...turn, id, expanded: !hasNewerRunning };
     }
 
     // 5. 更早的 completed:收起
