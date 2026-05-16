@@ -508,18 +508,30 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
 
 @app.post("/workspaces/{name}/pull", dependencies=PROTECT)
 def pull_workspace(name: str) -> dict:
-    """Run `git pull --ff-only` inside ~/workspaces/<name>.
+    """两步 pull:先把 origin 拉进主 worktree 的 main,再把 PWA session 的
+    cc/* 分支 rebase 到新 main 上 —— 让 claude 下次跑能看到 upstream 的
+    新代码。
 
-    Fast-forward-only on purpose: surfacing a merge conflict via a
-    silent merge commit would be much worse than the user seeing "your
-    branch has diverged, deal with it via ssh". Same path constraints
-    as DELETE /workspaces/{name} — name is validated against the
-    discovered workspace list, no traversal.
+    背景:PWA session 跑在 ~/workspaces/.wt/<name>-pwa-<name>/ 这个独立
+    worktree 上(agent-run.sh:354 worktree 隔离),分支是
+    cc/<name>-pwa-<name>。如果只 pull 主 worktree,worktree 的工作目录
+    还停在老 commit,claude 看不到刚拉的更新。
+
+    流程:
+      1. git -C ~/workspaces/<name> pull --ff-only(主 worktree,跟之前一样)
+         失败直接抛 —— 主线没动就别动 worktree
+      2. 若 .wt/<name>-pwa-<name>/ 存在:
+         git -C <worktree> rebase main —— 把主上新增的 commit 平铺进
+         worktree 分支的 base。冲突就 --abort 留干净状态,warning 返回。
+
+    Fast-forward-only on main:跟之前一样,merge 冲突 silent-merge-commit
+    比 "branch diverged" 错误难 debug 得多。
 
     Returns:
-      { ok: True, workspace, summary, stdout, stderr }
-    The PWA surfaces `summary` in the success toast; stdout/stderr are
-    available for debug if the user clicks through to the run.
+      { ok, workspace, summary, stdout, stderr,
+        worktree_rebase_ok, worktree_msg }
+    main pull 失败:抛 4xx;worktree rebase 失败:ok=True + worktree_rebase_ok=False
+    (主线已经拉成功了,worktree 失败不该把整体当失败)。
     """
     # Path-traversal + existence guard. Reuse the discover helper so this
     # endpoint can't be tricked into running git outside ~/workspaces/.
@@ -536,24 +548,27 @@ def pull_workspace(name: str) -> dict:
         )
 
     import subprocess
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(target), "pull", "--ff-only"],
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(504, {"error": "git pull timed out (60s)"})
-    except OSError as e:
-        raise HTTPException(500, {"error": f"git not runnable: {e}"})
 
-    stdout = (proc.stdout or "").strip()
-    stderr = (proc.stderr or "").strip()
-    if proc.returncode != 0:
+    def _git(cwd, args, timeout=60):
+        try:
+            p = subprocess.run(
+                ["git", "-C", str(cwd), *args],
+                capture_output=True, text=True, timeout=timeout, check=False,
+            )
+            return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
+        except subprocess.TimeoutExpired:
+            return 124, "", f"git {args[0]} timed out ({timeout}s)"
+        except OSError as e:
+            return 127, "", f"git not runnable: {e}"
+
+    # === Step 1: pull 主 worktree ===
+    rc, stdout, stderr = _git(target, ["pull", "--ff-only"])
+    if rc != 0:
         raise HTTPException(
             400,
             {
                 "error": "git_pull_failed",
-                "msg": stderr or stdout or f"git pull exit {proc.returncode}",
+                "msg": stderr or stdout or f"git pull exit {rc}",
                 "stdout": stdout,
                 "stderr": stderr,
             },
@@ -577,12 +592,46 @@ def pull_workspace(name: str) -> dict:
         if "file" in line and "changed" in line:
             summary = line.strip()
             break
+
+    # === Step 2: rebase PWA worktree 的 cc/* 分支到新 main ===
+    # 命名跟 agent-run.sh 一致(session_key="pwa-<ws>", SESSION_SAFE=
+    # 同名因为只有 ASCII)。
+    session_key = f"pwa-{name}"
+    worktree_path = config.WORKSPACES_DIR / ".wt" / f"{name}-{session_key}"
+    worktree_rebase_ok = True
+    worktree_msg = ""
+
+    if worktree_path.exists():
+        # 拿 main 的实际分支名(可能是 main / master)
+        rc, head, _ = _git(target, ["rev-parse", "--abbrev-ref", "HEAD"])
+        main_branch = head or "main"
+
+        rc, out, err = _git(worktree_path, ["rebase", main_branch])
+        if rc == 0:
+            # 静默成功别填 msg 也行,但 toast 想看到 "session worktree 同步了"
+            # 这条信号,挑一行简短描述。
+            for line in out.splitlines():
+                if line.startswith(("Successfully rebased", "Current branch")):
+                    worktree_msg = line.strip()
+                    break
+            if not worktree_msg:
+                worktree_msg = f"session worktree rebased onto {main_branch}"
+        else:
+            # 冲突就 --abort 留干净状态,reset 不算整体失败
+            _git(worktree_path, ["rebase", "--abort"])
+            worktree_rebase_ok = False
+            worktree_msg = f"rebase conflict on session worktree — resolve via ssh: {(err or out)[:200]}"
+    else:
+        worktree_msg = "no PWA session worktree yet (nothing to sync)"
+
     return {
         "ok": True,
         "workspace": name,
         "summary": summary,
         "stdout": stdout,
         "stderr": stderr,
+        "worktree_rebase_ok": worktree_rebase_ok,
+        "worktree_msg": worktree_msg,
     }
 
 

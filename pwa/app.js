@@ -1773,8 +1773,18 @@ async function _onPullLatestClick(e) {
   btn.disabled = true;
   try {
     const r = await api(`/workspaces/${encodeURIComponent(ws)}/pull`, { method: 'POST' });
-    const summary = r?.summary || 'pulled';
-    showToast('success', `${ws}: ${summary}`, { ttl: 3500 });
+    const main = r?.summary || 'pulled';
+    const wt = r?.worktree_msg || '';
+    // 3 种回包形状:
+    //   ok=true, worktree_rebase_ok=true  → success "main: ... · session worktree: ..."
+    //   ok=true, worktree_rebase_ok=false → warning(main 拉成功,worktree rebase 冲突)
+    //   抛错(http 4xx)                   → error(main pull 自己挂了)
+    if (r?.worktree_rebase_ok === false) {
+      showToast('warning', `${ws}: ${main} · ${wt}`, { ttl: 6000 });
+    } else {
+      const msg = wt ? `${ws}: ${main} · ${wt}` : `${ws}: ${main}`;
+      showToast('success', msg, { ttl: 3500 });
+    }
   } catch (err) {
     showError(`pull failed: ${err.message}`);
   } finally {
