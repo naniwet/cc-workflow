@@ -80,6 +80,24 @@ test('workspaceTurnExpansion lets manual toggles override completed turns', () =
   ]);
 });
 
+test('workspaceTurnExpansion expandAll opens every turn(PC detail 模式)', () => {
+  const turns = [
+    { id: 'r1', status: 'done' },
+    { id: 'r2', status: 'done' },
+    { id: 'r3', status: 'done' },
+  ];
+  // expandAll:true → 三个都开
+  assert.deepEqual(
+    workspaceTurnExpansion(turns, {}, { expandAll: true }).map((t) => [t.id, t.expanded]),
+    [['r1', true], ['r2', true], ['r3', true]],
+  );
+  // manual 反转仍然生效:r2 手动收起
+  assert.deepEqual(
+    workspaceTurnExpansion(turns, { r2: false }, { expandAll: true }).map((t) => [t.id, t.expanded]),
+    [['r1', true], ['r2', false], ['r3', true]],
+  );
+});
+
 test('foldToolResult keeps the first five lines and reports hidden lines', () => {
   const folded = foldToolResult(['one', 'two', 'three', 'four', 'five', 'six', 'seven'].join('\n'));
 

@@ -102,15 +102,20 @@ function _isRunningTurn(turn) {
   return turn?.status === 'running' || turn?.status === 'queued';
 }
 
-export function workspaceTurnExpansion(turns, manual = {}) {
+// 默认行为(设计图 §3.2):running + 最近 1 个 completed turn 展开,其余
+// 收起。manual override 可以反转任意一个。
+// opts.expandAll:全部默认展开(PC detail 用,屏幕宽,顺序看完整对话比
+// 一次次点开舒服)。manual override 仍然能再收起单个。
+export function workspaceTurnExpansion(turns, manual = {}, opts = {}) {
   const safeTurns = Array.isArray(turns) ? turns : [];
+  const expandAll = !!opts.expandAll;
   let latestCompletedIdx = -1;
   for (let i = 0; i < safeTurns.length; i++) {
     if (!_isRunningTurn(safeTurns[i])) latestCompletedIdx = i;
   }
   return safeTurns.map((turn, idx) => {
     const id = String(turn?.id ?? idx);
-    let expanded = _isRunningTurn(turn) || idx === latestCompletedIdx;
+    let expanded = _isRunningTurn(turn) || idx === latestCompletedIdx || expandAll;
     if (!_isRunningTurn(turn) && Object.prototype.hasOwnProperty.call(manual, id)) {
       expanded = !!manual[id];
     }

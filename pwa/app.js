@@ -2070,8 +2070,10 @@ function workspaceColHtml(name, data, opts = {}) {
   // 卡片高度受限(max 10 行),没有展开空间。
   let timelineHtml;
   if (detail) {
+    // PC detail 模式默认全部 turn 展开 —— 屏幕宽,顺序看完整对话 timeline
+    // 比一次次点开舒服。手动 override(workspaceTurnOverrides)能再收单条。
     const turns = _workspaceSessionTurns(data);
-    const expandedTurns = workspaceTurnExpansion(turns, workspaceTurnOverrides);
+    const expandedTurns = workspaceTurnExpansion(turns, workspaceTurnOverrides, { expandAll: true });
     timelineHtml = expandedTurns.length
       ? expandedTurns.map(_workspaceTurnHtml).join('')
       : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
