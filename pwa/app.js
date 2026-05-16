@@ -2661,23 +2661,35 @@ async function _loadTurnEvents(runId) {
   const isRunning = status === 'running' || status === 'queued';
   const already = Number(container.dataset.renderedLines || 0);
 
+  // 统一管 loading placeholder:容器里没渲染过任何 .event 时,显示一条
+  // muted 文字。这样 "Loading… → Waiting… → 真 event" 三态切换不会
+  // 导致 placeholder 被提前删掉(以前 bug:第一次 poll 拿到 system 行
+  // 全被 parse 过滤,html 为空但 loading 已经 remove,容器变 0 高度,
+  // 下次真 event 来又长回去 — 用户看到高度跳)。
+  const _setLoadingText = (text) => {
+    if (container.querySelector('.event')) return;  // 已经有 event,不动
+    let el = container.querySelector('.turn-events-loading');
+    if (!el) {
+      // 之前用 innerHTML 写错误/空消息可能把 placeholder 替掉了,
+      // 重新建一个。
+      container.innerHTML = `<div class="muted turn-events-loading">${esc(text)}</div>`;
+    } else {
+      el.textContent = text;
+    }
+  };
+
   let data;
   try {
     data = await api(`/runs/${encodeURIComponent(runId)}/tail?lines=5000`);
   } catch (err) {
-    // 失败时换占位文案,但不停止 polling — 网络抖动一下就好。仅在第一次
-    // 加载失败时显示错误,避免覆盖已渲染的好数据。
-    if (already === 0) {
-      container.innerHTML = `<div class="muted">Failed to load events: ${esc(err.message || err)}</div>`;
-    }
+    _setLoadingText(`Failed to load events: ${err.message || err}`);
+    // 失败不停 polling — 网络抖动一下就好
     if (isRunning) _turnEventsTimers[runId] = setTimeout(() => _loadTurnEvents(runId), 2500);
     return;
   }
 
   if (!data.exists) {
-    if (already === 0) {
-      container.innerHTML = '<div class="muted">No event stream yet — run may not have emitted any events.</div>';
-    }
+    _setLoadingText('Waiting for first event…');
     if (isRunning) _turnEventsTimers[runId] = setTimeout(() => _loadTurnEvents(runId), 2500);
     return;
   }
@@ -2699,16 +2711,28 @@ async function _loadTurnEvents(runId) {
     const newLines = allLines.slice(already);
     const newEvents = parseStreamLinesToEvents(newLines);
     const html = newEvents.map(_renderTurnEvent).join('');
-    const loading = container.querySelector('.turn-events-loading');
-    if (loading) loading.remove();
-    if (html) container.insertAdjacentHTML('beforeend', html);
-    container.dataset.renderedLines = String(allLines.length);
-    // Bind fold buttons for tool_result 长输出(只 bind 新增的)。
-    for (const btn of container.querySelectorAll('.tool-result-fold:not([data-bound])')) {
-      btn.addEventListener('click', _onToolResultExpand);
-      _addTapFallback(btn, _onToolResultExpand);
-      btn.dataset.bound = '1';
+
+    // 只有 html 真有内容才 remove loading + 插入。html 可能为空 ——
+    // 比如 system init 行被 parser 过滤,或 thinking/tool 被 "Show all
+    // events"=OFF filter 过滤。这种情况下保留 placeholder,等下一波。
+    if (html) {
+      const loading = container.querySelector('.turn-events-loading');
+      if (loading) loading.remove();
+      container.insertAdjacentHTML('beforeend', html);
+      for (const btn of container.querySelectorAll('.tool-result-fold:not([data-bound])')) {
+        btn.addEventListener('click', _onToolResultExpand);
+        _addTapFallback(btn, _onToolResultExpand);
+        btn.dataset.bound = '1';
+      }
+    } else {
+      // 全过滤掉了,placeholder 文案 mark 一下,让用户知道流是动的
+      // 但当前模式下没东西显示。
+      _setLoadingText('Running… (no visible events; toggle "Show all events" to see thinking/tools)');
     }
+
+    // 不管 html 空不空,renderedLines 都要 advance,否则下次 poll 同一行
+    // 又 parse 一遍。
+    container.dataset.renderedLines = String(allLines.length);
 
     // 重 scroll 到底,如果之前就在底。requestAnimationFrame 等浏览器
     // layout 完新 DOM 才量 scrollHeight,否则量的是 append 前的旧值。
@@ -2716,9 +2740,8 @@ async function _loadTurnEvents(runId) {
       requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
     }
   } else if (already === 0 && allLines.length === 0) {
-    // tail 文件存在但还没行 — 比"no event stream yet"更精确。
-    const loading = container.querySelector('.turn-events-loading');
-    if (loading) loading.textContent = 'Waiting for first event…';
+    // tail 文件存在但还没行
+    _setLoadingText('Waiting for first event…');
   }
 
   if (isRunning) {
