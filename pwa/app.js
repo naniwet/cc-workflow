@@ -2633,6 +2633,18 @@ async function _loadTurnEvents(runId) {
 
   const allLines = data.lines || [];
   if (allLines.length > already) {
+    // 关键:在 append 前记录 stream 当前是不是在底部。append 完如果之前
+    // 在底部就把 scrollTop 重新设到 scrollHeight 拉回去 —— 否则新 events
+    // 长出来后,scrollTop 没动,最新内容跑到视口外,看着就像"被输入框遮住"。
+    // 用户反馈的"自动滚到最下面漏了输入框这部分"就是这个根因。
+    // Chrome 桌面有 overflow-anchor:auto 自动帮忙,但 iOS Safari 对它支持
+    // 弱,所以这里显式管 —— 主要照顾 mobile workspace-session-stream,
+    // PC .ws-timeline 也保持同样语义(用户在底就跟到底)。
+    const stream = container.closest('.workspace-session-stream, .ws-timeline');
+    const wasAtBottom = stream
+      ? (stream.scrollHeight - stream.clientHeight - stream.scrollTop) < 80
+      : false;
+
     const newLines = allLines.slice(already);
     const newEvents = parseStreamLinesToEvents(newLines);
     const html = newEvents.map(_renderTurnEvent).join('');
@@ -2645,6 +2657,12 @@ async function _loadTurnEvents(runId) {
       btn.addEventListener('click', _onToolResultExpand);
       _addTapFallback(btn, _onToolResultExpand);
       btn.dataset.bound = '1';
+    }
+
+    // 重 scroll 到底,如果之前就在底。requestAnimationFrame 等浏览器
+    // layout 完新 DOM 才量 scrollHeight,否则量的是 append 前的旧值。
+    if (wasAtBottom && stream) {
+      requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
     }
   } else if (already === 0 && allLines.length === 0) {
     // tail 文件存在但还没行 — 比"no event stream yet"更精确。
