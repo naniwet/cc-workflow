@@ -2568,9 +2568,18 @@ function _workspaceTurnHtml(turn) {
   const status = turn.status || '?';
   const prompt = turn.prompt || '';
   const expanded = !!turn.expanded;
-  // Collapsed-head 单行展示:caret + prompt 首行 + 状态 icon + 用时 + 起始时间。
-  // 设计图 §3.2 要求收起态固定一行,所有 turn 等高。
+  // Collapsed head 两行布局:
+  //   ▶ prompt 首行 .................. ✓ 53s 36m ago
+  //   ↳ reply preview ...
+  // reply preview 来源 turn.output_preview(后端 db._RUN_SUMMARY_COLS 用
+  // head+tail+elision 拼出的预览,长 reply 也能看到末尾结论)。没有
+  // output_preview(running / queued / cron 没存)就退化为单行 prompt。
+  // expanded 时 reply preview 被 CSS 隐藏(body 里全文 reply 已经看到)。
   const summary = (prompt.split(/\r?\n/).find(Boolean) || '(empty prompt)').slice(0, 200);
+  const replyRaw = String(turn.output_preview || '').trim();
+  const replyPreview = replyRaw
+    ? replyRaw.split(/\r?\n/).filter((l) => l.trim() && l.trim() !== '…').join(' · ').slice(0, 240)
+    : '';
   const cancelBtn = status === 'running' && turn.id
     ? `<button class="run-cancel-btn turn-cancel" type="button" data-run-id="${esc(turn.id)}">✕ Cancel</button>`
     : '';
@@ -2602,7 +2611,12 @@ function _workspaceTurnHtml(turn) {
       <button class="turn-head turn-toggle" type="button"
               data-run-id="${esc(turn.id || '')}" data-expanded="${expanded ? '1' : '0'}">
         <span class="turn-caret">${expanded ? '▼' : '▶'}</span>
-        <span class="turn-summary">${esc(summary)}</span>
+        <span class="turn-main">
+          <span class="turn-summary">${esc(summary)}</span>
+          ${replyPreview
+            ? `<span class="turn-reply-preview">↳ ${esc(replyPreview)}</span>`
+            : ''}
+        </span>
         <span class="turn-meta">
           ${statusIcon(status)}
           ${turn.elapsed_s != null ? `<span class="turn-elapsed">${esc(turn.elapsed_s)}s</span>` : ''}

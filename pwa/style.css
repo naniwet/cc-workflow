@@ -1798,15 +1798,16 @@ pre {
   box-shadow: inset 3px 0 0 var(--accent-red);
 }
 .turn-head {
-  /* 设计图 §3.2:收起态 = 单行 summary,所有 turn 等高。
-     固定 height 52px(不是 min-height)+ flex 横排:caret + summary
-     占满中段 + meta 贴右边。等高保证多个收起 turn 视觉对齐。 */
-  height: 52px;
+  /* 设计图 §3.2:收起态可以 1 行 prompt 或 2 行(prompt + reply preview),
+     min-height 52 保证只有 prompt 时也跟旧版一样高;有 reply 自然撑到
+     72-80。done turn 都有 output_preview → 都 2 行,等高;running/queued
+     没 preview → 1 行,跟"在跑"的视觉提示对得上。 */
+  min-height: 52px;
   width: 100%;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
   background: transparent;
   border: 0;
   color: var(--text-primary);
@@ -1821,9 +1822,16 @@ pre {
   font-size: 11px;
   line-height: 1;
   text-align: center;
+  align-self: center;
+}
+.turn-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .turn-summary {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1832,6 +1840,19 @@ pre {
   font-size: var(--text-md);
   line-height: var(--lh-tight);
 }
+.turn-reply-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  font-weight: 400;
+  line-height: var(--lh-tight);
+}
+/* expanded 时 body 里已经能看到完整 reply,head 里的 preview 就是噪音,
+   隐藏掉。collapsed 时显示,作为内容的快速预览。 */
+.turn-expanded .turn-reply-preview { display: none; }
 .turn-meta {
   flex: 0 0 auto;
   display: flex;
