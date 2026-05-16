@@ -1135,7 +1135,7 @@ def get_roundtable(session_id: str) -> dict:
       {
         id, question, started_at, status,
         turns: [{round, role, type, content, ts}, ...],
-        r3:    {raw: str, parsed: {共识点, 分歧轴, 判断题}} | null,
+        r3:    {raw: str, parsed: {共识点, 分歧轴, 关键判断, 条件性结论, 下一步行动}} | null,
         error: str | null,
       }
     """

@@ -10,10 +10,51 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backend.roundtable.data import Role
 from backend.roundtable.debate import run_session
 from backend.roundtable.io import session_path_for
+from backend.roundtable.synth import build_r3_user_prompt, parse_synthesis
 from backend.main import _roundtable_session_summary
 
 
 class RoundtableTests(unittest.TestCase):
+    def test_synth_prompt_asks_for_conditional_decision_sections(self):
+        prompt = build_r3_user_prompt(
+            "要不要先上严格 TDD?",
+            [
+                # Keep this deliberately tiny; the test is about the
+                # synthesizer contract, not transcript rendering.
+            ],
+        )
+
+        self.assertIn("## 关键判断", prompt)
+        self.assertIn("## 条件性结论", prompt)
+        self.assertIn("## 下一步行动", prompt)
+        self.assertIn("不允许直接替用户拍板", prompt)
+
+    def test_parse_synthesis_returns_five_canonical_sections(self):
+        parsed = parse_synthesis(
+            """## 共识点
+- 先做小
+
+## 分歧轴
+- 速度 vs 鲁棒
+
+## 关键判断
+- 你是否接受后续返工?
+
+## 条件性结论
+- 如果你重视速度,倾向先 spike。
+
+## 下一步行动
+- 今天先实现一条可回滚路径。
+"""
+        )
+
+        self.assertEqual(
+            list(parsed),
+            ["共识点", "分歧轴", "关键判断", "条件性结论", "下一步行动"],
+        )
+        self.assertEqual(parsed["关键判断"], ["你是否接受后续返工?"])
+        self.assertEqual(parsed["条件性结论"], ["如果你重视速度,倾向先 spike。"])
+
     def test_session_path_for_avoids_overwriting_existing_file(self):
         with tempfile.TemporaryDirectory() as d:
             sessions_dir = Path(d)
@@ -70,7 +111,12 @@ class RoundtableTests(unittest.TestCase):
         def model_fn(model, system, user, temp):
             time.sleep(0.05)
             if system == "synth":
-                return "## 共识点\n- a\n\n## 分歧轴\n- b\n\n## 判断题\n- 你是否接受 b?"
+                return (
+                    "## 共识点\n- a\n\n## 分歧轴\n- b\n\n"
+                    "## 关键判断\n- 你是否接受 b?\n\n"
+                    "## 条件性结论\n- 如果接受 b,倾向 c。\n\n"
+                    "## 下一步行动\n- 做 c。"
+                )
             return f"{system} answer"
 
         with tempfile.TemporaryDirectory() as d:
@@ -104,7 +150,12 @@ class RoundtableTests(unittest.TestCase):
 
         def model_fn(model, system, user, temp):
             if system == "synth":
-                return "## 共识点\n- a\n\n## 分歧轴\n- b\n\n## 判断题\n- 你是否接受 b?"
+                return (
+                    "## 共识点\n- a\n\n## 分歧轴\n- b\n\n"
+                    "## 关键判断\n- 你是否接受 b?\n\n"
+                    "## 条件性结论\n- 如果接受 b,倾向 c。\n\n"
+                    "## 下一步行动\n- 做 c。"
+                )
             if system == "你是悲观派":
                 attempts["悲观派"] += 1
                 if attempts["悲观派"] == 1:

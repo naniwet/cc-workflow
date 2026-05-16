@@ -773,7 +773,7 @@ def _push_rt_result(session_path, chat_id: str) -> None:
     error_turns = [t for t in session.turns if t.role == "__error__"]
 
     if synth_turns:
-        # Send R3 as a markdown card so共识点/分歧轴/判断题 标题渲染漂亮.
+        # Send R3 as a markdown card so the fixed synthesis headings render nicely.
         from . import ui_cards
         q = (session.question or "(无题)").split("\n")[0][:80]
         pwa_link = _pwa_roundtable_url(session_path.stem)

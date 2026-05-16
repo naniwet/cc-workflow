@@ -4,7 +4,7 @@ Ported from AgentRoundtable's synth.py. Logic unchanged; only the
 import paths were rewritten to relative imports.
 
 parse_synthesis NEVER raises on malformed input — returns the canonical
-three-key dict with empty lists for missing sections. The caller decides
+section dict with empty lists for missing sections. The caller decides
 whether to warn. Source of truth is the raw .jsonl line.
 """
 from __future__ import annotations
@@ -14,7 +14,13 @@ import re
 from .data import AgentTurn, Role
 from .model import ModelFn
 
-SECTION_HEADERS: tuple[str, str, str] = ("共识点", "分歧轴", "判断题")
+SECTION_HEADERS: tuple[str, ...] = (
+    "共识点",
+    "分歧轴",
+    "关键判断",
+    "条件性结论",
+    "下一步行动",
+)
 
 # Round labels for the transcript handed to 整理员. Unknown rounds get a
 # generic fallback in build_r3_user_prompt — keeps the prompt extensible
@@ -66,7 +72,10 @@ def build_r3_user_prompt(question: str, turns: list[AgentTurn]) -> str:
 
 ---
 
-你是组织员,不参与判断、不偏向任何人。请用以下**三个段落**的固定 Markdown 结构整理:
+你是组织员,不参与辩论,不直接替用户拍板。你的职责是做"条件性决策教练":
+把分歧整理成用户能据此行动的结构,并说明在不同价值取向下分别倾向什么。
+
+请用以下**五个段落**的固定 Markdown 结构整理:
 
 ## 共识点
 [大家都同意的事实/原则,bullet,每条独立一行,以 `- ` 开头]
@@ -74,15 +83,22 @@ def build_r3_user_prompt(question: str, turns: list[AgentTurn]) -> str:
 ## 分歧轴
 [核心分歧本质是哪个维度的取舍,1-3 条,每条说清楚两端代表什么,bullet]
 
-## 判断题
-[把分歧转化为给用户的 yes/no 问题,≤ 3 个,bullet]
+## 关键判断
+[把分歧转化为用户必须回答的 yes/no 判断,≤ 3 个,bullet。每条以"你是否..."或等价 yes/no 问法开头]
+
+## 条件性结论
+[用 if/then 形式说明:如果用户更重视某一端,则倾向哪个角色/方案;必须说"倾向",不能说"最终应该",bullet]
+
+## 下一步行动
+[给出 1-3 个可以马上执行的小动作,必须能从上面的共识/分歧/条件性结论推出,bullet]
 
 约束:
-- **不允许**出现你自己的结论或推荐方案
+- **不允许直接替用户拍板**。不能写"最终建议你选 X"、"你应该选 X"
+- 允许写"如果你更重视 A,倾向 X;如果你更重视 B,倾向 Y"
 - **不允许**评价哪个角色更对
 - **不允许**添加任何一个角色都没提到的新论点
 - 用具体引用("极简派主张 X,悲观派反驳 Y"),不要泛指
-- 三个段落标题必须按上面的字面写法出现(`## 共识点` / `## 分歧轴` / `## 判断题`),不要换措辞
+- 五个段落标题必须按上面的字面写法出现(`## 共识点` / `## 分歧轴` / `## 关键判断` / `## 条件性结论` / `## 下一步行动`),不要换措辞
 """
 
 
@@ -123,7 +139,7 @@ _BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
 
 
 def parse_synthesis(text: str) -> dict[str, list[str]]:
-    """Split text into the three named bullet lists. Missing section → empty list.
+    """Split text into the named bullet lists. Missing section → empty list.
 
     Lenient by design: never raises. Ignores non-bullet lines inside a
     section (e.g. intro paragraphs the LLM occasionally inserts).

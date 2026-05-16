@@ -3500,7 +3500,8 @@ function renderRoundtablesView() {
   const blurb = rows.length === 0 ? `
     <p class="muted" style="margin-top:-8px">
       4 个固定角色(<strong>极简派 / 场景派 / 借鉴派 / 悲观派</strong>)对一个决策问题各抒己见,
-      <strong>整理员</strong>把分歧整理成 <em>共识点 / 分歧轴 / 判断题</em>。让你做决定,不替你做决定。
+      <strong>整理员</strong>把分歧整理成 <em>共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动</em>。
+      不替你拍板,但给出条件化决策路径。
     </p>` : '';
   view.innerHTML = `
     <h1>Roundtable</h1>
@@ -3728,7 +3729,9 @@ function paintRoundtableDetail(id, row) {
       <h2>整理员综合</h2>
       ${_rtSection('共识点', r3.parsed['共识点'])}
       ${_rtSection('分歧轴', r3.parsed['分歧轴'])}
-      ${_rtSection('判断题', r3.parsed['判断题'], { yesno: true })}
+      ${_rtSection('关键判断', r3.parsed['关键判断'], { yesno: true })}
+      ${_rtSection('条件性结论', r3.parsed['条件性结论'])}
+      ${_rtSection('下一步行动', r3.parsed['下一步行动'])}
       <details class="rt-r3-raw">
         <summary>原始 markdown</summary>
         <pre>${esc(r3.raw)}</pre>
@@ -3737,7 +3740,7 @@ function paintRoundtableDetail(id, row) {
   ` : (status === 'error' ? '' : `
     <section class="rt-r3 rt-r3-pending">
       <h2>整理员综合</h2>
-      <p class="muted">共 ${esc(expected)} 轮跑完后,整理员会给你 <strong>共识点 / 分歧轴 / 判断题</strong>。当前 ${esc(turnsDone)} / ${esc(expected)} 轮。</p>
+      <p class="muted">共 ${esc(expected)} 轮跑完后,整理员会给你 <strong>共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动</strong>。当前 ${esc(turnsDone)} / ${esc(expected)} 轮。</p>
     </section>
   `);
 

@@ -41,7 +41,7 @@
 - **完整对话 Transcript**:run-detail 页面有可折叠 Transcript 面板,展开后能看完整 stream-json 时间线(`💭 thinking / 🔧 tool_use / ↳ tool_result / 🤖 text / ✓ result`),而不只是最终 result 文本
 - **Slash 命令自动补全**(PWA):在输入框打 `/` 弹出当前 workspace 所有 skill(project + user + plugin 三层来源),Tab 补全
 - **DIY 自动 compact**:长对话接近 context 上限时,agent-run 自动调用 9 段式 summary prompt(基于 Claude Code `/compact` 反向工程),清旧 session,新 session 以 summary 续——transparent,你不会感知。撞坏了也有手动 **Reset session** 按钮兜底;`--resume` 撞到孤儿 sid 时自动 fallback 到新会话
-- **圆桌会议**(从 [AgentRoundtable](https://github.com/wet-/AgentRoundtable) 移植):4 角色(极简派 / 场景派 / 借鉴派 / 悲观派)+ 1 个整理员,对一个决策级问题辩论 1-2 轮(可配置),输出 **共识点 / 分歧轴 / 判断题**。让你做决定,不替你做决定。
+- **圆桌会议**(从 [AgentRoundtable](https://github.com/wet-/AgentRoundtable) 移植):4 角色(极简派 / 场景派 / 借鉴派 / 悲观派)+ 1 个整理员,对一个决策级问题辩论 1-2 轮(可配置),输出 **共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动**。不替你拍板,但把不同价值取向下的行动路径说清楚。
 
 ---
 
