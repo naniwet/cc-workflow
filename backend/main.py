@@ -917,6 +917,13 @@ def run_loop_now(name: str) -> dict:
         job_name=name,
         on_finish=_build_loop_on_finish(name, "pwa"),
     )
+    # Link immediately so the Tasks card's "open" target is the run that
+    # was just queued, not the previous completed run. on_finish writes the
+    # same id again after completion; append_recent_run_id de-dups.
+    try:
+        cron_state.append_recent_run_id(name, run_id)
+    except Exception:    # noqa: BLE001 — run has been queued; UI link failure is non-fatal
+        pass
     return {"task_id": run_id, "status": "queued", "name": name}
 
 
@@ -963,6 +970,10 @@ def run_loop_internal(name: str) -> dict:
         job_name=name,
         on_finish=_build_loop_on_finish(name, "cron"),
     )
+    try:
+        cron_state.append_recent_run_id(name, run_id)
+    except Exception:    # noqa: BLE001 — run has been queued; Feishu callback still fires later
+        pass
     return {"task_id": run_id, "status": "queued", "name": name}
 
 

@@ -3172,6 +3172,9 @@ function loopRowHtml(loop) {
   const workspace = loop.workspace || '—';
   const engine = loop.engine || '';
   const prompt = loop.prompt || '';
+  const recentRuns = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
+  const latestRun = recentRuns[0] || null;
+  const latestRunning = latestRun && (latestRun.status === 'queued' || latestRun.status === 'running');
 
   // Show a human-readable version of the cron expression when possible;
   // keep the raw form available on hover (and for power users / debugging).
@@ -3206,7 +3209,9 @@ function loopRowHtml(loop) {
           ? ` · <a href="#runs/${encodeURIComponent(loop.last_run_id)}" class="loop-run-link" title="Open last run-detail (full output + transcript + tool approvals)">→ open</a>`
           : ''}
       </div>
-      ${loop.last_output_summary
+      ${latestRunning
+        ? `<div class="loop-last-output" title="A fresh run is in progress; open it for live output">↳ 当前 run ${esc(latestRun.status)} · 打开详情看实时输出</div>`
+        : loop.last_output_summary
         ? `<div class="loop-last-output" title="Last output preview (truncated; full output on the run-detail page)">↳ ${esc(loop.last_output_summary)}</div>`
         : ''}
       ${loopHistoryHtml(loop)}
@@ -3299,9 +3304,10 @@ async function onLoopAction(e) {
   try {
     const resp = await api(endpoint, { method });
     if (kind === 'run') {
-      // Run-now is fire-and-forget — output lands in the Workspaces timeline
-      // for `name`'s workspace; no synchronous update to this card.
       showToast('success', `${name}: run queued`, { ttl: 2000 });
+      if (resp?.task_id) {
+        location.hash = `#runs/${encodeURIComponent(resp.task_id)}`;
+      }
     }
     refreshAll();
   } catch (err) {
