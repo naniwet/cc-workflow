@@ -771,13 +771,27 @@ function renderDesktopOverview() {
   // 改全量重画 —— refreshAll 已经做了数据 hash 去重(elapsed_s 被 mask),
   // 一组卡片同时全量重画 4-8 张的成本可控,跟 PC detail / mobile 一致。
 
+  // 顶部 toolbar:1 行装下 "+ New workspace" 按钮 + 隐藏 workspace pills。
+  //   - h1 砍掉(topbar tab 高亮已经标明"Workspaces"段,h1 冗余)
+  //   - "+ New" 不再展开成全宽 inline 表单,改弹 <dialog> modal
+  //   - hidden strip 从底部挪上来跟 + New 同行(没有 hidden 时只剩 + New)
+  // 总省 ~100px 永久竖直空间。
   view.innerHTML = `
-    <h1>Workspaces</h1>
-    <details class="add-form" data-details-id="add-ws">
-      <summary>New workspace</summary>
-      <form data-form-id="new-ws">
+    <div class="ws-toolbar">
+      <button class="ws-new-btn" type="button" id="ws-new-btn">
+        + New workspace
+      </button>
+      ${hiddenHtml}
+    </div>
+    ${layoutHtml
+      ? `<div class="ws-layout">${layoutHtml}</div>`
+      : `<p class="muted">No workspaces yet. Click "+ New workspace" above,
+         or create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
+    <dialog class="ws-new-dialog" id="ws-new-dialog">
+      <form data-form-id="new-ws" class="ws-new-form">
+        <h3>New workspace</h3>
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
-          placeholder="repo-name (alphanum / . _ -)" required></label>
+          placeholder="repo-name (alphanum / . _ -)" required autofocus></label>
         <label>provider ${newWsProviderPicker}</label>
         <!-- engine 字段固定为 claude(codex 已下线 2026-05-14;原因见 README "engine 现状")。
              保留 hidden input 是为了后端 NewWorkspaceRequest 的 engine 字段满足 Pydantic
@@ -787,18 +801,17 @@ function renderDesktopOverview() {
           <input type="checkbox" name="trust" ${lastData.globalDefaultTrust ? 'checked' : ''}>
           Auto-approve all tools (trust this workspace — Bash / git / WebFetch / etc. won't ask for permission)
         </label>
-        <button type="submit">Create</button>
         <p class="muted" style="font-size:11px;margin:0">
           Creates <code>~/workspaces/&lt;name&gt;/</code> with <code>git init</code>
           + empty README + first commit. <strong>Engine is locked once created</strong>.
           Provider and trust can be flipped anytime via the column header (🔒/🔓).
         </p>
+        <div class="ws-new-actions">
+          <button type="button" class="ws-new-cancel">Cancel</button>
+          <button type="submit">Create</button>
+        </div>
       </form>
-    </details>
-    ${layoutHtml
-      ? `<div class="ws-layout">${layoutHtml}</div>`
-      : `<p class="muted">No workspaces yet. Use the form above or create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
-    ${hiddenHtml}
+    </dialog>
   `;
 
   bindOverviewHandlers();
@@ -812,6 +825,17 @@ function renderDesktopOverview() {
   }
   for (const b of $('view').querySelectorAll('.ws-restore-btn')) {
     b.addEventListener('click', onRestoreBtnClick);
+  }
+  // Wire dialog open/close。原生 <dialog> 自带 backdrop / ESC,我们只
+  // 管 open(showModal) + cancel(close) + submit-after-success(close)。
+  const dlg = $('ws-new-dialog');
+  const openBtn = $('ws-new-btn');
+  if (dlg && openBtn) {
+    openBtn.addEventListener('click', () => {
+      // dialog.showModal 在已经 open 的状态再调一次会抛 InvalidStateError
+      if (!dlg.open) dlg.showModal();
+    });
+    dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
   }
 }
 
@@ -2077,6 +2101,10 @@ async function onAddWorkspace(e) {
     form.reset();
     clearDraft('new-ws');
     clearDetails('add-ws');
+    // 新版 PC overview 把 new-ws 表单装进 <dialog> 弹窗,创建成功后
+    // 关掉弹窗。mobile / 旧入口的 form 不在 dialog 里,closest 返回 null
+    // 不影响逻辑。
+    form.closest('dialog')?.close();
     refreshAll();
   } catch (err) {
     showError(`create workspace failed: ${err.message}`);

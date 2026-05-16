@@ -547,19 +547,84 @@ main {
 .ws-hide-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
 
 /* Hidden strip — slim row of pills, each restores a workspace back to
-   the layout. Only rendered when _wsHidden is non-empty. */
+   the layout. Only rendered when _wsHidden is non-empty.
+   2026-05-16 起 hidden strip 跟 "+ New" 同行(在 .ws-toolbar 里),不再
+   单独占一条 —— 去掉了独立的 background / border / padding 装饰,让它
+   inline 融进 toolbar。 */
 .ws-hidden-strip {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
-  padding: var(--space-2) var(--space-3);
-  margin-top: var(--space-3);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
   font-size: var(--text-sm);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* PC overview top toolbar:1 行装下 "+ New workspace" + hidden pills,
+   省掉之前 h1 + 全宽 add-form summary 那 ~100px。 */
+.ws-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+.ws-new-btn {
   flex: 0 0 auto;
+  padding: 6px var(--space-3);
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
+}
+.ws-new-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--accent-blue);
+  border-style: solid;
+}
+/* New workspace 弹窗:用原生 <dialog>,自带 backdrop / ESC 关闭 / 焦点
+   管理,不写自定义 modal。 */
+.ws-new-dialog {
+  padding: var(--space-4);
+  max-width: 560px;
+  width: min(560px, 92vw);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+}
+.ws-new-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+.ws-new-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ws-new-form h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-lg);
+}
+.ws-new-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.ws-new-cancel {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.ws-new-cancel:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 .ws-restore-btn {
   background: transparent;
