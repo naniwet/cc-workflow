@@ -15,6 +15,11 @@
 // Auth: /pwa/* is unprotected; the first /workspaces fetch triggers basic
 // auth, browser caches the credential for the session.
 
+import {
+  nextRunLabel,
+  roundtablePersonaAvatarsHtml,
+} from './ui_contract.mjs';
+
 const $ = (id) => document.getElementById(id);
 const esc = (s) =>
   String(s == null ? '' : s).replace(
@@ -121,6 +126,31 @@ function statusTag(status) {
   return `<span class="tag tag-${esc(status)}">${ICONS[status] || ''}${esc(status)}</span>`;
 }
 
+function _globalPendingCount() {
+  return (lastData.pendingApprovals || []).length;
+}
+
+function _updateTopbarStatus() {
+  const status = $('status');
+  if (!status) return;
+  const pending = _globalPendingCount();
+  status.innerHTML = `
+    ${pending > 0
+      ? `<button type="button" class="pending-badge" id="pending-global-badge"
+                 title="${esc(pending)} 待审批">${ICONS.warning}<span>${esc(pending)}</span></button>`
+      : ''}
+    <span class="status-online"><span class="status-dot"></span>在线</span>
+    <span class="status-time">· ${esc(new Date().toLocaleTimeString())}</span>
+  `;
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('#pending-global-badge');
+  if (!btn) return;
+  const first = (lastData.pendingApprovals || [])[0];
+  if (first?.workspace) location.hash = `#workspaces/${encodeURIComponent(first.workspace)}`;
+});
+
 // Compact relative-time formatter — "2m ago", "3h ago", "5d ago". Used in
 // the mobile overview cards to indicate when each workspace last ran.
 function timeAgo(unixSec) {
@@ -132,6 +162,15 @@ function timeAgo(unixSec) {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
+}
+
+function _runPreviewLine(run) {
+  if (!run || run.status !== 'running') return '';
+  const out = (run.output_preview || '').trim();
+  if (out) return out.split('\n').find(Boolean)?.slice(0, 80) || '';
+  const prompt = (run.prompt || '').trim();
+  if (prompt) return `处理: ${prompt.slice(0, 60)}${prompt.length > 60 ? '…' : ''}`;
+  return 'Claude 正在处理…';
 }
 
 // Cron expression → human-readable Chinese (server timezone). Covers the
@@ -348,7 +387,7 @@ async function refreshAll() {
       roundtables: Array.isArray(roundtables) ? roundtables : [],
     };
     clearError();
-    $('status').textContent = '· ' + new Date().toLocaleTimeString();
+    _updateTopbarStatus();
     // Skip re-render when nothing meaningful changed. `elapsed_s` is
     // replaced with 0 so the running-run timer alone doesn't trip the
     // diff — see _lastDataHash comment above. JSON.stringify with a
@@ -793,10 +832,18 @@ function _mobileWsCardHtml(name, data) {
   const trustBadge = trusted ? `<span class="ws-card-trust" title="Auto-approves tools">${ICONS.unlock}</span>` : '';
   const pendingCount = pendingApprovalsForWorkspace(name).length;
   const pendingBadge = pendingCount > 0
-    ? `<span class="ws-card-pending" title="${pendingCount} pending approval${pendingCount > 1 ? 's' : ''}">${ICONS.warning}${pendingCount} 待批准</span>`
+    ? `<span class="ws-card-pending" title="${pendingCount} pending approval${pendingCount > 1 ? 's' : ''}">${ICONS.warning}${pendingCount} 待审批</span>`
     : '';
   const promptSnippet = last?.prompt ? last.prompt.slice(0, 50) : '';
   const promptOverflow = last?.prompt && last.prompt.length > 50 ? '…' : '';
+  const status = last?.status || '';
+  const cardClass = [
+    'ws-card',
+    status === 'running' ? 'running' : '',
+    status === 'failed' ? 'failed' : '',
+  ].filter(Boolean).join(' ');
+  const preview = _runPreviewLine(last);
+  const shortRunId = last?.id ? `#${String(last.id).slice(0, 3)}` : '';
   // PC: overview cards are read-only summary tiles. Mobile: card IS the
   // entry point to the carousel detail view, keep as <a>.
   const tag = _isMobileViewport ? 'a' : 'div';
@@ -804,7 +851,7 @@ function _mobileWsCardHtml(name, data) {
     ? ` href="#workspaces/${encodeURIComponent(name)}"`
     : '';
   return `
-    <${tag} class="ws-card" data-card-name="${esc(name)}"${href}>
+    <${tag} class="${cardClass}" data-card-name="${esc(name)}"${href}>
       <div class="ws-card-head">
         <h3>${esc(name)}</h3>
         <span class="ws-card-provider">
@@ -812,17 +859,21 @@ function _mobileWsCardHtml(name, data) {
           <span class="ws-engine" data-engine="${esc(wsEngine)}">${esc(wsEngine)}</span>${trustBadge}
         </span>
       </div>
-      ${pendingBadge ? `<div class="ws-card-pending-row">${pendingBadge}</div>` : ''}
       ${last
         ? `<div class="ws-card-meta">
              ${statusTag(last.status || '?')}
+             ${shortRunId ? `<span class="run-id">${esc(shortRunId)}</span>` : ''}
              <span class="muted">
                ${last.elapsed_s != null ? `· ${esc(last.elapsed_s)}s` : ''}
                ${last.source ? `· ${esc(last.source)}` : ''}
                ${last.started_at ? `· ${esc(timeAgo(last.started_at))}` : ''}
              </span>
+             ${pendingBadge || ''}
            </div>`
-        : '<div class="ws-card-meta muted">(no runs yet)</div>'}
+        : '<div class="ws-card-meta ws-empty">还没跑过 · 点击开始</div>'}
+      ${preview
+        ? `<div class="ws-preview"><span class="pulse"></span><span>${esc(preview)}</span></div>`
+        : ''}
       ${promptSnippet
         ? `<div class="ws-card-prompt">▸ ${esc(promptSnippet)}${promptOverflow}</div>`
         : ''}
@@ -3175,15 +3226,28 @@ function loopRowHtml(loop) {
   const recentRuns = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
   const latestRun = recentRuns[0] || null;
   const latestRunning = latestRun && (latestRun.status === 'queued' || latestRun.status === 'running');
+  const loopStatus = !enabled ? 'paused'
+    : latestRunning ? 'running'
+    : stale || (loop.last_exit != null && loop.last_exit !== 0) ? 'failed'
+    : 'done';
 
   // Show a human-readable version of the cron expression when possible;
   // keep the raw form available on hover (and for power users / debugging).
   const humanSched = schedule ? humanizeCron(schedule) : '—';
+  const nextLabel = enabled ? nextRunLabel(schedule) : '';
   const schedTitle = schedule && humanSched !== schedule ? ` title="${esc(schedule)}"` : '';
+  const stateHtml = loopStatus === 'running'
+    ? `<div class="task-state task-state-running">running<br><span>${esc(latestRun?.started_at ? timeAgo(latestRun.started_at) : 'queued')}</span></div>`
+    : loopStatus === 'failed'
+      ? `<div class="task-state task-state-failed">failed×${esc(loop.consecutive_errors || 1)}<br><span>retry</span></div>`
+      : loopStatus === 'paused'
+        ? `<div class="task-state">paused</div>`
+        : `<div class="task-state">done<br><span>${esc(lastRel)}</span></div>`;
 
   return `
-    <div class="row loop-row" data-loop-name="${esc(loop.name)}">
+    <div class="row loop-row ${loopStatus}" data-loop-name="${esc(loop.name)}">
       <div class="loop-head">
+        <span class="task-dot ${esc(loopStatus)}"></span>
         <code class="loop-name">${esc(loop.name)}</code>
         ${enabledTag}
         ${stale ? `<span class="tag tag-failed">${ICONS.warning}stale ${esc(loop.consecutive_errors)}</span>` : ''}
@@ -3199,7 +3263,9 @@ function loopRowHtml(loop) {
         <span class="loop-when"${schedTitle}>${esc(humanSched)}</span>
         · <code>${esc(workspace)}</code>
         ${engine ? ` · <span class="muted">${esc(engine)}</span>` : ''}
+        ${nextLabel ? ` · <span class="task-next">${esc(nextLabel)}</span>` : ''}
       </div>
+      ${stateHtml}
       ${prompt ? `<div class="loop-prompt">▸ ${esc(prompt)}</div>` : ''}
       <div class="loop-stats">
         <span title="${esc(lastAbs)}">last ${esc(lastRel)}</span>
@@ -3572,12 +3638,23 @@ function _roundtableListRow(r) {
     : status === 'error'
       ? '✗ 出错'
       : `${r.turns_done || 0} / ${expected} 轮`;
+  const rowClass = status === 'error'
+    ? 'rt-row failed'
+    : status === 'done'
+      ? 'rt-row'
+      : 'rt-row active';
+  const statusText = status === 'done'
+    ? '✓ 完成'
+    : status === 'error'
+      ? '◯ 失败'
+      : `● round ${esc(r.turns_done || 0)}/${esc(expected)}`;
   return `
-    <div class="rt-row" data-rt-id="${esc(r.id)}">
+    <div class="${rowClass}" data-rt-id="${esc(r.id)}">
       <a class="rt-row-link" href="#roundtables/${encodeURIComponent(r.id)}">
         <div class="rt-row-q">${esc(r.question || '(无标题)')}</div>
         <div class="rt-row-meta">
-          ${statusTag(status === 'done' ? 'done' : status === 'error' ? 'failed' : 'running')}
+          <span class="rt-status ${status === 'error' ? 'failed' : status === 'done' ? 'done' : 'active'}">${statusText}</span>
+          ${status !== 'error' ? roundtablePersonaAvatarsHtml(esc) : ''}
           <span class="muted">· ${esc(progress)}</span>
           ${when ? `<span class="muted">· ${esc(when)}</span>` : ''}
         </div>

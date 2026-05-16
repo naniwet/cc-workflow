@@ -28,9 +28,14 @@
   --accent-blue-faint:  rgba(47, 126, 255, 0.15);
   --accent-green:       #22c55e;    /* success — task done */
   --accent-cyan:        #06b6d4;    /* info — Claude reply, engine=claude */
-  --accent-amber:       #f59e0b;    /* warning / queued */
+  --accent-amber:       #f59e0b;    /* warning + roundtable role: 借鉴派 */
   --accent-red:         #ef4444;    /* danger / failed */
-  --accent-purple:      #a855f7;    /* roundtable role: 借鉴派 (kimi) */
+  --accent-purple:      #a855f7;    /* roundtable synthesizer */
+
+  /* Status color contract (design/01-tabs-overview.md §3.3):
+     running=cyan, done=green, failed=red, queued/link=blue,
+     paused=disabled gray. Roundtable done stays visually neutral in
+     row copy even though generic .tag-done remains green for task success. */
 
   /* spacing — 8px rhythm */
   --space-1: 4px;
@@ -158,7 +163,43 @@ a:hover { color: var(--accent-blue-hover); }
   background: var(--accent-blue);
   border-radius: var(--radius-full);
 }
-.status { font-size: var(--text-micro); color: var(--text-tertiary); }
+.status {
+  font-size: var(--text-micro);
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.status-online {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent-green);
+}
+.status-time { color: var(--text-tertiary); }
+.pending-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--accent-red);
+  font-size: var(--text-micro);
+  font-weight: 600;
+  cursor: pointer;
+}
+.pending-badge svg { width: 12px; height: 12px; }
+.pending-badge:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.50);
+}
 
 /* ============================================================================
  *  Main / views
@@ -945,10 +986,11 @@ body.is-dragging .ws-col:not(.dragging) {
   color: var(--text-secondary);
   line-height: 1.4;
 }
-.tag-running { background: rgba(245, 158, 11, 0.10); color: var(--accent-amber); border-color: rgba(245, 158, 11, 0.30); }
+.tag-running { background: rgba(6, 182, 212, 0.10); color: var(--accent-cyan); border-color: rgba(6, 182, 212, 0.30); }
 .tag-queued  { background: rgba(47, 126, 255, 0.10); color: var(--accent-blue);  border-color: rgba(47, 126, 255, 0.30); }
 .tag-done    { background: rgba(34, 197, 94, 0.10);  color: var(--accent-green); border-color: rgba(34, 197, 94, 0.30); }
 .tag-failed  { background: rgba(239, 68, 68, 0.10);  color: var(--accent-red);   border-color: rgba(239, 68, 68, 0.30); }
+.tag-paused  { background: rgba(74, 80, 96, 0.10);   color: var(--text-disabled); border-color: var(--border-subtle); }
 
 /* ============================================================================
  *  Forms
@@ -1269,7 +1311,14 @@ pre {
   gap: var(--space-2) !important;
   padding: var(--space-3);
   font-size: var(--text-sm);
+  position: relative;
 }
+.loop-row.running {
+  border-color: rgba(6, 182, 212, 0.45);
+  box-shadow: inset 3px 0 0 var(--accent-cyan);
+}
+.loop-row.failed { border-color: rgba(239, 68, 68, 0.35); }
+.loop-row.paused { opacity: .55; }
 .loop-head {
   display: flex;
   align-items: center;
@@ -1302,6 +1351,32 @@ pre {
 }
 .loop-when[title] { cursor: help; }
 .loop-when[title]:hover { text-decoration: underline dotted; }
+.task-next { color: var(--accent-blue); }
+.task-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+.task-dot.running { background: var(--accent-cyan); box-shadow: 0 0 0 3px rgba(6, 182, 212, .20); }
+.task-dot.done { background: var(--accent-green); }
+.task-dot.failed { background: var(--accent-red); }
+.task-dot.paused { background: var(--text-disabled); }
+.task-state {
+  align-self: flex-end;
+  text-align: right;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+}
+.task-state span {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+.task-state-running { color: var(--accent-cyan); }
+.task-state-failed { color: var(--accent-red); }
 
 .loop-prompt {
   font-size: var(--text-sm);
@@ -1439,6 +1514,13 @@ pre {
   background: var(--bg-elevated);
   border-color: var(--border-strong);
 }
+.ws-card.running {
+  border-color: rgba(6, 182, 212, 0.45);
+  box-shadow: var(--shadow-1), inset 3px 0 0 var(--accent-cyan);
+}
+.ws-card.failed {
+  border-color: rgba(239, 68, 68, 0.35);
+}
 /* PC: cards are rendered as <div> (not <a>) — see workspace card
  * generator in app.js. Suppress hover-as-clickable affordance so they
  * read as read-only summary tiles. Mobile keeps hover/click behavior. */
@@ -1481,6 +1563,35 @@ pre {
   color: var(--text-secondary);
   flex-wrap: wrap;
 }
+.run-id {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+}
+.ws-preview {
+  margin-top: 2px;
+  padding-top: var(--space-1);
+  border-top: 1px dashed var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-micro);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+.ws-preview .pulse {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--accent-cyan);
+  animation: pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes pulse { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
+.ws-empty {
+  color: var(--text-disabled);
+  font-style: italic;
+}
 .ws-card-prompt {
   font-size: var(--text-sm);
   color: var(--text-secondary);
@@ -1489,9 +1600,8 @@ pre {
   text-overflow: ellipsis;
 }
 
-/* Pending-approval indicator on the mobile overview card. Amber tint
-   matches the in-card .approval-pending block so the visual language
-   is consistent: amber = "human action required". */
+/* Pending-approval indicator on the mobile overview card. Red matches the
+   topbar global pending badge: this is the one thing asking the user to act. */
 .ws-card-pending-row {
   display: flex;
   align-items: center;
@@ -1503,10 +1613,10 @@ pre {
   font-size: var(--text-sm);
   font-weight: 500;
   padding: 2px var(--space-2);
-  background: rgba(245, 158, 11, 0.10);
-  border: 1px solid rgba(245, 158, 11, 0.40);
+  background: rgba(239, 68, 68, 0.10);
+  border: 1px solid rgba(239, 68, 68, 0.40);
   border-radius: var(--radius-sm);
-  color: var(--accent-amber);
+  color: var(--accent-red);
 }
 .ws-card-pending svg { width: 13px; height: 13px; }
 
@@ -1876,6 +1986,13 @@ pre {
   transition: border-color var(--t-base), background var(--t-base);
 }
 .rt-row:hover { border-color: var(--border-strong); }
+.rt-row.active {
+  border-color: rgba(6, 182, 212, 0.45);
+  box-shadow: inset 3px 0 0 var(--accent-cyan);
+}
+.rt-row.failed {
+  border-color: rgba(239, 68, 68, 0.35);
+}
 .rt-row-link {
   flex: 1;
   padding: var(--space-3);
@@ -1900,6 +2017,34 @@ pre {
   font-size: var(--text-sm);
   flex-wrap: wrap;
 }
+.rt-status { font-weight: 600; }
+.rt-status.active { color: var(--accent-cyan); }
+.rt-status.done { color: var(--text-secondary); }
+.rt-status.failed { color: var(--accent-red); }
+.rt-avatars {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 var(--space-1);
+}
+.rt-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: -3px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--bg-surface);
+  color: var(--bg-canvas);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.rt-avatar-green { background: var(--accent-green); }
+.rt-avatar-cyan { background: var(--accent-cyan); }
+.rt-avatar-amber { background: var(--accent-amber); }
+.rt-avatar-red { background: var(--accent-red); }
+.rt-avatar-purple { background: var(--accent-purple); }
 .rt-delete {
   align-self: center;
   margin: 0 var(--space-2);
