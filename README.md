@@ -32,15 +32,19 @@
 
 ## 它能干什么
 
-- **PWA**(手机/PC 浏览器都能装):3 个 tab — **Workspaces**(每个 workspace 一条时间线 + 输入框)/ **Tasks**(cron loop 列表)/ **Roundtable**(多 agent 辩论);PC 上 manifest `display: fullscreen` 加桌面后无浏览器 UI
-- **飞书集成**:在群里 `@bot daily-digest 总结一下昨天的 commit` 就能触发,执行完结果以飞书卡片回到群里;`/use` `/where` `/ws` `/sessions` `/loops` `/run` `/help` 7 个 slash 命令;cron 跑完也能自动推回飞书(每 loop 独立目的地 + 全局兜底,见下)
-- **Linux cron Loop**:每天 9 点拉代码、每小时巡检 PR、隔半小时跑测试都行;PWA 上每个 loop 也能手动点 **Run now**;cron 触发的 run 走 backend → 落 runs.db → PWA cron 卡片可点 「→ open」 进 run-detail
+- **PWA**(手机/PC 浏览器都能装):3 个 tab — **Workspaces** / **Tasks** / **Roundtable**;PC 上 manifest `display: fullscreen` + `display_override` 加桌面后无浏览器 UI
+  - 每个 workspace:turn-streaming 流式对话(USER prompt + claude 的 thinking/tool_use/tool_result/reply/result 完整 event timeline,跟 workspace overview / cron 详情 / run-detail 共用同一套渲染)
+  - 输入框:可在 claude 跑的过程中**继续按 Run 排队**(前端 queue,跑完一条自动 dispatch 下一条),队列卡片可点 × 删除
+  - workspace ⚙ menu:Trust 切换 / Pull latest(同时 rebase PWA worktree)/ Sync skills / Show all events 切换 / **Merge session → main + push**(一键把 cc/* 分支 ff-merge 回 main + push origin) / New chat / Delete workspace
+  - 创建 workspace / cron / roundtable:都走 `<dialog>` modal,不再占永久空间
+- **飞书集成**:在群里 `@bot daily-digest 总结一下昨天的 commit` 就能触发,执行完结果以飞书卡片回到群里;`/use` `/where` `/ws` `/sessions` `/loops` `/history` `/run` `/help` 8 个 slash 命令;cron 跑完也能自动推回飞书(每 loop 独立目的地 + 全局兜底,见下)
+- **Linux cron Loop**:每天 9 点拉代码、每小时巡检 PR、隔半小时跑测试都行;PWA 上每个 loop 也能手动点 **Run now**;cron 触发的 run 走 backend → 落 runs.db → PWA Tasks tab 点 task 进 `#tasks/<name>` 详情页看最新 run 的完整 event timeline + **Last 7 sparkline** 健康度可视化
 - **多 provider**:通过 ccswitch-style providers.json 可切到 DeepSeek / Kimi 等 Anthropic 兼容端点
 - **每 workspace 独立配置**:provider(可改)+ trust(可改;开启后工具调用走 hook auto-approve)
-- **工具审批 + 审计**(可选):Claude 想跑 Bash / WebFetch 时 PWA 弹 `[Approve] [Deny]`(走 PreToolUse hook);trust=on 工作区自动通过,**但仍记录在 run-detail 的 Approvals 面板里**(read-only audit),你能看到 claude 实际执行了哪些工具
-- **完整对话 Transcript**:run-detail 页面有可折叠 Transcript 面板,展开后能看完整 stream-json 时间线(`💭 thinking / 🔧 tool_use / ↳ tool_result / 🤖 text / ✓ result`),而不只是最终 result 文本
+- **工具审批 + 审计**(可选):Claude 想跑 Bash / WebFetch 时 PWA 在对应 turn 末尾弹 `[Approve] [Deny]`(走 PreToolUse hook);trust=on 工作区自动通过,**但仍以 audit event 形式记在 turn 的 event timeline 里**,你能看到 claude 实际执行了哪些工具
+- **完整对话 Transcript**:**不再有单独的 Transcript 面板** —— 直接是 turn 的 expanded event timeline(`💭 thinking / 🔧 tool_use / ↳ tool_result / 🤖 reply / ✓ done`),长 `tool_result` 自动折叠为前 5 行 + `↓ Expand N lines` 按钮。默认只显示 `reply + result`,在 ⚙ menu → Display 切 "Show all events" 看 thinking / tool 细节
 - **Slash 命令自动补全**(PWA):在输入框打 `/` 弹出当前 workspace 所有 skill(project + user + plugin 三层来源),Tab 补全
-- **DIY 自动 compact**:长对话接近 context 上限时,agent-run 自动调用 9 段式 summary prompt(基于 Claude Code `/compact` 反向工程),清旧 session,新 session 以 summary 续——transparent,你不会感知。撞坏了也有手动 **Reset session** 按钮兜底;`--resume` 撞到孤儿 sid 时自动 fallback 到新会话
+- **DIY 自动 compact**:长对话接近 context 上限时,agent-run 自动调用 9 段式 summary prompt(基于 Claude Code `/compact` 反向工程),清旧 session,新 session 以 summary 续——transparent,你不会感知。撞坏了也有 ⚙ menu → **New chat** 按钮兜底(同时**真删** runs.db + log 文件,不再有"刷新一下旧 turn 又冒出来");`--resume` 撞到孤儿 sid 时自动 fallback 到新会话
 - **圆桌会议**(从 [AgentRoundtable](https://github.com/wet-/AgentRoundtable) 移植):4 角色(极简派 / 场景派 / 借鉴派 / 悲观派)+ 1 个整理员,对一个决策级问题辩论 1-2 轮(可配置),输出 **共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动**。不替你拍板,但把不同价值取向下的行动路径说清楚。
 
 ---
@@ -158,7 +162,7 @@ PWA → Tasks → `New cron loop`。两种填法:
 注:Add 只**注册调度**,不会立即跑一次。要立即试一下点新增的 **Run now** 按钮。
 
 cron 跑完后:
-- **PWA**:Tasks 卡片底部出现 `→ open` 链接,点进去看完整 run-detail(Output / Approvals / Transcript / Live output)
+- **PWA**:Tasks tab 的 task 行 → 点进 `#tasks/<name>` 详情页 → 看最新 run 的完整 event timeline(USER prompt + thinking + tool_use + tool_result + reply + done 5 种 event)+ sparkline 健康度。齿轮菜单里有 Run now / Pause / Delete。
 - **飞书自动推送**(可选):走以下两条任一通路触发
   - **per-loop 目的地**:用飞书 `/loops new <name> <描述>` + `/loops confirm` 在群里创建的 loop,自动记下当前 chat_id,以后每次 cron 跑完结果推回这个群
   - **全局兜底**:在 `~/.cc-workflow/secrets.toml` 加 `[feishu] cron_notify_chat = "<chat_id>"`,所有 cron loop(包括 PWA 创建的)跑完都推到这个群
@@ -166,11 +170,11 @@ cron 跑完后:
 
 ### 4. 工具审批(可选)
 
-如果某个 ws 没开 trust(默认),Claude 在跑到 Bash / WebFetch 时会暂停,PWA 那条 timeline 上出现 `[Approve] [Deny]` 按钮。点 Approve → Claude 继续;点 Deny → Claude 收到拒绝信号,自己换路或停下。
+如果某个 ws 没开 trust(默认),Claude 在跑到 Bash / WebFetch 时会暂停,PWA 在那条 expanded turn 的最末尾出现 `[Approve] [Deny]` 按钮(贴近输入框,scroll-to-bottom 后自然落在视口)。点 Approve → Claude 继续;点 Deny → Claude 收到拒绝信号,自己换路或停下。
 
-想全局跳过审批?在 ws 列头点 🔒 → 切到 🔓(琥珀色锁形 = "auto-approve, treat with care")。
+想全局跳过审批?进 workspace ⚙ menu → Trust workspace 切 ON(琥珀色锁形 = "auto-approve, treat with care")。
 
-trust=on 也**不是完全没记录**——auto-approved 的每次工具调用都会写进对应 run-detail 的 Approvals 面板(read-only audit ring buffer,最近 500 条)。所以你能事后看到 claude 实际跑了 `Bash(npx vitest)` / `Write(notes.md)` 等等,只是没让你点按钮而已。
+trust=on 也**不是完全没记录**——auto-approved 的每次工具调用会以 `tool_use` event 形式记在 turn 的 event timeline 里。默认 PWA 只显示 reply + result(避免噪音),要看就在 ⚙ menu → Display 切 "Show all events"。所以你能事后看到 claude 实际跑了 `Bash(npx vitest)` / `Write(notes.md)` 等等。
 
 ### 5. 多 provider
 
@@ -276,6 +280,9 @@ cc-workflow/
 | **per-workspace 配置 vs 全局** | 选 per-workspace,落到 `~/.cc-workflow/workspaces.json` | 全局 fallback 在 `config.toml`(`provider`、`default_trust`)+ `secrets.toml`(`[feishu] cron_notify_chat` 兜底 cron 通知群)。 |
 | **PWA 缓存策略** | service worker 网络优先 + 强制 `cache: 'no-store'` 绕过浏览器 HTTP cache | 频繁发布的开发工具,nginx `expires 1h` 会让浏览器服坏掉的旧 app.js 给新 SW(turning network-first into cache-first under the hood);SW 自己的 cache.open(VERSION) 是唯一的离线兜底。 |
 | **长对话 context 管理** | DIY auto-compact(agent-run 检测 input_tokens > 阈值时,跑 9 段式 summary prompt,清旧 session,新 session 以 summary 开场)+ PWA 手动 reset 按钮;`--resume <stale-sid>` 撞到 claude 内部 session 不存在时自动重试 | Claude Code 的 `/compact` 是 TUI-only,headless 不可用。Prompt 模板基于 Piebald-AI 社区反向工程版本(非 Anthropic 官方)。阈值默认 150k,可在 `config.toml` 改 `compact_threshold_tokens`。 |
+| **Turn-streaming UI 模式统一**(2026-05 重构) | 所有"对话视图"(workspace overview 卡片 / workspace detail / `#runs/<id>` / cron `#tasks/<name>`)都复用同一套 `_workspaceTurnHtml` + `_loadTurnEvents`,从 `/runs/{id}/tail` 拉 stream-jsonl 解析成 thinking/tool_use/tool_result/text/result 5 种结构化 event 卡片。 | 之前 run-detail 是独立 5 段堆叠 UI(Prompt / Output / Approvals 折叠 / Transcript 折叠 / Live output),维护双份。统一后净删 ~840 行死代码,事件渲染规则只改一处。代价:`_patchWorkspaceCard` 老 diff-patch 算法弃用,各视图改全量重画 —— refreshAll 的 hash 去重让性能开销可控。 |
+| **Prompt 队列**(纯前端) | workspace 已有 run 在跑时,用户继续按 Run → 前端 `_promptQueue[ws]` 入队 + 弹"已排队"toast;当前 run 完成 → `_dispatchAllQueues` 自动 pop 队头发出去。每条可点 × 删。 | 后端 `POST /run` 在 workspace busy 时会 409(`active_in_workspace` 检查),不肯排队 —— 前端攻略性地避免触发。状态 in-memory(刷新即丢,可接受);PWA "I want to type 5 messages while it's running" 的体验从"5 个 409 报错"变"5 个排队 + 串行 dispatch"。 |
+| **PWA session worktree 双向同步** | PWA session 跑在 `~/workspaces/.wt/<ws>-pwa-<ws>/` 独立 worktree(分支 `cc/<ws>-pwa-<ws>`,见 PRD §A8 worktree 隔离),跟主 worktree 的 main 分支不会自动同步。⚙ menu 加两个对称按钮:**Pull latest** = `git pull --ff-only` 主 worktree 然后 `git rebase main` PWA worktree;**Merge session → main + push** = rebase cc/* 到 main 然后 ff-merge + push origin。 | 之前 Pull latest 只 pull 主 worktree,PWA session 的 worktree 还停在老 commit,claude 下次跑看不到上游更新。现在两个对称 endpoint 把"我在 PWA 里说的话怎么进到 main / 怎么从 main 拿新代码"两个方向都覆盖了。 |
 
 完整决策演进:[docs/archive/01-prd.md 附录 A/B](docs/archive/01-prd.md)。
 
