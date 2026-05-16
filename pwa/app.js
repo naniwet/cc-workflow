@@ -131,6 +131,12 @@ function statusTag(status) {
   return `<span class="tag tag-${esc(status)}">${ICONS[status] || ''}${esc(status)}</span>`;
 }
 
+// Minimal status indicator — 只显示 icon,无 "done" 文字、无 chip 背景。
+// 给 mobile turn-head 的 meta 区用,空间紧凑只要一眼看到状态。
+function statusIcon(status) {
+  return `<span class="status-icon status-icon-${esc(status)}" aria-label="${esc(status)}">${ICONS[status] || ''}</span>`;
+}
+
 function _globalPendingCount() {
   return (lastData.pendingApprovals || []).length;
 }
@@ -2406,9 +2412,8 @@ function _workspaceTurnHtml(turn) {
   const status = turn.status || '?';
   const prompt = turn.prompt || '';
   const expanded = !!turn.expanded;
-  // Collapsed-head 单行展示:caret + prompt 首行 + 状态标签 + 用时。
-  // 设计图 §3.2 要求收起态固定一行,所有 turn 等高,不显时间(完整时间
-  // 在 expanded body 的 USER 事件块里给出)。
+  // Collapsed-head 单行展示:caret + prompt 首行 + 状态 icon + 用时 + 起始时间。
+  // 设计图 §3.2 要求收起态固定一行,所有 turn 等高。
   const summary = (prompt.split(/\r?\n/).find(Boolean) || '(empty prompt)').slice(0, 200);
   const cancelBtn = status === 'running' && turn.id
     ? `<button class="run-cancel-btn turn-cancel" type="button" data-run-id="${esc(turn.id)}">✕ Cancel</button>`
@@ -2416,14 +2421,13 @@ function _workspaceTurnHtml(turn) {
   const approvals = pendingApprovalsFor(turn.id || '').map(approvalBlockHtml).join('');
   const startedRel = turn.started_at ? timeAgo(turn.started_at) : '';
   const startedAbs = turn.started_at ? new Date(turn.started_at * 1000).toLocaleString() : '';
-  // USER 事件:始终是 expanded body 的第一条,展示完整 prompt + 起始时间。
-  // 不依赖 /tail 接口(prompt 已在 turn 数据里)。
+  // USER 事件:始终是 expanded body 的第一条,展示完整 prompt。
+  // 起始时间已挪到 head meta,这里不再重复显示。
   const userHeaderHtml = `
     <div class="event event-user">
       <div class="event-label">User</div>
       <div class="event-body">
         <div class="event-text-block">${esc(prompt)}</div>
-        ${startedRel ? `<div class="event-meta" title="${esc(startedAbs)}">${esc(startedRel)}</div>` : ''}
       </div>
     </div>`;
   // turn-events 容器:expanded 时 _bindWorkspaceSessionHandlers 会触发
@@ -2444,8 +2448,9 @@ function _workspaceTurnHtml(turn) {
         <span class="turn-caret">${expanded ? '▼' : '▶'}</span>
         <span class="turn-summary">${esc(summary)}</span>
         <span class="turn-meta">
-          ${statusTag(status)}
+          ${statusIcon(status)}
           ${turn.elapsed_s != null ? `<span class="turn-elapsed">${esc(turn.elapsed_s)}s</span>` : ''}
+          ${startedRel ? `<span class="turn-started" title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
         </span>
       </button>
       ${cancelBtn}
@@ -2552,19 +2557,42 @@ function cssQuoteEsc(s) {
   return String(s).replace(/(["\\])/g, '\\$1');
 }
 
+// 长 prose 折叠:5 行以内直接展示;超过 5 行先显示前 5 行 + "↓ Expand N
+// lines" 按钮。复用 .tool-result-wrap / .tool-result-preview /
+// .tool-result-full / .tool-result-fold 4 个 class —— 这样
+// _onToolResultExpand 现有 handler 自动 work,不写新的展开逻辑。
+// 跟 _workspaceOutputHtml 的区别:这里输出 div.event-text-block(flow
+// 文本),不是 <pre>(monospace 块)—— thinking / text 是英文 prose,
+// 用 pre 会看着像代码。
+function _foldedTextHtml(text) {
+  const folded = foldToolResult(text || '', 5);
+  if (!folded.truncated) {
+    return `<div class="event-text-block">${esc(folded.preview)}</div>`;
+  }
+  return `
+    <div class="tool-result-wrap">
+      <div class="event-text-block tool-result-preview">${esc(folded.preview)}</div>
+      <div class="event-text-block tool-result-full" hidden>${esc(text || '')}</div>
+      <button class="tool-result-fold" type="button">↓ Expand ${esc(folded.hiddenLineCount)} lines</button>
+    </div>`;
+}
+
 function _renderTurnEvent(ev) {
   if (ev.kind === 'thinking') {
+    // thinking 经常一段几百字(用户反馈的 bug:折叠提交说明刷屏 1 屏多)。
+    // 默认折叠到 5 行,长内容点 Expand 才展开。
     return `
       <div class="event event-thinking">
         <div class="event-label">Thinking</div>
-        <div class="event-body"><div class="event-text-block">${esc(ev.text)}</div></div>
+        <div class="event-body">${_foldedTextHtml(ev.text)}</div>
       </div>`;
   }
   if (ev.kind === 'text') {
+    // assistant 文本回复:跟 thinking 同样的折叠规则,保持一致。
     return `
       <div class="event event-text">
         <div class="event-label">Reply</div>
-        <div class="event-body"><div class="event-text-block">${esc(ev.text)}</div></div>
+        <div class="event-body">${_foldedTextHtml(ev.text)}</div>
       </div>`;
   }
   if (ev.kind === 'tool_use') {

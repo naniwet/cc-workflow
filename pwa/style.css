@@ -2042,7 +2042,23 @@ pre {
     padding: 1px var(--space-2);
     font-size: var(--text-sm);
   }
+  /* head meta 区的极简状态指示:只有 icon,无文字、无背景。
+     紧贴 elapsed/起始时间排在一起。 */
+  .status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+  }
+  .status-icon svg { width: 14px; height: 14px; }
+  .status-icon-done    { color: var(--accent-green); }
+  .status-icon-running { color: var(--accent-cyan); }
+  .status-icon-queued  { color: var(--accent-blue); }
+  .status-icon-failed,
+  .status-icon-error   { color: var(--accent-red); }
+  .status-icon-paused  { color: var(--text-disabled); }
   .turn-elapsed { font-variant-numeric: tabular-nums; }
+  .turn-started { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
   .turn-cancel {
     position: absolute;
     top: 9px;
