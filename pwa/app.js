@@ -467,6 +467,17 @@ const timelineScroll = {};                          // key: ws name → {scrollT
 const workspaceSessionScroll = {};                  // key: ws name → {scrollTop, atBottom}
 const workspaceStreamState = {};                     // key: ws name → {eventCount,newEvents,atBottom}
 const workspaceTurnOverrides = {};                   // key: run id → expanded bool
+
+// 全局事件过滤:默认只显示 user / reply / result(thinking + tool_use +
+// tool_result 隐藏)。tool_result 出错时无视开关一律显示 —— 错误不能
+// 默默吞掉。localStorage 持久化(每台设备各自记)。
+function eventFilterShowAll() {
+  try { return localStorage.getItem('cc.eventFilter.showAll') === '1'; }
+  catch { return false; }
+}
+function setEventFilterShowAll(on) {
+  try { localStorage.setItem('cc.eventFilter.showAll', on ? '1' : '0'); } catch {}
+}
 // (Mobile carousel + IntersectionObserver were removed 2026-05-15;
 // replaced by explicit header [‹][›] arrow navigation. See
 // renderMobileWorkspaceDetail.)
@@ -1318,6 +1329,10 @@ function bindWorkspaceColHandlers(root) {
     // work the approval buttons needed.
     _addTapFallback(b, onTrustToggleClick);
   }
+  for (const b of root.querySelectorAll('.event-filter-toggle')) {
+    b.addEventListener('click', _onEventFilterToggle);
+    _addTapFallback(b, _onEventFilterToggle);
+  }
   const approvalBtns = root.querySelectorAll('.approval-approve, .approval-deny');
   console.log('[cc-debug] bindWorkspaceColHandlers: approval buttons found =', approvalBtns.length);
   for (const b of approvalBtns) {
@@ -1859,6 +1874,22 @@ async function _onResetSessionClick(e) {
   }
 }
 
+// 全局事件过滤 toggle:翻 localStorage flag,清掉所有 turn-events 的
+// "已渲染行数"标记,然后调 render() 重画整页 —— 因为已渲染的 events
+// 已经过期(filter 状态变了,要重新过滤一遍)。
+function _onEventFilterToggle(e) {
+  const btn = e.currentTarget;
+  const next = btn.dataset.showAll !== '1';
+  setEventFilterShowAll(next);
+  // Reset 渲染计数 → 下次 _loadTurnEvents 会拉完整 tail 重新走 _renderTurnEvent
+  for (const tev of document.querySelectorAll('.turn-events[data-run-id]')) {
+    tev.dataset.renderedLines = '0';
+    tev.innerHTML = '';
+  }
+  showToast('info', `Events: ${next ? 'showing all' : 'reply + result only'}`, { ttl: 1800 });
+  render();
+}
+
 async function onTrustToggleClick(e) {
   const btn = e.currentTarget;
   const name = btn.dataset.ws;
@@ -2383,6 +2414,13 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
               </button>
             </div>
             <div class="ws-menu-section">
+              <span class="ws-menu-section-label">Display</span>
+              <button class="event-filter-toggle ws-menu-item" type="button"
+                      data-show-all="${eventFilterShowAll() ? '1' : '0'}">
+                ${ICONS.refresh} <span>Show all events <strong>${eventFilterShowAll() ? 'ON' : 'OFF'}</strong></span>
+              </button>
+            </div>
+            <div class="ws-menu-section">
               <span class="ws-menu-section-label">Session</span>
               <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
                 ${ICONS.rewind} <span>New chat</span>
@@ -2578,6 +2616,16 @@ function _foldedTextHtml(text) {
 }
 
 function _renderTurnEvent(ev) {
+  // 全局过滤:默认只显示 reply / result(text / result kind),用户在 ⚙
+  // 打开 "Show all events" 时再展示 thinking / tool_use / tool_result。
+  // 例外:tool_result.isError 一律显示 —— 错误不能在 default 模式被静默
+  // 吞掉,否则 debug 看不见。
+  const showAll = eventFilterShowAll();
+  if (!showAll) {
+    if (ev.kind === 'thinking' || ev.kind === 'tool_use') return '';
+    if (ev.kind === 'tool_result' && !ev.isError) return '';
+  }
+
   if (ev.kind === 'thinking') {
     // thinking 经常一段几百字(用户反馈的 bug:折叠提交说明刷屏 1 屏多)。
     // 默认折叠到 5 行,长内容点 Expand 才展开。
