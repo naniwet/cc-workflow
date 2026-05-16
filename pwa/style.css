@@ -1842,13 +1842,17 @@ pre {
 }
 .turn-reply-preview {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: var(--text-sm);
   color: var(--text-tertiary);
   font-weight: 400;
   line-height: var(--lh-tight);
+  /* 2 行 clamp:long reply 自然 wrap 到第 2 行,再长用省略号截断。
+     -webkit-* 前缀在 Chrome / Safari / FF 都支持(虽然名字带 webkit)。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 /* expanded 时 body 里已经能看到完整 reply,head 里的 preview 就是噪音,
    隐藏掉。collapsed 时显示,作为内容的快速预览。 */

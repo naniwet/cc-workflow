@@ -2577,8 +2577,14 @@ function _workspaceTurnHtml(turn) {
   // expanded 时 reply preview 被 CSS 隐藏(body 里全文 reply 已经看到)。
   const summary = (prompt.split(/\r?\n/).find(Boolean) || '(empty prompt)').slice(0, 200);
   const replyRaw = String(turn.output_preview || '').trim();
+  // 把空行 / 单独 '…' 行剔掉,其余原换行保留 —— CSS 用 line-clamp:2 wrap,
+  // 多行内容自然显示前两行可读。
   const replyPreview = replyRaw
-    ? replyRaw.split(/\r?\n/).filter((l) => l.trim() && l.trim() !== '…').join(' · ').slice(0, 240)
+    ? replyRaw.split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l && l !== '…')
+        .join(' ')           // 用空格连接,让 2 行 clamp 自己按宽度 wrap
+        .slice(0, 400)        // 兜底硬截一下,免得超长 reply 占内存
     : '';
   const cancelBtn = status === 'running' && turn.id
     ? `<button class="run-cancel-btn turn-cancel" type="button" data-run-id="${esc(turn.id)}">✕ Cancel</button>`
