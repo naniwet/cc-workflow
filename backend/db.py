@@ -135,6 +135,34 @@ def delete_runs_for_workspace(workspace: str) -> int:
         return cur.rowcount or 0
 
 
+def delete_runs_for_session(workspace: str, session_key: str) -> list[str]:
+    """删除 (workspace, session_key) 这一对的所有 runs,返回被删 run 的 id 列表。
+
+    给 DELETE /workspaces/{name}/session(PWA "New chat")用:之前只清
+    sessions.json 的 claude_session_id 让下次 agent-run 不带 --resume,
+    runs.db 里的历史 run 完全不动 —— 前端 /sessions 拉回来还显示。设计图
+    §3.1 要求"旧 turn 立刻从 UI 消失,不留痕迹",所以现在直接 DELETE。
+
+    只删 (workspace, session_key) 这一对 —— cron loop 和飞书的 session_key
+    不一样,他们的历史 run 不受影响。
+
+    返回 id 列表让调用方做 log 文件清理(stream-jsonl 在
+    ~/.cc-state/logs/run-<id>.stream.jsonl,db 行没了还留着就是孤儿)。
+    """
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id FROM runs WHERE workspace = ? AND session_key = ?",
+            (workspace, session_key),
+        ).fetchall()
+        ids = [r["id"] for r in rows]
+        if ids:
+            c.execute(
+                "DELETE FROM runs WHERE workspace = ? AND session_key = ?",
+                (workspace, session_key),
+            )
+        return ids
+
+
 # Columns returned by /sessions endpoint.
 #
 # Q1 PWA polish: prompt + output snippet added so the workspace timeline

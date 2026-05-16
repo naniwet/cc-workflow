@@ -734,6 +734,22 @@ def reset_workspace_session(name: str) -> dict:
     except (OSError, json.JSONDecodeError) as e:
         raise HTTPException(500, {"error": f"sessions.json write failed: {e}"})
 
+    # 真删 runs.db 里这条 PWA 会话的所有 run + 对应的 stream-jsonl
+    # log 文件。设计图 §3.1:"旧 turn 立刻从 UI 消失,不留痕迹"。
+    # cron / 飞书 session_key 不一样,他们的历史 run 不受影响。
+    deleted_ids = db.delete_runs_for_session(name, key)
+    if deleted_ids:
+        logs_dir = config.STATE_DIR / "logs"
+        for rid in deleted_ids:
+            log_path = logs_dir / f"run-{rid}.stream.jsonl"
+            try:
+                log_path.unlink(missing_ok=True)
+            except OSError:
+                # 删 log 文件失败不算 reset 失败 —— db 行才是真相,孤儿
+                # log 留着不影响 UI(没了 db 行 /tail 就 404)。
+                pass
+        cleared.append(f"{len(deleted_ids)} runs")
+
     return {"ok": True, "workspace": name, "session_key": key, "cleared": cleared}
 
 
