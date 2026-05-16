@@ -1979,13 +1979,13 @@ pre {
     box-shadow: inset 3px 0 0 var(--accent-red);
   }
   .turn-head {
-    min-height: 48px;
+    min-height: 64px;
     width: 100%;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: var(--space-2);
     align-items: center;
-    padding: var(--space-2) var(--space-3);
+    padding: 10px var(--space-3);
     background: transparent;
     border: 0;
     color: var(--text-primary);
@@ -1998,22 +1998,48 @@ pre {
     font-size: 18px;
     line-height: 1;
   }
+  .turn-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
   .turn-summary {
+    display: block;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 600;
+    font-size: var(--text-md);
+    line-height: var(--lh-tight);
   }
   .turn-meta {
-    grid-column: 2;
     min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     color: var(--text-tertiary);
-    font-size: var(--text-micro);
+    font-size: var(--text-sm);
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 400;
+  }
+  .turn-meta > span:not(.tag) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .turn-meta > span:not(:first-child)::before {
+    content: '·';
+    margin-right: var(--space-2);
+    color: var(--text-disabled);
+  }
+  .turn-meta .tag {
+    flex: 0 0 auto;
+    min-height: 0;
+    padding: 1px var(--space-2);
+    font-size: var(--text-sm);
   }
   .turn-cancel {
     position: absolute;

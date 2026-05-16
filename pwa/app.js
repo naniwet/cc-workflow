@@ -2422,12 +2422,14 @@ function _workspaceTurnHtml(turn) {
       <button class="turn-head turn-toggle" type="button"
               data-run-id="${esc(turn.id || '')}" data-expanded="${expanded ? '1' : '0'}">
         <span class="turn-caret">${expanded ? '⌄' : '›'}</span>
-        <span class="turn-summary">${esc(summary)}</span>
-        <span class="turn-meta">
-          ${statusTag(status)}
-          ${turn.elapsed_s != null ? ` · ${esc(turn.elapsed_s)}s` : ''}
-          ${turn.exit_code != null && turn.exit_code !== 0 ? ` · exit ${esc(turn.exit_code)}` : ''}
-          ${startedRel ? ` · <span title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
+        <span class="turn-main">
+          <span class="turn-summary">${esc(summary)}</span>
+          <span class="turn-meta">
+            ${statusTag(status)}
+            ${turn.elapsed_s != null ? `<span>${esc(turn.elapsed_s)}s</span>` : ''}
+            ${turn.exit_code != null && turn.exit_code !== 0 ? `<span>exit ${esc(turn.exit_code)}</span>` : ''}
+            ${startedRel ? `<span title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
+          </span>
         </span>
       </button>
       ${cancelBtn}
@@ -2475,12 +2477,17 @@ function _bindWorkspaceSessionHandlers(root, name) {
   }
   for (const btn of root.querySelectorAll('.turn-toggle')) {
     btn.addEventListener('click', _onWorkspaceTurnToggle);
+    _addTapFallback(btn, _onWorkspaceTurnToggle);
   }
   for (const btn of root.querySelectorAll('.tool-result-fold')) {
     btn.addEventListener('click', _onToolResultExpand);
+    _addTapFallback(btn, _onToolResultExpand);
   }
   const newEvents = root.querySelector('.workspace-new-events');
-  if (newEvents) newEvents.addEventListener('click', _onWorkspaceNewEventsClick);
+  if (newEvents) {
+    newEvents.addEventListener('click', _onWorkspaceNewEventsClick);
+    _addTapFallback(newEvents, _onWorkspaceNewEventsClick);
+  }
 }
 
 function _syncWorkspaceNewEventsButton(name) {
