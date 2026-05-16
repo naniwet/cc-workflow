@@ -8,7 +8,7 @@ io.py / data.py) is mechanical glue, adapted from the original near-verbatim.
 Differences from the upstream CLI tool:
   - LLM client: stdlib urllib (no openai SDK dep) — see model.py.
   - Storage:   ~/.cc-state/roundtables/<slug>.jsonl (was ./sessions/<slug>.jsonl)
-  - Endpoint config: providers.json#roundtable_endpoints (was env vars
+  - Endpoint config: providers.json#openai_endpoints (was env vars
     DEEPSEEK_API_KEY / MOONSHOT_API_KEY)
   - Execution: in-process background thread (see runner.py),
     NOT subprocess like agent-run.sh, since the roundtable is pure HTTP

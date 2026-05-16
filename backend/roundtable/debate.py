@@ -25,7 +25,9 @@ Side effects all injected:
 from __future__ import annotations
 
 import time
+import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +35,54 @@ from .data import AgentTurn, Role, Session
 from .io import append_turn, write_meta
 from .model import ModelFn
 from .synth import synthesize
+
+
+_PESSIMIST_FAILURE_RE = re.compile(r"因.+?而崩\*\*\s*\([^)]*\)")
+
+
+def _quality_issue(role: Role, content: str) -> str | None:
+    """Return a human-readable issue when a turn violates a hard role guard.
+
+    Keep this intentionally small: prompts remain the primary constraint;
+    this only catches cheap, high-signal failures that are visible without
+    semantic judging.
+    """
+    if role.name == "悲观派":
+        matches = _PESSIMIST_FAILURE_RE.findall(content)
+        if len(matches) < 2:
+            return (
+                "悲观派必须显式列出至少 2 个 "
+                "'**A 因 X 而崩**(发生概率 + 影响范围)' 失败模式"
+            )
+    return None
+
+
+def _call_role_with_quality_retry(
+    role: Role,
+    *,
+    model_name: str,
+    user_prompt: str,
+    model_fn: ModelFn,
+    max_quality_retries: int = 1,
+) -> str:
+    """Call one persona, retrying once when cheap role-level checks fail."""
+    prompt = user_prompt
+    last_content = ""
+    for attempt in range(max_quality_retries + 1):
+        last_content = model_fn(model_name, role.system_prompt, prompt, role.temperature)
+        issue = _quality_issue(role, last_content)
+        if issue is None:
+            return last_content
+        if attempt >= max_quality_retries:
+            return last_content
+        prompt = f"""{user_prompt}
+
+---
+
+你刚才的回答违反了硬约束: {issue}
+
+请重写,只输出合格答案,不要解释违规原因。"""
+    return last_content
 
 
 def build_r1_user_prompt(question: str) -> str:
@@ -181,34 +231,63 @@ def run_session(
                 pass
         session.turns.append(turn)
 
+    def _run_role_round(
+        round_no: int,
+        turn_type: str,
+        prompt_for: Callable[[Role], str],
+    ) -> None:
+        """Run one persona round concurrently, then persist in role order."""
+        max_workers = max(1, len(roles))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(
+                    _call_role_with_quality_retry,
+                    role,
+                    model_name=model_for(role),
+                    user_prompt=prompt_for(role),
+                    model_fn=model_fn,
+                )
+                for role in roles
+            ]
+            for role, fut in zip(roles, futures):
+                content = fut.result()
+                _record(AgentTurn(
+                    round=round_no,
+                    role=role.name,
+                    type=turn_type,
+                    content=content,
+                    ts=clock(),
+                ))
+
     # --- Round 1: initial answers (every persona, no context but the question) #
-    for role in roles:
-        user_prompt = build_r1_user_prompt(question)
-        content = model_fn(model_for(role), role.system_prompt, user_prompt, role.temperature)
-        _record(AgentTurn(round=1, role=role.name, type="answer", content=content, ts=clock()))
+    _run_role_round(
+        1,
+        "answer",
+        lambda role: build_r1_user_prompt(question),
+    )
 
     # --- Round 2: steel-man + attack on R1 others ------------------------- #
     r1_by_role = {t.role: t.content for t in session.turns if t.round == 1}
-    for role in roles:
+    def _r2_prompt(role: Role) -> str:
         others = {name: c for name, c in r1_by_role.items() if name != role.name}
-        user_prompt = build_r2_user_prompt(question, others)
-        content = model_fn(model_for(role), role.system_prompt, user_prompt, role.temperature)
-        _record(AgentTurn(round=2, role=role.name, type="critique", content=content, ts=clock()))
+        return build_r2_user_prompt(question, others)
+
+    _run_role_round(2, "critique", _r2_prompt)
 
     # --- Round 3: deep-dive critique (optional) --------------------------- #
     if critique_rounds >= 2:
         r2_by_role = {t.role: t.content for t in session.turns if t.round == 2}
-        for role in roles:
+        def _r3_prompt(role: Role) -> str:
             others_r2 = {n: c for n, c in r2_by_role.items() if n != role.name}
             my_r2 = r2_by_role.get(role.name, "")
-            user_prompt = build_r3_critique_prompt(
+            return build_r3_critique_prompt(
                 question=question,
                 r1_all=r1_by_role,
                 r2_others=others_r2,
                 my_r2=my_r2,
             )
-            content = model_fn(model_for(role), role.system_prompt, user_prompt, role.temperature)
-            _record(AgentTurn(round=3, role=role.name, type="critique", content=content, ts=clock()))
+
+        _run_role_round(3, "critique", _r3_prompt)
 
     # --- Synth: 整理员 consolidates all critique rounds --------------------- #
     synth_round = critique_rounds + 2

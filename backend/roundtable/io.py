@@ -22,11 +22,22 @@ _SLUG_MAX = 24
 
 
 def session_path_for(question: str, started_at: float, sessions_dir: Path) -> Path:
-    """Compose '<dir>/YYYYMMDD-HHMMSS-<slug>.jsonl' (UTC)."""
+    """Compose '<dir>/YYYYMMDD-HHMMSS-<slug>.jsonl' (UTC).
+
+    If that path already exists, append a small numeric suffix instead of
+    returning a name that would be truncated by write_meta().
+    """
     ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime(started_at))
     slug = _slugify(question)
-    name = f"{ts}-{slug}.jsonl" if slug else f"{ts}.jsonl"
-    return sessions_dir / name
+    stem = f"{ts}-{slug}" if slug else ts
+    path = sessions_dir / f"{stem}.jsonl"
+    if not path.exists():
+        return path
+    for i in range(2, 1000):
+        candidate = sessions_dir / f"{stem}-{i}.jsonl"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"too many roundtable session name collisions for {stem!r}")
 
 
 def session_id_from_path(path: Path) -> str:

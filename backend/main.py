@@ -1023,10 +1023,12 @@ def _roundtable_session_summary(path: Path) -> dict:
     """Lightweight row for the list view — reads meta + counts turns
     without parsing each content field."""
     try:
-        # Cheap: only the first line + a count of remaining lines.
+        # Cheap: parse one small JSON object per turn, but never load content
+        # into the detail shape. This lets list rows distinguish failed
+        # sessions from merely-running ones.
         with path.open(encoding="utf-8") as f:
             head_line = f.readline()
-            rest_count = sum(1 for line in f if line.strip())
+            rest = [json.loads(line) for line in f if line.strip()]
         head = json.loads(head_line)
     except (OSError, json.JSONDecodeError):
         return {
@@ -1039,8 +1041,12 @@ def _roundtable_session_summary(path: Path) -> dict:
     # Legacy jsonl (no critique_rounds in meta) defaults to N=1 → 9.
     critique_rounds = head.get("critique_rounds", 1)
     turns_expected = 4 + 4 * critique_rounds + 1
-    turns_done = rest_count
-    status = "done" if turns_done >= turns_expected else ("running" if turns_done > 0 else "queued")
+    has_error = any(rec.get("role") == "__error__" for rec in rest)
+    turns_done = sum(1 for rec in rest if rec.get("role") != "__error__")
+    status = "error" if has_error else (
+        "done" if turns_done >= turns_expected else
+        ("running" if turns_done > 0 else "queued")
+    )
     return {
         "id": path.stem,
         "question": head.get("question", ""),
