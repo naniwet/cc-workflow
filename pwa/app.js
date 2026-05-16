@@ -1308,6 +1308,13 @@ function bindWorkspaceColHandlers(root) {
   for (const btn of root.querySelectorAll('.ws-reset-session')) {
     btn.addEventListener('click', _onResetSessionClick);
   }
+  // Merge session branch → main + push。PWA session 默认隔离在
+  // cc/<ws>-pwa-<ws> 分支(agent-run.sh:354,session_key 非 default 时
+  // worktree 隔离),这个按钮一键 rebase + ff-merge + push。
+  for (const btn of root.querySelectorAll('.ws-merge-to-main')) {
+    btn.addEventListener('click', _onMergeToMainClick);
+    _addTapFallback(btn, _onMergeToMainClick);
+  }
   // Delete workspace button — extra destructive. Removes the entire
   // ~/workspaces/<name>/ directory + per-ws settings + session.
   for (const btn of root.querySelectorAll('.ws-delete-workspace')) {
@@ -1896,6 +1903,52 @@ async function _onResetSessionClick(e) {
   }
 }
 
+// "Merge session → main + push" 按钮:rebase cc/<ws>-pwa-<ws> 到 main +
+// ff-merge + push origin main。后端走 POST /workspaces/{ws}/merge-session-branch,
+// 完整流程见那里的 docstring。
+//
+// 三种回包形状要分开 toast:
+//   ok=true, push_ok=true  → success "Merged + pushed"
+//   ok=true, push_ok=false → warning "Merged locally, push failed: ..."
+//   ok=false (HTTPException) → error "Merge failed: ..."
+async function _onMergeToMainClick(e) {
+  const btn = e.currentTarget;
+  const ws = btn.dataset.ws;
+  if (!ws) return;
+  _closeAncestorMenu(btn);
+  if (!confirm(
+    `把 "${ws}" 当前 PWA session 的 cc/* 分支合并到 main 并推送?\n\n` +
+    `流程:rebase cc/${ws}-pwa-${ws} 到 main → fast-forward merge → git push origin main\n\n` +
+    `cc/* 分支保留,下一轮 PWA 对话继续在它上面 append commit。\n\n` +
+    `如果有冲突或 main worktree 不干净,操作会安全中止并提示。`
+  )) return;
+  btn.disabled = true;
+  const originalText = btn.querySelector('span')?.textContent || '';
+  if (originalText) btn.querySelector('span').textContent = 'Merging…';
+  try {
+    const result = await api(`/workspaces/${encodeURIComponent(ws)}/merge-session-branch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (result?.push_ok) {
+      showToast('success', `${ws}: merged ${result.branch} → ${result.main_branch} + pushed`, { ttl: 3000 });
+    } else {
+      showToast('warning',
+        `${ws}: merged to ${result.main_branch} locally, push failed — ${result.push_msg || '(no detail)'}`,
+        { ttl: 5000 });
+    }
+    refreshAll();
+  } catch (err) {
+    // backend HTTPException 抛过来的 detail 里有 error + msg,api() 包装了
+    // err.message 已经包含;直接 surface。
+    showError(`merge failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    if (originalText) btn.querySelector('span').textContent = originalText;
+  }
+}
+
 // 全局事件过滤 toggle:翻 localStorage flag,清掉所有 turn-events 的
 // "已渲染行数"标记,然后调 render() 重画整页 —— 因为已渲染的 events
 // 已经过期(filter 状态变了,要重新过滤一遍)。
@@ -2154,6 +2207,9 @@ function workspaceColHtml(name, data, opts = {}) {
           </button>
           <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
             ${ICONS.refresh} <span>Sync skills</span>
+          </button>
+          <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}">
+            ${ICONS.download} <span>Merge session → main + push</span>
           </button>
           <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}">
             ${ICONS.rewind} <span>Reset conversation</span>
@@ -2461,6 +2517,9 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
             </div>
             <div class="ws-menu-section">
               <span class="ws-menu-section-label">Session</span>
+              <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
+                ${ICONS.download} <span>Merge to main + push</span>
+              </button>
               <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
                 ${ICONS.rewind} <span>New chat</span>
               </button>

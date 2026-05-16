@@ -55,7 +55,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -583,6 +583,120 @@ def pull_workspace(name: str) -> dict:
         "summary": summary,
         "stdout": stdout,
         "stderr": stderr,
+    }
+
+
+@app.post("/workspaces/{name}/merge-session-branch", dependencies=PROTECT)
+def merge_session_branch(name: str, body: dict = Body(default={})) -> dict:
+    """Rebase 当前 PWA session 的 cc/* 分支到 main,fast-forward 合进 main,然后 push。
+
+    背景:agent-run.sh 在 session_key != "default" 时会建独立 worktree +
+    `cc/<ws>-<session_safe>` 分支(见 PRD §A8 worktree 隔离),PWA 默认
+    session_key = `pwa-<ws>`,所以 PWA 里 claude 做的 commit 都困在
+    cc/* 分支不进 main。这个端点给 PWA ⚙ menu 的 "Merge to main" 按钮
+    用,一键把 cc/* 推到 main + remote。
+
+    流程(用户选的:rebase + ff-merge + auto-push,保留 cc/* 分支):
+      1. 校验 worktree 在(否则没东西可 merge)
+      2. 校验 main worktree 干净(uncommitted changes 不动手)
+      3. 在 worktree 里 `git rebase main` 把 cc/* 平铺到 main 上
+         —— 失败就 `--abort`,返回 conflict 错误让用户 ssh 处理
+      4. 在 main worktree 里 `git merge --ff-only <branch>` —— rebase 之后
+         必然能 ff
+      5. `git push origin <main_branch>`,失败不算整体失败:本地已并入
+         main,push 失败只表示推 remote 没成,返回 push_ok=False 让用户
+         看到
+      6. **cc/* 分支保留**,下一轮 PWA session 继续在同一个 worktree 上
+         append commit
+    """
+    from . import ui_cards
+    known = set(ui_cards._discover_workspaces())
+    if name not in known:
+        raise HTTPException(404, {"error": "workspace not found", "name": name})
+
+    target = config.WORKSPACES_DIR / name
+    if not (target / ".git").exists():
+        raise HTTPException(400, {"error": "not a git repo", "name": name})
+
+    # session_key 来源:body 里给就用 body 的,否则默认 PWA 用的 `pwa-<ws>`。
+    # 跟 agent-run.sh 的 session_safe 处理保持一致(非 [A-Za-z0-9._-] 替成 _)。
+    import re
+    session_key = (body or {}).get("session_key") or f"pwa-{name}"
+    session_safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_key)
+    branch_name = f"cc/{name}-{session_safe}"
+    worktree_path = config.WORKSPACES_DIR / ".wt" / f"{name}-{session_safe}"
+
+    if not worktree_path.exists():
+        raise HTTPException(
+            400,
+            {"error": "no_worktree", "msg": f"no worktree at {worktree_path} — this session has no claude work to merge yet"},
+        )
+
+    import subprocess
+
+    def _git(cwd, args, timeout=60):
+        try:
+            p = subprocess.run(
+                ["git", "-C", str(cwd), *args],
+                capture_output=True, text=True, timeout=timeout, check=False,
+            )
+            return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
+        except subprocess.TimeoutExpired:
+            return 124, "", f"git {args[0]} timed out ({timeout}s)"
+        except OSError as e:
+            return 127, "", f"git not runnable: {e}"
+
+    # 1. main worktree 干净?
+    rc, out, err = _git(target, ["status", "--porcelain"])
+    if rc != 0:
+        raise HTTPException(500, {"error": "git_status_failed", "msg": err or out})
+    if out:
+        raise HTTPException(
+            400,
+            {"error": "main_dirty", "msg": "main worktree has uncommitted changes; resolve via ssh first"},
+        )
+
+    # 拿 main 实际分支名(可能是 main / master / 别的),用来做 rebase
+    # 目标和 push refspec。
+    rc, out, err = _git(target, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if rc != 0:
+        raise HTTPException(500, {"error": "git_head_failed", "msg": err})
+    main_branch = out or "main"
+
+    # 2. 在 worktree 里把 cc/* rebase 到 main 上。
+    rc, out, err = _git(worktree_path, ["rebase", main_branch])
+    if rc != 0:
+        # 留个干净的状态再返回,免得用户下次进 PWA 看到一个半 rebase
+        # 的工作目录又得 ssh 救场。
+        _git(worktree_path, ["rebase", "--abort"])
+        raise HTTPException(
+            400,
+            {
+                "error": "rebase_conflict",
+                "msg": f"rebase {branch_name} onto {main_branch} failed (likely conflict). Aborted. err: {(err or out)[:500]}",
+            },
+        )
+
+    # 3. ff-merge cc/* 进 main(rebase 后必然能 ff)。
+    rc, out, err = _git(target, ["merge", "--ff-only", branch_name])
+    if rc != 0:
+        raise HTTPException(
+            500,
+            {"error": "ff_merge_failed", "msg": (err or out)[:500]},
+        )
+
+    # 4. push。失败不抛 500,返回 push_ok=False 让前端 toast 区分"已经
+    # 进 main 但没推 remote"和"完全失败"。
+    rc, out, err = _git(target, ["push", "origin", main_branch], timeout=120)
+    push_ok = (rc == 0)
+
+    return {
+        "ok": True,
+        "workspace": name,
+        "branch": branch_name,
+        "main_branch": main_branch,
+        "push_ok": push_ok,
+        "push_msg": (err or out)[:500] if not push_ok else "",
     }
 
 
