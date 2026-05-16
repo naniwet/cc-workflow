@@ -2308,6 +2308,13 @@ function workspaceColHtml(name, data, opts = {}) {
   // shows only state. Trust is in the menu (was inline on PC before) —
   // that's a 1-extra-click regression accepted in exchange for a clean
   // header that doesn't wrap.
+  // ⚙ 菜单 body 跟 mobile workspace detail 那个完全同步(Provider /
+  // Workspace / Display / Session + 底部 Delete)。之前 PC / mobile 两
+  // 边各写各的,section 分组、用词("Reset conversation" vs "New chat"、
+  // "Pull latest (git pull)" vs "Pull latest")都漂移,Display 段(Show
+  // all events toggle)也只 mobile 有。用户反馈"pc 端的菜单怎么跟移动
+  // 端不一样 保持一致吧" —— 这里以 mobile 版为准重写 PC body。
+  const trustOnPC = effectiveTrust(name);
   const providerEngineBlock = `
     <div class="ws-meta-mobile">
       ${providerLabel}
@@ -2319,24 +2326,36 @@ function workspaceColHtml(name, data, opts = {}) {
             <span class="ws-menu-section-label">Provider</span>
             ${_providerRadioListHtml(name, wsProvider)}
           </div>
-          <button class="ws-trust-toggle ws-menu-item" type="button"
-                  data-ws="${esc(name)}" data-trusted="${effectiveTrust(name) ? '1' : '0'}"
-                  aria-label="Toggle trust">
-            ${effectiveTrust(name) ? ICONS.unlock : ICONS.lock}
-            <span>Trust: ${effectiveTrust(name) ? '<strong>on</strong> · auto-approve' : '<strong>off</strong> · ask first'}</span>
-          </button>
-          <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}">
-            ${ICONS.download} <span>Pull latest (git pull)</span>
-          </button>
-          <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
-            ${ICONS.refresh} <span>Sync skills</span>
-          </button>
-          <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}">
-            ${ICONS.download} <span>Merge session → main + push</span>
-          </button>
-          <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}">
-            ${ICONS.rewind} <span>Reset conversation</span>
-          </button>
+          <div class="ws-menu-section">
+            <span class="ws-menu-section-label">Workspace</span>
+            <button class="ws-trust-toggle ws-menu-item" type="button"
+                    data-ws="${esc(name)}" data-trusted="${trustOnPC ? '1' : '0'}">
+              ${trustOnPC ? ICONS.unlock : ICONS.lock}
+              <span>Trust workspace <strong>${trustOnPC ? 'ON' : 'OFF'}</strong></span>
+            </button>
+            <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}">
+              ${ICONS.download} <span>Pull latest</span>
+            </button>
+            <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
+              ${ICONS.refresh} <span>Sync skills</span>
+            </button>
+          </div>
+          <div class="ws-menu-section">
+            <span class="ws-menu-section-label">Display</span>
+            <button class="event-filter-toggle ws-menu-item" type="button"
+                    data-show-all="${eventFilterShowAll() ? '1' : '0'}">
+              ${ICONS.refresh} <span>Show all events <strong>${eventFilterShowAll() ? 'ON' : 'OFF'}</strong></span>
+            </button>
+          </div>
+          <div class="ws-menu-section">
+            <span class="ws-menu-section-label">Session</span>
+            <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}">
+              ${ICONS.download} <span>Merge to main + push</span>
+            </button>
+            <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}">
+              ${ICONS.rewind} <span>New chat</span>
+            </button>
+          </div>
           <button class="ws-delete-workspace ws-menu-item ws-menu-item-danger" type="button" data-ws="${esc(name)}">
             ${ICONS.trash} <span>Delete workspace</span>
           </button>
