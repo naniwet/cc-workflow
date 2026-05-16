@@ -2584,12 +2584,16 @@ function _workspaceTurnHtml(turn) {
       ${cancelBtn}
       <div class="turn-body">
         ${userHeaderHtml}
-        ${approvals}
         ${eventsHtml}
+        ${approvals}
       </div>
     </article>
   `;
 }
+// ↑ approvals 放在最后 —— bug:之前夹在 USER 和 events 之间,events 长出
+//   来后 approval 被推到上方,auto-scroll-to-bottom 之后用户看不到 Approve
+//   按钮。挪到 events 后面,turn 的最底部就是 [Approve][Deny],跟输入框
+//   贴近,自然落在视口里。
 
 // ─────────────────────────────────────────────────────────────────────────
 // expanded turn → /runs/{id}/tail 流式 event 渲染
