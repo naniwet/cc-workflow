@@ -1340,6 +1340,28 @@ function bindWorkspaceColHandlers(root) {
     // Mobile fallback. See _addTapFallback comment.
     _addTapFallback(b, onApprovalClick);
   }
+
+  // PC workspace detail 现在也走 turn-streaming(workspaceColHtml 在
+  // detail=true 时渲染 .turn 而不是 .run-row),所以这里把 turn-toggle /
+  // tool-result-fold 也连一下,跟 mobile 版 _bindWorkspaceSessionHandlers
+  // 行为一致。
+  // 先停所有正在跑的 turn-events poll —— 整页重画后老 timer 都失效了。
+  if (root.querySelector('.ws-col-detail')) {
+    _stopAllTurnEventsPolls();
+  }
+  for (const btn of root.querySelectorAll('.turn-toggle')) {
+    btn.addEventListener('click', _onWorkspaceTurnToggle);
+    _addTapFallback(btn, _onWorkspaceTurnToggle);
+  }
+  for (const btn of root.querySelectorAll('.tool-result-fold')) {
+    btn.addEventListener('click', _onToolResultExpand);
+    _addTapFallback(btn, _onToolResultExpand);
+  }
+  // Bootstrap event load for initially-expanded turns(运行中 + 最近完成)。
+  for (const turn of root.querySelectorAll('.turn.turn-expanded')) {
+    const runId = turn.dataset.runId;
+    if (runId) _loadTurnEvents(runId);
+  }
 }
 
 // Generic helper: turn a finger tap (≤ 15px movement, ≤ 600ms) into a
@@ -2040,12 +2062,27 @@ function workspaceColHtml(name, data, opts = {}) {
   ];
   all.sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
   const timeline = all.slice(-maxRows);
-  const timelineHtml = timeline.length
-    ? timeline.map((r) => {
-        const approvals = pendingApprovalsFor(r.id || '');
-        return runRowHtml(r) + approvals.map(approvalBlockHtml).join('');
-      }).join('')
-    : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
+  // Detail 模式(PC 进入单 workspace 详情页)复用 mobile 那套 turn-streaming
+  // UI:每个 run 一个 turn,默认收起单行 summary,展开后流式渲染完整
+  // event timeline。设计图 §3.2 + §4 的体验在 PC 上也一致。
+  //
+  // Overview 模式(PC 多 workspace 网格)仍用紧凑 run-row 列表 —— 每张
+  // 卡片高度受限(max 10 行),没有展开空间。
+  let timelineHtml;
+  if (detail) {
+    const turns = _workspaceSessionTurns(data);
+    const expandedTurns = workspaceTurnExpansion(turns, workspaceTurnOverrides);
+    timelineHtml = expandedTurns.length
+      ? expandedTurns.map(_workspaceTurnHtml).join('')
+      : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
+  } else {
+    timelineHtml = timeline.length
+      ? timeline.map((r) => {
+          const approvals = pendingApprovalsFor(r.id || '');
+          return runRowHtml(r) + approvals.map(approvalBlockHtml).join('');
+        }).join('')
+      : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
+  }
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
@@ -2903,18 +2940,13 @@ function renderDesktopWorkspaceDetail(name) {
     return;
   }
   const data = groups[name];
-
-  // Patch path: same workspace already painted → diff-update only.
-  // Note _patchWorkspaceCard caps the visible window at 10 rows;
-  // desktop detail wants 30 — handled below by re-passing maxRows
-  // to the patch helper (see _patchWorkspaceCard signature).
   const view = $('view');
-  const existingTimeline = view.querySelector(`.ws-timeline[data-ws="${esc(name)}"]`);
-  if (existingTimeline) {
-    _patchWorkspaceCard(name, data, { maxRows: 30 });
-    return;
-  }
 
+  // PC detail 现在用 turn-streaming UI(详见 workspaceColHtml 的 detail
+  // 分支),内部容器是 .turn 而不是 .run-row,_patchWorkspaceCard 的
+  // diff 算法不再适用。每次主 poll 触发的 render() 全量重画 —— refreshAll
+  // 已经做了数据 hash 去重(elapsed_s 被 mask),空跑成本可控。
+  // mobile 路径(renderMobileWorkspaceDetail)同样是全量重画,体验一致。
   view.innerHTML = `
     <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
     ${workspaceColHtml(name, data, { maxRows: 30, detail: true, extraClass: 'ws-col-detail' })}
