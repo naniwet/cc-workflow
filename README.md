@@ -287,6 +287,7 @@ cc-workflow/
 |---|---|---|
 | **README.md(本文)** | 当前架构 + 怎么用 | 首次接触 / 日常 reference |
 | [deploy/INSTALL.md](deploy/INSTALL.md) | 完整部署 step-by-step | 第一次装,或装新机器 |
+| [deploy/INSTALL-TWA.md](deploy/INSTALL-TWA.md) | PWA 套 Chrome WebView 壳成 Android APK(全屏沉浸 + 桌面图标) | 想要 native app 体验又不想原生重写,或中国浏览器装 PWA 不靠谱 |
 | [deploy/MIGRATE-TO-NONROOT.md](deploy/MIGRATE-TO-NONROOT.md) | Plan B:切非 root 跑(为 claude-code#20449 兜底) | trust=on 频繁被 file-modifying Bash 命令挡住时 |
 | [docs/feishu-usage.md](docs/feishu-usage.md) | 飞书端完整使用说明(slash 命令清单 / 触发 / 圆桌推送 / 排错) | 配好飞书集成后,日常使用查询 |
 | [docs/archive/](docs/archive/) | 历史设计文档(PRD / dev-plan / test-plan / handoff / future) | 想理解某个决策**为什么**当时那样定 / 想看 P1 未实现的设计 |

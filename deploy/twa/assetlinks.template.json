@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "_FILL_ME_": "把这个 template 拷到服务器 /etc/cc-workflow/well-known/assetlinks.json,删掉本行,把下面 package_name + sha256 替成 bubblewrap init 输出的真值。详见 deploy/INSTALL-TWA.md §3。",
+      "package_name": "com.naniwet.ccworkflow",
+      "sha256_cert_fingerprints": [
+        "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+      ]
+    }
+  }
+]
