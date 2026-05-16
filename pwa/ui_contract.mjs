@@ -138,3 +138,73 @@ export function workspaceAutoScrollState(previous = {}, next = {}) {
   const newEvents = atBottom ? 0 : Number(previous.newEvents || 0) + incoming;
   return { eventCount, newEvents, atBottom };
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// stream-jsonl → 结构化 event 解析
+//
+// `claude --stream-json` 每一行是一条 JSON 事件,顶层 `type` ∈
+// {system, assistant, user, result}。一行能产出 0 个或多个面向 UI
+// 的 event 卡片(因为 assistant.content 是个数组,可同时包含
+// text / tool_use / thinking)。
+//
+// 输入:tail 接口返回的 lines 数组(每个是 JSON 文本字符串)
+// 输出:扁平的 event 数组,kind ∈ {thinking, text, tool_use,
+//       tool_result, result}。系统/init 行被丢弃,不可解析的行被
+//       静默跳过(stream 偶发坏行不应该把整个 panel 搞挂)。
+//
+// 故意做成纯函数:0 副作用、0 IO,方便 node:test 单测。
+// ─────────────────────────────────────────────────────────────────────────
+export function parseStreamLinesToEvents(rawLines) {
+  const out = [];
+  for (const raw of rawLines || []) {
+    let obj;
+    try { obj = JSON.parse(raw); } catch { continue; }
+    if (!obj || typeof obj !== 'object') continue;
+    if (obj.type === 'system') continue;        // init / preflight noise
+
+    if (obj.type === 'assistant') {
+      const content = obj.message?.content || [];
+      for (const c of content) {
+        if (c?.type === 'thinking' && c.thinking) {
+          out.push({ kind: 'thinking', text: String(c.thinking) });
+        } else if (c?.type === 'tool_use') {
+          out.push({ kind: 'tool_use', name: String(c.name || ''), input: c.input ?? {} });
+        } else if (c?.type === 'text' && c.text) {
+          out.push({ kind: 'text', text: String(c.text) });
+        }
+      }
+      continue;
+    }
+
+    if (obj.type === 'user') {
+      const content = obj.message?.content || [];
+      for (const c of content) {
+        if (c?.type === 'tool_result') {
+          let body = c.content;
+          if (Array.isArray(body)) {
+            body = body
+              .map((x) => (typeof x === 'string' ? x : (x?.text || JSON.stringify(x))))
+              .join('\n');
+          } else if (typeof body !== 'string') {
+            body = JSON.stringify(body);
+          }
+          out.push({ kind: 'tool_result', text: body || '', isError: !!c.is_error });
+        }
+      }
+      continue;
+    }
+
+    if (obj.type === 'result') {
+      out.push({
+        kind: 'result',
+        subtype: String(obj.subtype || ''),
+        inTokens: Number(obj.usage?.input_tokens || 0),
+        outTokens: Number(obj.usage?.output_tokens || 0),
+        text: String(obj.result || ''),
+      });
+      continue;
+    }
+    // 未知 type:故意丢弃。原始 jsonl 仍在 ~/.cc-state/logs/ 留底。
+  }
+  return out;
+}

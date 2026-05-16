@@ -6,6 +6,7 @@ import {
   ROUNDTABLE_PERSONAS,
   foldToolResult,
   nextRunLabel,
+  parseStreamLinesToEvents,
   roundtablePersonaAvatarsHtml,
   workspaceAutoScrollState,
   workspaceTurnExpansion,
@@ -98,4 +99,82 @@ test('workspaceAutoScrollState accumulates new events while user is away from bo
     workspaceAutoScrollState(state, { eventCount: 6, atBottom: true }),
     { eventCount: 6, newEvents: 0, atBottom: true },
   );
+});
+
+// ─── parseStreamLinesToEvents ──────────────────────────────────────────
+// 工厂用的 stream-jsonl 一行一条 JSON。下面 3 个测试覆盖 UI 实际依赖
+// 的 3 种主流形状(assistant.text / assistant.tool_use / user.tool_result),
+// 加 1 个混合行 + 1 个坏行容错 + 1 个 system 过滤。
+
+test('parseStreamLinesToEvents: assistant.text emits a text event', () => {
+  const lines = [JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: '你好' }] },
+  })];
+  assert.deepEqual(parseStreamLinesToEvents(lines), [
+    { kind: 'text', text: '你好' },
+  ]);
+});
+
+test('parseStreamLinesToEvents: assistant.tool_use carries name + input', () => {
+  const lines = [JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/a/b' } }] },
+  })];
+  assert.deepEqual(parseStreamLinesToEvents(lines), [
+    { kind: 'tool_use', name: 'Read', input: { file_path: '/a/b' } },
+  ]);
+});
+
+test('parseStreamLinesToEvents: user.tool_result flattens content array + error flag', () => {
+  const lines = [JSON.stringify({
+    type: 'user',
+    message: { content: [{
+      type: 'tool_result',
+      content: [{ type: 'text', text: 'line1' }, { type: 'text', text: 'line2' }],
+      is_error: true,
+    }] },
+  })];
+  assert.deepEqual(parseStreamLinesToEvents(lines), [
+    { kind: 'tool_result', text: 'line1\nline2', isError: true },
+  ]);
+});
+
+test('parseStreamLinesToEvents: assistant 行混合 thinking + text + tool_use → 3 个 event', () => {
+  const lines = [JSON.stringify({
+    type: 'assistant',
+    message: { content: [
+      { type: 'thinking', thinking: '让我想想' },
+      { type: 'text', text: '我先看看文件' },
+      { type: 'tool_use', name: 'Read', input: { file_path: '/x' } },
+    ] },
+  })];
+  const out = parseStreamLinesToEvents(lines);
+  assert.equal(out.length, 3);
+  assert.equal(out[0].kind, 'thinking');
+  assert.equal(out[1].kind, 'text');
+  assert.equal(out[2].kind, 'tool_use');
+});
+
+test('parseStreamLinesToEvents: 跳过 system 行 + 容忍坏 JSON', () => {
+  const lines = [
+    JSON.stringify({ type: 'system', subtype: 'init' }),
+    'not-json-at-all',
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } }),
+  ];
+  assert.deepEqual(parseStreamLinesToEvents(lines), [
+    { kind: 'text', text: 'ok' },
+  ]);
+});
+
+test('parseStreamLinesToEvents: result 行带 token 统计', () => {
+  const lines = [JSON.stringify({
+    type: 'result',
+    subtype: 'success',
+    usage: { input_tokens: 1234, output_tokens: 56 },
+    result: '汇总文本',
+  })];
+  assert.deepEqual(parseStreamLinesToEvents(lines), [
+    { kind: 'result', subtype: 'success', inTokens: 1234, outTokens: 56, text: '汇总文本' },
+  ]);
 });

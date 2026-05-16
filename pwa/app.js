@@ -18,6 +18,7 @@
 import {
   foldToolResult,
   nextRunLabel,
+  parseStreamLinesToEvents,
   roundtablePersonaAvatarsHtml,
   workspaceAutoScrollState,
   workspaceTurnExpansion,
@@ -2404,48 +2405,200 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
 function _workspaceTurnHtml(turn) {
   const status = turn.status || '?';
   const prompt = turn.prompt || '';
-  const output = turn.output_preview || turn.output || '';
   const expanded = !!turn.expanded;
-  const startedRel = turn.started_at ? timeAgo(turn.started_at) : '';
-  const startedAbs = turn.started_at ? new Date(turn.started_at * 1000).toLocaleString() : '';
-  const summary = (prompt.split(/\r?\n/).find(Boolean) || '(empty prompt)').slice(0, 160);
-  const running = status === 'running' || status === 'queued';
+  // Collapsed-head 单行展示:caret + prompt 首行 + 状态标签 + 用时。
+  // 设计图 §3.2 要求收起态固定一行,所有 turn 等高,不显时间(完整时间
+  // 在 expanded body 的 USER 事件块里给出)。
+  const summary = (prompt.split(/\r?\n/).find(Boolean) || '(empty prompt)').slice(0, 200);
   const cancelBtn = status === 'running' && turn.id
     ? `<button class="run-cancel-btn turn-cancel" type="button" data-run-id="${esc(turn.id)}">✕ Cancel</button>`
     : '';
   const approvals = pendingApprovalsFor(turn.id || '').map(approvalBlockHtml).join('');
-  const outputHtml = output ? _workspaceOutputHtml(output) : '<p class="muted">(no output yet)</p>';
+  const startedRel = turn.started_at ? timeAgo(turn.started_at) : '';
+  const startedAbs = turn.started_at ? new Date(turn.started_at * 1000).toLocaleString() : '';
+  // USER 事件:始终是 expanded body 的第一条,展示完整 prompt + 起始时间。
+  // 不依赖 /tail 接口(prompt 已在 turn 数据里)。
+  const userHeaderHtml = `
+    <div class="event event-user">
+      <div class="event-label">User</div>
+      <div class="event-body">
+        <div class="event-text-block">${esc(prompt)}</div>
+        ${startedRel ? `<div class="event-meta" title="${esc(startedAbs)}">${esc(startedRel)}</div>` : ''}
+      </div>
+    </div>`;
+  // turn-events 容器:expanded 时 _bindWorkspaceSessionHandlers 会触发
+  // 一次 _loadTurnEvents 把 /runs/{id}/tail 的 stream-jsonl 解析渲染进来。
+  // 同一 runId 二次 mount 时(主 poll 触发的 view rerender),容器会被
+  // 重建为空状态,loader 据此判断要不要重新拉取。
+  const eventsHtml = expanded
+    ? `<div class="turn-events" data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}">
+         <div class="muted turn-events-loading">Loading events…</div>
+       </div>`
+    : `<div class="turn-events" data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}"></div>`;
 
   return `
     <article class="turn turn-${expanded ? 'expanded' : 'collapsed'} turn-status-${esc(status)}"
              data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}">
       <button class="turn-head turn-toggle" type="button"
               data-run-id="${esc(turn.id || '')}" data-expanded="${expanded ? '1' : '0'}">
-        <span class="turn-caret">${expanded ? '⌄' : '›'}</span>
-        <span class="turn-main">
-          <span class="turn-summary">${esc(summary)}</span>
-          <span class="turn-meta">
-            ${statusTag(status)}
-            ${turn.elapsed_s != null ? `<span>${esc(turn.elapsed_s)}s</span>` : ''}
-            ${turn.exit_code != null && turn.exit_code !== 0 ? `<span>exit ${esc(turn.exit_code)}</span>` : ''}
-            ${startedRel ? `<span title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
-          </span>
+        <span class="turn-caret">${expanded ? '▼' : '▶'}</span>
+        <span class="turn-summary">${esc(summary)}</span>
+        <span class="turn-meta">
+          ${statusTag(status)}
+          ${turn.elapsed_s != null ? `<span class="turn-elapsed">${esc(turn.elapsed_s)}s</span>` : ''}
         </span>
       </button>
       ${cancelBtn}
-      <div class="turn-body" ${expanded ? '' : 'hidden'}>
-        <div class="event event-user">
-          <div class="event-label">User</div>
-          <div class="event-body">${esc(prompt)}</div>
-        </div>
+      <div class="turn-body">
+        ${userHeaderHtml}
         ${approvals}
-        <div class="event ${running ? 'event-thinking' : 'event-text'}">
-          <div class="event-label">${running ? 'Running' : 'Result'}</div>
-          <div class="event-body">${outputHtml}</div>
-        </div>
+        ${eventsHtml}
       </div>
     </article>
   `;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// expanded turn → /runs/{id}/tail 流式 event 渲染
+//
+// 设计图 §3.2 + §4:展开的 turn 显示完整 event timeline(thinking /
+// tool_use / tool_result / text / result),tool_result > 5 行折叠为
+// "↓ Expand N lines" 按钮。
+//
+// 主进度循环 setInterval(refreshAll, 3000) 会在数据变化时重建整个
+// .workspace-session 的 DOM,所以这里的"已渲染行数"必须 keyed by
+// (runId, container 实例),而不是单纯 runId —— rerender 后容器是新的,
+// 老的 lineCount 失效。用 dataset.renderedLines 把状态直接存在 DOM 上,
+// container 没了状态也没了,逻辑自洽。
+//
+// 轮询策略:turn 状态是 running/queued 时,2.5s 一拉(对齐
+// _liveTailTimer 的节奏);done/failed 时一次性拉完即停。
+// ─────────────────────────────────────────────────────────────────────────
+
+// 活跃 poll 计时器:runId → timeoutId。卸载时调用 _stopTurnEventsPoll 清掉。
+const _turnEventsTimers = {};
+
+function _stopTurnEventsPoll(runId) {
+  const t = _turnEventsTimers[runId];
+  if (t) { clearTimeout(t); delete _turnEventsTimers[runId]; }
+}
+
+function _stopAllTurnEventsPolls() {
+  for (const id of Object.keys(_turnEventsTimers)) _stopTurnEventsPoll(id);
+}
+
+async function _loadTurnEvents(runId) {
+  if (!runId) return;
+  const container = $('view')?.querySelector(`.turn-events[data-run-id="${cssQuoteEsc(runId)}"]`);
+  if (!container) return;
+
+  const status = container.dataset.status || '';
+  const isRunning = status === 'running' || status === 'queued';
+  const already = Number(container.dataset.renderedLines || 0);
+
+  let data;
+  try {
+    data = await api(`/runs/${encodeURIComponent(runId)}/tail?lines=5000`);
+  } catch (err) {
+    // 失败时换占位文案,但不停止 polling — 网络抖动一下就好。仅在第一次
+    // 加载失败时显示错误,避免覆盖已渲染的好数据。
+    if (already === 0) {
+      container.innerHTML = `<div class="muted">Failed to load events: ${esc(err.message || err)}</div>`;
+    }
+    if (isRunning) _turnEventsTimers[runId] = setTimeout(() => _loadTurnEvents(runId), 2500);
+    return;
+  }
+
+  if (!data.exists) {
+    if (already === 0) {
+      container.innerHTML = '<div class="muted">No event stream yet — run may not have emitted any events.</div>';
+    }
+    if (isRunning) _turnEventsTimers[runId] = setTimeout(() => _loadTurnEvents(runId), 2500);
+    return;
+  }
+
+  const allLines = data.lines || [];
+  if (allLines.length > already) {
+    const newLines = allLines.slice(already);
+    const newEvents = parseStreamLinesToEvents(newLines);
+    const html = newEvents.map(_renderTurnEvent).join('');
+    const loading = container.querySelector('.turn-events-loading');
+    if (loading) loading.remove();
+    if (html) container.insertAdjacentHTML('beforeend', html);
+    container.dataset.renderedLines = String(allLines.length);
+    // Bind fold buttons for tool_result 长输出(只 bind 新增的)。
+    for (const btn of container.querySelectorAll('.tool-result-fold:not([data-bound])')) {
+      btn.addEventListener('click', _onToolResultExpand);
+      _addTapFallback(btn, _onToolResultExpand);
+      btn.dataset.bound = '1';
+    }
+  } else if (already === 0 && allLines.length === 0) {
+    // tail 文件存在但还没行 — 比"no event stream yet"更精确。
+    const loading = container.querySelector('.turn-events-loading');
+    if (loading) loading.textContent = 'Waiting for first event…';
+  }
+
+  if (isRunning) {
+    _turnEventsTimers[runId] = setTimeout(() => _loadTurnEvents(runId), 2500);
+  }
+  // 不 running 的 turn:渲染完一次性结束,不留 timer。
+}
+
+// CSS 选择器里的 runId 可能带 - / : 等,esc() 用于 HTML 转义不够,
+// 单独写一个 CSS attribute selector 用的转义。运行时 run_id 都是
+// `<workspace>-<unix_ts>-<uuid8>` 形状,只有 ASCII + `-`,所以这里
+// 是防御性的简单实现 — 真有更复杂字符再换 CSS.escape()。
+function cssQuoteEsc(s) {
+  return String(s).replace(/(["\\])/g, '\\$1');
+}
+
+function _renderTurnEvent(ev) {
+  if (ev.kind === 'thinking') {
+    return `
+      <div class="event event-thinking">
+        <div class="event-label">Thinking</div>
+        <div class="event-body"><div class="event-text-block">${esc(ev.text)}</div></div>
+      </div>`;
+  }
+  if (ev.kind === 'text') {
+    return `
+      <div class="event event-text">
+        <div class="event-label">Reply</div>
+        <div class="event-body"><div class="event-text-block">${esc(ev.text)}</div></div>
+      </div>`;
+  }
+  if (ev.kind === 'tool_use') {
+    let preview = '';
+    try { preview = JSON.stringify(ev.input || {}); } catch { preview = '<unserializable>'; }
+    if (preview.length > 220) preview = preview.slice(0, 220) + '…';
+    return `
+      <div class="event event-tool">
+        <div class="event-label">Tool</div>
+        <div class="event-body">
+          <code class="tool-call"><span class="tool-name">${esc(ev.name)}</span><span class="tool-args">${esc(preview)}</span></code>
+        </div>
+      </div>`;
+  }
+  if (ev.kind === 'tool_result') {
+    const cls = ev.isError ? 'event-tool-result event-tool-result-error' : 'event-tool-result';
+    return `
+      <div class="event ${cls}">
+        <div class="event-label">${ev.isError ? 'Error' : 'Result'}</div>
+        <div class="event-body">${_workspaceOutputHtml(ev.text || '')}</div>
+      </div>`;
+  }
+  if (ev.kind === 'result') {
+    const usage = `${ev.subtype || ''} · ${ev.inTokens} in · ${ev.outTokens} out`;
+    return `
+      <div class="event event-final">
+        <div class="event-label">Done</div>
+        <div class="event-body">
+          <div class="event-meta">${esc(usage)}</div>
+          ${ev.text ? `<div class="event-text-block">${esc(ev.text)}</div>` : ''}
+        </div>
+      </div>`;
+  }
+  return '';
 }
 
 function _workspaceOutputHtml(output) {
@@ -2463,6 +2616,11 @@ function _workspaceOutputHtml(output) {
 }
 
 function _bindWorkspaceSessionHandlers(root, name) {
+  // 整页 rerender 会重建 .turn-events 容器,所有正在跑的 poll 计时器
+  // 都指向"老 DOM 实例"了 —— 先全清,避免幽灵 timer 往不存在的容器里
+  // append。新 DOM 里的 expanded turn 会在下面重新触发一次 _loadTurnEvents。
+  _stopAllTurnEventsPolls();
+
   const stream = root.querySelector('.workspace-session-stream[data-ws]');
   if (stream) {
     stream.addEventListener('scroll', () => {
@@ -2488,6 +2646,12 @@ function _bindWorkspaceSessionHandlers(root, name) {
     newEvents.addEventListener('click', _onWorkspaceNewEventsClick);
     _addTapFallback(newEvents, _onWorkspaceNewEventsClick);
   }
+  // Bootstrap event load for turns that mount in expanded state(运行中
+  // turn + 最近完成 turn,见 workspaceTurnExpansion)。
+  for (const turn of root.querySelectorAll('.turn.turn-expanded')) {
+    const runId = turn.dataset.runId;
+    if (runId) _loadTurnEvents(runId);
+  }
 }
 
 function _syncWorkspaceNewEventsButton(name) {
@@ -2503,14 +2667,30 @@ function _onWorkspaceTurnToggle(e) {
   const runId = btn.dataset.runId;
   if (!runId) return;
   const turn = btn.closest('.turn');
-  const body = turn?.querySelector('.turn-body');
   const next = btn.dataset.expanded !== '1';
   workspaceTurnOverrides[runId] = next;
   btn.dataset.expanded = next ? '1' : '0';
-  btn.querySelector('.turn-caret').textContent = next ? '⌄' : '›';
+  btn.querySelector('.turn-caret').textContent = next ? '▼' : '▶';
+  // 用 class 控制 body 可见性,不用 [hidden] —— author 的
+  // `.turn-body { display: flex }` 特异性盖过 UA 的 [hidden] {
+  // display: none },attribute 视觉无效。CSS 里的
+  // `.turn-collapsed .turn-body { display: none }` 才真生效。
   turn?.classList.toggle('turn-expanded', next);
   turn?.classList.toggle('turn-collapsed', !next);
-  if (body) body.hidden = !next;
+
+  if (next) {
+    // 展开:把 events 容器塞回 loading 占位 + 触发拉取。如果该 runId
+    // 已经在跑 poll(理论上不应该,_stopAllTurnEventsPolls 已清),
+    // 这里也会被 _loadTurnEvents 内部覆盖掉。
+    const events = turn?.querySelector('.turn-events');
+    if (events && !events.querySelector('.event')) {
+      events.innerHTML = '<div class="muted turn-events-loading">Loading events…</div>';
+      events.dataset.renderedLines = '0';
+    }
+    _loadTurnEvents(runId);
+  } else {
+    _stopTurnEventsPoll(runId);
+  }
 }
 
 function _onToolResultExpand(e) {

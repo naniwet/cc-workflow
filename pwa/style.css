@@ -1874,7 +1874,13 @@ pre {
   body:has(.workspace-session) .bottom-nav { display: none; }
 
   .workspace-session {
-    min-height: 100dvh;
+    /* height(不是 min-height)+ flex 列布局 → 内层 .workspace-session-stream
+       拿到确定的 flex 剩余空间,自己 overflow-y:auto 出现独立滚动条;
+       topbar / input 各自固定上下,不一起跟着 turns 滚。
+       早期写 min-height: 100dvh,turns 自然总高超过视口时把容器撑出
+       main 的 100dvh,内层 flex 失效,变成整页一起滚 + sticky input
+       盖住末尾 turns。 */
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     background: var(--bg-canvas);
@@ -1979,13 +1985,15 @@ pre {
     box-shadow: inset 3px 0 0 var(--accent-red);
   }
   .turn-head {
-    min-height: 64px;
+    /* 设计图 §3.2:收起态 = 单行 summary,所有 turn 等高。
+       固定 height 52px(不是 min-height)+ flex 横排:caret + summary
+       占满中段 + meta 贴右边。等高保证多个收起 turn 视觉对齐。 */
+    height: 52px;
     width: 100%;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--space-2);
+    display: flex;
     align-items: center;
-    padding: 10px var(--space-3);
+    gap: var(--space-2);
+    padding: 0 var(--space-3);
     background: transparent;
     border: 0;
     color: var(--text-primary);
@@ -1994,18 +2002,15 @@ pre {
   }
   .turn-head:hover { background: var(--bg-elevated); border-color: transparent; }
   .turn-caret {
+    flex: 0 0 auto;
+    width: 14px;
     color: var(--text-tertiary);
-    font-size: 18px;
+    font-size: 11px;
     line-height: 1;
-  }
-  .turn-main {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    text-align: center;
   }
   .turn-summary {
-    display: block;
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2015,25 +2020,13 @@ pre {
     line-height: var(--lh-tight);
   }
   .turn-meta {
-    min-width: 0;
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: var(--space-2);
     color: var(--text-tertiary);
     font-size: var(--text-sm);
-    overflow: hidden;
     white-space: nowrap;
-    font-weight: 400;
-  }
-  .turn-meta > span:not(.tag) {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .turn-meta > span:not(:first-child)::before {
-    content: '·';
-    margin-right: var(--space-2);
-    color: var(--text-disabled);
   }
   .turn-meta .tag {
     flex: 0 0 auto;
@@ -2041,25 +2034,41 @@ pre {
     padding: 1px var(--space-2);
     font-size: var(--text-sm);
   }
+  .turn-elapsed { font-variant-numeric: tabular-nums; }
   .turn-cancel {
     position: absolute;
-    top: var(--space-2);
+    top: 9px;
     right: var(--space-3);
     min-height: 34px;
     padding: var(--space-1) var(--space-2);
     z-index: 2;
   }
+  /* running turn 头部给 Cancel 让出空间(两态都生效)。 */
   .turn:has(.turn-cancel) .turn-head { padding-right: 108px; }
   .turn-body {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-    padding: 0 var(--space-3) var(--space-3);
+    padding: var(--space-3);
+    border-top: 1px solid var(--border-subtle);
   }
+  /* 收起态隐藏 body。用 class 不用 [hidden]:author 的
+     `.turn-body { display: flex }`(0,1,0)盖过 UA 的
+     `[hidden] { display: none }`(0,0,1),attribute 视觉无效。
+     `.turn-collapsed .turn-body`(0,2,0)赢过两者 —— 这才是 tap-
+     to-expand 真正生效的入口。 */
+  .turn-collapsed .turn-body { display: none; }
   .event {
+    /* 设计图 §4:每个 event 一行,左侧 72px 给 label,右侧 1fr 给 body。
+       :not(:first-child) 给上下两条 event 之间一条细分隔,但 body
+       的第一条 event(USER prompt)紧贴 turn-body 自己的 border-top,
+       不重复画线。 */
     display: grid;
     grid-template-columns: 72px minmax(0, 1fr);
     gap: var(--space-3);
+    align-items: start;
+  }
+  .event + .event {
     padding-top: var(--space-3);
     border-top: 1px solid var(--border-subtle);
   }
@@ -2068,15 +2077,52 @@ pre {
     font-size: var(--text-micro);
     text-transform: uppercase;
     letter-spacing: 0.06em;
+    line-height: var(--lh-normal);
   }
   .event-body {
     min-width: 0;
     color: var(--text-secondary);
-    white-space: pre-wrap;
     word-break: break-word;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
   }
-  .event-text .event-label { color: var(--accent-green); }
+  .event-text-block {
+    white-space: pre-wrap;
+    line-height: var(--lh-normal);
+  }
+  .event-meta {
+    color: var(--text-tertiary);
+    font-size: var(--text-micro);
+  }
+  .event-user   .event-label { color: var(--text-secondary); }
+  .event-text   .event-label { color: var(--accent-green); }
   .event-thinking .event-label { color: var(--accent-purple); }
+  .event-tool   .event-label { color: var(--accent-cyan); }
+  .event-tool-result .event-label { color: var(--text-tertiary); }
+  .event-tool-result-error .event-label { color: var(--accent-red); }
+  .event-final  .event-label { color: var(--accent-green); }
+  /* tool_use:一行 code,name 高亮 + args 暗灰,等宽,可换行(长 path 不
+     被裁断)。 */
+  .tool-call {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg-canvas);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    word-break: break-all;
+  }
+  .tool-call .tool-name {
+    color: var(--accent-cyan);
+    font-weight: 600;
+  }
+  .tool-call .tool-args {
+    color: var(--text-tertiary);
+  }
   .tool-result {
     margin: 0;
     max-width: 100%;
