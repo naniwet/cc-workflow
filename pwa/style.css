@@ -1874,15 +1874,9 @@ pre {
   body:has(.workspace-session) .bottom-nav { display: none; }
 
   .workspace-session {
-    /* height (not min-height) + overflow:hidden — keep滚动严格框在内层 stream。
-       早期写 min-height 时,turns 自然总高超过视口后整个 .workspace-session
-       被撑出 main 的 100dvh 框,内层 stream 的 flex+overflow:auto 因此失效,
-       变成"整页跟着滚 + sticky .workspace-input 盖住末尾 turns"。 */
-    height: 100dvh;
-    max-height: 100dvh;
+    min-height: 100dvh;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
     background: var(--bg-canvas);
   }
   .workspace-topbar {
@@ -1985,15 +1979,13 @@ pre {
     box-shadow: inset 3px 0 0 var(--accent-red);
   }
   .turn-head {
-    /* 80px + 14px padding 给 meta 行(done 标签 / 用时 / 时间)足够 breathing
-       room,不挤在卡片底边。早期 64/10 太紧,meta 行最后字符贴着 border。 */
-    min-height: 80px;
+    min-height: 64px;
     width: 100%;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: var(--space-2);
     align-items: center;
-    padding: 14px var(--space-3);
+    padding: 10px var(--space-3);
     background: transparent;
     border: 0;
     color: var(--text-primary);
@@ -2064,14 +2056,6 @@ pre {
     gap: var(--space-3);
     padding: 0 var(--space-3) var(--space-3);
   }
-  /* 关键:class 控制 body 显隐,不靠 [hidden] 属性。
-     原因:author 的 `.turn-body { display: flex }`(特异性 0,1,0)覆盖了
-     UA stylesheet 的 `[hidden] { display: none }`(0,0,1),所以 JS 里
-     `body.hidden = !next` 视觉上没效果 —— 这才是"展开 turn 不生效"的
-     根因。`.turn-collapsed .turn-body`(特异性 0,2,0)赢过两者,
-     classList.toggle('turn-collapsed', !next) 就能切换可见性。
-     [hidden] 属性仍保留作为 ARIA semantics(辅助技术读屏会跳过)。 */
-  .turn-collapsed .turn-body { display: none; }
   .event {
     display: grid;
     grid-template-columns: 72px minmax(0, 1fr);
