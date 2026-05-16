@@ -97,3 +97,44 @@ export function nextRunLabel(expr, now = new Date()) {
   if (!next) return '';
   return `下次 ${_fmtTime(next)} · ${_relative(next, now)}`;
 }
+
+function _isRunningTurn(turn) {
+  return turn?.status === 'running' || turn?.status === 'queued';
+}
+
+export function workspaceTurnExpansion(turns, manual = {}) {
+  const safeTurns = Array.isArray(turns) ? turns : [];
+  let latestCompletedIdx = -1;
+  for (let i = 0; i < safeTurns.length; i++) {
+    if (!_isRunningTurn(safeTurns[i])) latestCompletedIdx = i;
+  }
+  return safeTurns.map((turn, idx) => {
+    const id = String(turn?.id ?? idx);
+    let expanded = _isRunningTurn(turn) || idx === latestCompletedIdx;
+    if (!_isRunningTurn(turn) && Object.prototype.hasOwnProperty.call(manual, id)) {
+      expanded = !!manual[id];
+    }
+    return { ...turn, id, expanded };
+  });
+}
+
+export function foldToolResult(text, maxLines = 5) {
+  const lines = String(text == null ? '' : text).split(/\r?\n/);
+  if (lines.length <= maxLines) {
+    return { preview: lines.join('\n'), hiddenLineCount: 0, truncated: false };
+  }
+  return {
+    preview: lines.slice(0, maxLines).join('\n'),
+    hiddenLineCount: lines.length - maxLines,
+    truncated: true,
+  };
+}
+
+export function workspaceAutoScrollState(previous = {}, next = {}) {
+  const eventCount = Number(next.eventCount || 0);
+  const previousCount = Number(previous.eventCount || 0);
+  const incoming = Math.max(0, eventCount - previousCount);
+  const atBottom = next.atBottom !== false;
+  const newEvents = atBottom ? 0 : Number(previous.newEvents || 0) + incoming;
+  return { eventCount, newEvents, atBottom };
+}

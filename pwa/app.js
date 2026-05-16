@@ -16,8 +16,11 @@
 // auth, browser caches the credential for the session.
 
 import {
+  foldToolResult,
   nextRunLabel,
   roundtablePersonaAvatarsHtml,
+  workspaceAutoScrollState,
+  workspaceTurnExpansion,
 } from './ui_contract.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -119,6 +122,7 @@ const ICONS = {
   // sync / reset / delete + provider switch, all collapsed because
   // 6 icons inline are too cramped on phone screens).
   more:    `<svg ${_S}><circle cx="12" cy="12" r="1.5"/><circle cx="6" cy="12" r="1.5"/><circle cx="18" cy="12" r="1.5"/></svg>`,
+  settings: `<svg ${_S}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`,
 };
 
 // Tag helper — status string → <span class="tag tag-X"> with icon prefix.
@@ -453,6 +457,9 @@ const runDetailCache = {};                          // id → row (status=done/f
 const drafts = {};                                  // key: form-id, val: name → value
 const detailsOpen = {};                             // key: details-id, val: bool
 const timelineScroll = {};                          // key: ws name → {scrollTop, atBottom}
+const workspaceSessionScroll = {};                  // key: ws name → {scrollTop, atBottom}
+const workspaceStreamState = {};                     // key: ws name → {eventCount,newEvents,atBottom}
+const workspaceTurnOverrides = {};                   // key: run id → expanded bool
 // (Mobile carousel + IntersectionObserver were removed 2026-05-15;
 // replaced by explicit header [‹][›] arrow navigation. See
 // renderMobileWorkspaceDetail.)
@@ -589,6 +596,14 @@ function snapshotDrafts() {
       atBottom: Math.abs(t.scrollHeight - t.clientHeight - t.scrollTop) < 40,
     };
   }
+  for (const s of document.querySelectorAll('.workspace-session-stream[data-ws]')) {
+    const atBottom = Math.abs(s.scrollHeight - s.clientHeight - s.scrollTop) < 80;
+    workspaceSessionScroll[s.dataset.ws] = { scrollTop: s.scrollTop, atBottom };
+    workspaceStreamState[s.dataset.ws] = workspaceAutoScrollState(
+      workspaceStreamState[s.dataset.ws],
+      { eventCount: Number(s.dataset.eventCount || 0), atBottom },
+    );
+  }
 }
 
 function restoreDrafts() {
@@ -618,6 +633,16 @@ function restoreDrafts() {
     } else {
       t.scrollTop = saved.scrollTop;
     }
+  }
+  for (const s of document.querySelectorAll('.workspace-session-stream[data-ws]')) {
+    const state = workspaceStreamState[s.dataset.ws];
+    const saved = workspaceSessionScroll[s.dataset.ws];
+    if (!saved || state?.atBottom !== false) {
+      s.scrollTop = s.scrollHeight;
+    } else {
+      s.scrollTop = saved.scrollTop;
+    }
+    _syncWorkspaceNewEventsButton(s.dataset.ws);
   }
 }
 
@@ -1808,7 +1833,7 @@ async function _onResetSessionClick(e) {
   if (!ws) return;
   _closeAncestorMenu(btn);
   if (!confirm(
-    `重置 "${ws}" 的对话?\n\n` +
+    `开启 "${ws}" 的新对话?\n\n` +
     `下一次 PWA prompt 会从一张白纸开始,Claude 不再记得之前聊过什么。\n\n` +
     `(cron loops 和飞书的会话不受影响,只重置 PWA 这条线。)`
   )) return;
@@ -1816,7 +1841,9 @@ async function _onResetSessionClick(e) {
   try {
     const result = await api(`/workspaces/${encodeURIComponent(ws)}/session`, { method: 'DELETE' });
     const what = (result?.cleared || []).join(' + ') || '(nothing cleared)';
-    showToast('success', `${ws}: session reset — ${what}`, { ttl: 2500 });
+    workspaceStreamState[ws] = { eventCount: 0, newEvents: 0, atBottom: true };
+    workspaceSessionScroll[ws] = { scrollTop: 0, atBottom: true };
+    showToast('success', `${ws}: new chat — ${what}`, { ttl: 2500 });
     refreshAll();
   } catch (err) {
     showError(`reset session failed: ${err.message}`);
@@ -2266,21 +2293,6 @@ function renderWorkspaceDetailView(startName, opts = {}) {
 }
 
 function renderMobileWorkspaceDetail(startName, opts = {}) {
-  // Mobile single-workspace view, redesigned 2026-05-15:
-  // Was a horizontal carousel of all ws cards with native scroll-snap +
-  // bottom dots indicator updated via IntersectionObserver. That layout
-  // had three rough edges in production:
-  //   - first card (scrollLeft=0) couldn't survive snapshot/restore
-  //     without special-casing (the `> 0` guard bug)
-  //   - dots flashed briefly on each polling re-render because the
-  //     IntersectionObserver took a frame to recompute the active dot
-  //   - scroll-snap occasionally mis-aligned during the re-render
-  // Replaced with: top nav bar [← prev] [name] [next →] + a SINGLE
-  // workspace card rendered below. Switching ws is a click on an arrow;
-  // no carousel state to preserve, no dots to flash, no scroll math.
-  // Trade-off: lose horizontal swipe gesture (some users prefer it).
-  // User signed off on the trade-off — explicit arrows feel more
-  // navigable in a focused single-card view.
   const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
   const sortedNames = Object.keys(groups).sort();
   if (sortedNames.length === 0) {
@@ -2291,77 +2303,230 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
     return;
   }
 
-  // Pick a valid current name: prefer the URL hash, fall back to the
-  // first workspace if the hash points to one that no longer exists
-  // (rare — workspace was deleted while user was on its detail page).
   const currentIdx = Math.max(0, sortedNames.indexOf(startName));
   const currentName = sortedNames[currentIdx];
-  const prevName = sortedNames[(currentIdx - 1 + sortedNames.length) % sortedNames.length];
-  const nextName = sortedNames[(currentIdx + 1) % sortedNames.length];
-  const hasNeighbors = sortedNames.length > 1;
+  const data = groups[currentName] || { active: [], queued: [], recent: [] };
+  const turns = _workspaceSessionTurns(data);
+  const expandedTurns = workspaceTurnExpansion(turns, workspaceTurnOverrides);
+  const eventCount = expandedTurns.length + pendingApprovalsForWorkspace(currentName).length;
+  workspaceStreamState[currentName] = workspaceAutoScrollState(workspaceStreamState[currentName], {
+    eventCount,
+    atBottom: workspaceStreamState[currentName]?.atBottom !== false,
+  });
+  const isRunning = turns.some((t) => t.status === 'running' || t.status === 'queued');
 
-  // The card itself, rendered for ONE workspace only.
-  const colHtml = workspaceColHtml(currentName, groups[currentName] || { active: [], queued: [], recent: [] }, { detail: true });
+  const view = $('view');
+  view.innerHTML = _workspaceSessionDetailHtml(currentName, expandedTurns, { eventCount, isRunning });
+  bindWorkspaceColHandlers(view);
+  _bindWorkspaceSessionHandlers(view, currentName);
+}
 
-  // Top nav bar. Both arrows disabled (visually + functionally) when
-  // there's only one ws — keeps the layout symmetric without making
-  // the buttons "pointless".
-  const navHtml = `
-    <div class="ws-mobile-nav">
-      <button class="ws-nav-arrow ws-nav-prev"
-              data-target="${esc(prevName)}"
-              ${hasNeighbors ? '' : 'disabled'}
-              aria-label="Previous workspace">‹</button>
-      <span class="ws-mobile-nav-title">${esc(currentName)}</span>
-      <button class="ws-nav-arrow ws-nav-next"
-              data-target="${esc(nextName)}"
-              ${hasNeighbors ? '' : 'disabled'}
-              aria-label="Next workspace">›</button>
+function _workspaceSessionTurns(data) {
+  const byId = new Map();
+  for (const r of [...(data.recent || []), ...(data.queued || []), ...(data.active || [])]) {
+    const id = r.id || `${r.workspace || 'run'}-${r.started_at || byId.size}`;
+    byId.set(id, { ...r, id });
+  }
+  return [...byId.values()].sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+}
+
+function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
+  const state = workspaceStreamState[name] || {};
+  const wsProvider = lastData.wsSettings[name]?.provider || '';
+  const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
+  const trustOn = effectiveTrust(name);
+  const providerRows = isRunning
+    ? _providerRadioListHtml(name, wsProvider).replace(/<button /g, '<button disabled ')
+    : _providerRadioListHtml(name, wsProvider);
+  const disabledAttr = isRunning ? 'disabled' : '';
+  const turnsHtml = turns.length
+    ? turns.map(_workspaceTurnHtml).join('')
+    : `<div class="workspace-empty">
+         <div class="workspace-empty-title">New chat</div>
+         <p class="muted">Send the first prompt to start this workspace session.</p>
+       </div>`;
+
+  return `
+    <div class="workspace-session" data-workspace="${esc(name)}">
+      <div class="workspace-topbar">
+        <a class="workspace-back" href="#workspaces" aria-label="Back to workspaces">←</a>
+        <div class="workspace-title">
+          <strong>${esc(name)}</strong>
+          <span>${esc(wsProvider || lastData.globalProvider || 'default')} · ${esc(wsEngine)}</span>
+        </div>
+        <details class="workspace-gear ws-actions-menu" data-details-id="ws-detail-menu-${esc(name)}">
+          <summary class="workspace-gear-trigger ws-actions-trigger" aria-label="Workspace settings">${ICONS.settings}</summary>
+          <div class="workspace-menu ws-actions-menu-body">
+            <div class="ws-menu-section">
+              <span class="ws-menu-section-label">Provider</span>
+              ${providerRows}
+            </div>
+            <div class="ws-menu-section">
+              <span class="ws-menu-section-label">Workspace</span>
+              <button class="ws-trust-toggle ws-menu-item" type="button"
+                      data-ws="${esc(name)}" data-trusted="${trustOn ? '1' : '0'}">
+                ${trustOn ? ICONS.unlock : ICONS.lock}
+                <span>Trust workspace <strong>${trustOn ? 'ON' : 'OFF'}</strong></span>
+              </button>
+              <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
+                ${ICONS.download} <span>Pull latest</span>
+              </button>
+              <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
+                ${ICONS.refresh} <span>Sync skills</span>
+              </button>
+            </div>
+            <div class="ws-menu-section">
+              <span class="ws-menu-section-label">Session</span>
+              <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
+                ${ICONS.rewind} <span>New chat</span>
+              </button>
+            </div>
+            <button class="ws-delete-workspace ws-menu-item ws-menu-item-danger" type="button" data-ws="${esc(name)}">
+              ${ICONS.trash} <span>Delete workspace</span>
+            </button>
+          </div>
+        </details>
+      </div>
+      <div class="workspace-session-stream" data-ws="${esc(name)}" data-event-count="${esc(eventCount)}">
+        ${turnsHtml}
+      </div>
+      <button class="workspace-new-events" type="button" data-ws="${esc(name)}" ${state.newEvents ? '' : 'hidden'}>
+        ↓ ${esc(state.newEvents || 0)} new
+      </button>
+      <form class="trigger-form workspace-input" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
+        <textarea name="prompt" placeholder="reply with only OK · Enter to send, Shift+Enter for newline" required></textarea>
+        <button class="run-btn" type="submit" ${isRunning ? 'disabled' : ''}>Run</button>
+      </form>
     </div>
   `;
+}
 
-  // Patch path: when the SAME workspace is already rendered, don't
-  // tear the whole view down. Diff-update the timeline rows in place
-  // instead — preserves scroll position, doesn't blink the nav bar,
-  // and doesn't yank focus from a half-typed reply textarea.
-  // Detection: the .ws-mobile-body wrapper carries data-workspace=name,
-  // so finding one with the matching name means "we're already on
-  // this view, just need to refresh row data".
-  const view = $('view');
-  const existingBody = view.querySelector(`.ws-mobile-body[data-workspace="${esc(currentName)}"]`);
-  if (existingBody && !opts.isFreshNav) {
-    _patchWorkspaceCard(currentName, groups[currentName] || { active: [], queued: [], recent: [] });
-    return;
-  }
+function _workspaceTurnHtml(turn) {
+  const status = turn.status || '?';
+  const prompt = turn.prompt || '';
+  const output = turn.output_preview || turn.output || '';
+  const expanded = !!turn.expanded;
+  const startedRel = turn.started_at ? timeAgo(turn.started_at) : '';
+  const startedAbs = turn.started_at ? new Date(turn.started_at * 1000).toLocaleString() : '';
+  const summary = (prompt.split(/\r?\n/).find(Boolean) || '(empty prompt)').slice(0, 160);
+  const running = status === 'running' || status === 'queued';
+  const cancelBtn = status === 'running' && turn.id
+    ? `<button class="run-cancel-btn turn-cancel" type="button" data-run-id="${esc(turn.id)}">✕ Cancel</button>`
+    : '';
+  const approvals = pendingApprovalsFor(turn.id || '').map(approvalBlockHtml).join('');
+  const outputHtml = output ? _workspaceOutputHtml(output) : '<p class="muted">(no output yet)</p>';
 
-  view.innerHTML = `
-    <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
-    ${navHtml}
-    <div class="ws-mobile-body" data-workspace="${esc(currentName)}">${colHtml}</div>
+  return `
+    <article class="turn turn-${expanded ? 'expanded' : 'collapsed'} turn-status-${esc(status)}"
+             data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}">
+      <button class="turn-head turn-toggle" type="button"
+              data-run-id="${esc(turn.id || '')}" data-expanded="${expanded ? '1' : '0'}">
+        <span class="turn-caret">${expanded ? '⌄' : '›'}</span>
+        <span class="turn-summary">${esc(summary)}</span>
+        <span class="turn-meta">
+          ${statusTag(status)}
+          ${turn.elapsed_s != null ? ` · ${esc(turn.elapsed_s)}s` : ''}
+          ${turn.exit_code != null && turn.exit_code !== 0 ? ` · exit ${esc(turn.exit_code)}` : ''}
+          ${startedRel ? ` · <span title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
+        </span>
+      </button>
+      ${cancelBtn}
+      <div class="turn-body" ${expanded ? '' : 'hidden'}>
+        <div class="event event-user">
+          <div class="event-label">User</div>
+          <div class="event-body">${esc(prompt)}</div>
+        </div>
+        ${approvals}
+        <div class="event ${running ? 'event-thinking' : 'event-text'}">
+          <div class="event-label">${running ? 'Running' : 'Result'}</div>
+          <div class="event-body">${outputHtml}</div>
+        </div>
+      </div>
+    </article>
   `;
+}
 
-  bindWorkspaceColHandlers(view);
-
-  // Arrow handlers — use history.replaceState so each arrow click does
-  // NOT push a new history entry. The user's history stack should look
-  // like [Workspaces overview, single-detail-page] regardless of how
-  // many workspaces they cycle through — not 5 entries if they pressed
-  // → five times. Browser back from any single-detail page returns
-  // straight to overview.
-  for (const btn of view.querySelectorAll('.ws-nav-arrow')) {
-    if (btn.disabled) continue;
-    btn.addEventListener('click', (e) => {
-      const target = e.currentTarget.dataset.target;
-      if (!target) return;
-      history.replaceState(null, '', `#workspaces/${encodeURIComponent(target)}`);
-      // replaceState doesn't fire hashchange, drive render() manually.
-      // Force a paint by invalidating the data hash — even if lastData
-      // hasn't actually changed, we need to re-render because we changed
-      // which workspace is current.
-      _lastDataHash = '';
-      render();
-    });
+function _workspaceOutputHtml(output) {
+  const folded = foldToolResult(output, 5);
+  if (!folded.truncated) {
+    return `<pre class="tool-result">${esc(folded.preview)}</pre>`;
   }
+  return `
+    <div class="tool-result-wrap">
+      <pre class="tool-result tool-result-preview">${esc(folded.preview)}</pre>
+      <pre class="tool-result tool-result-full" hidden>${esc(output)}</pre>
+      <button class="tool-result-fold" type="button">↓ Expand ${esc(folded.hiddenLineCount)} lines</button>
+    </div>
+  `;
+}
+
+function _bindWorkspaceSessionHandlers(root, name) {
+  const stream = root.querySelector('.workspace-session-stream[data-ws]');
+  if (stream) {
+    stream.addEventListener('scroll', () => {
+      const atBottom = Math.abs(stream.scrollHeight - stream.clientHeight - stream.scrollTop) < 80;
+      workspaceSessionScroll[name] = { scrollTop: stream.scrollTop, atBottom };
+      workspaceStreamState[name] = workspaceAutoScrollState(workspaceStreamState[name], {
+        eventCount: Number(stream.dataset.eventCount || 0),
+        atBottom,
+      });
+      _syncWorkspaceNewEventsButton(name);
+    }, { passive: true });
+  }
+  for (const btn of root.querySelectorAll('.turn-toggle')) {
+    btn.addEventListener('click', _onWorkspaceTurnToggle);
+  }
+  for (const btn of root.querySelectorAll('.tool-result-fold')) {
+    btn.addEventListener('click', _onToolResultExpand);
+  }
+  const newEvents = root.querySelector('.workspace-new-events');
+  if (newEvents) newEvents.addEventListener('click', _onWorkspaceNewEventsClick);
+}
+
+function _syncWorkspaceNewEventsButton(name) {
+  const btn = $('view').querySelector('.workspace-new-events[data-ws]');
+  if (!btn) return;
+  const count = workspaceStreamState[name]?.newEvents || 0;
+  btn.hidden = count <= 0;
+  btn.textContent = `↓ ${count} new`;
+}
+
+function _onWorkspaceTurnToggle(e) {
+  const btn = e.currentTarget;
+  const runId = btn.dataset.runId;
+  if (!runId) return;
+  const turn = btn.closest('.turn');
+  const body = turn?.querySelector('.turn-body');
+  const next = btn.dataset.expanded !== '1';
+  workspaceTurnOverrides[runId] = next;
+  btn.dataset.expanded = next ? '1' : '0';
+  btn.querySelector('.turn-caret').textContent = next ? '⌄' : '›';
+  turn?.classList.toggle('turn-expanded', next);
+  turn?.classList.toggle('turn-collapsed', !next);
+  if (body) body.hidden = !next;
+}
+
+function _onToolResultExpand(e) {
+  const btn = e.currentTarget;
+  const wrap = btn.closest('.tool-result-wrap');
+  const preview = wrap?.querySelector('.tool-result-preview');
+  const full = wrap?.querySelector('.tool-result-full');
+  if (!wrap || !preview || !full) return;
+  preview.hidden = true;
+  full.hidden = false;
+  btn.hidden = true;
+}
+
+function _onWorkspaceNewEventsClick(e) {
+  const ws = e.currentTarget.dataset.ws;
+  const stream = $('view').querySelector('.workspace-session-stream[data-ws]');
+  if (!stream) return;
+  stream.scrollTop = stream.scrollHeight;
+  workspaceStreamState[ws] = workspaceAutoScrollState(workspaceStreamState[ws], {
+    eventCount: Number(stream.dataset.eventCount || 0),
+    atBottom: true,
+  });
+  _syncWorkspaceNewEventsButton(ws);
 }
 
 // Diff-update the timeline inside a mobile single-ws view.
