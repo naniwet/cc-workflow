@@ -1356,6 +1356,54 @@ pre {
 }
 
 /* ============================================================================
+ *  Cron job's "history (N runs)" foldout — shows up to 5 most recent
+ *  runs so the user can pick the right one when several have fired.
+ *  Default collapsed; the most recent run is already linked from the
+ *  stats row's "→ open".
+ * ============================================================================ */
+.loop-history {
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+}
+.loop-history > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  list-style: none;
+  user-select: none;
+  padding: var(--space-1) 0;
+}
+.loop-history > summary::-webkit-details-marker { display: none; }
+.loop-history > summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform var(--t-base);
+}
+.loop-history[open] > summary::before { content: '▾ '; }
+.loop-history > summary:hover { color: var(--text-secondary); }
+
+.loop-hist-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  border-left: 2px solid var(--border-subtle);
+  margin-left: var(--space-1);
+}
+.loop-hist-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  transition: background var(--t-base);
+}
+.loop-hist-row:hover { background: var(--bg-elevated); color: var(--text-primary); }
+.loop-hist-row code { font-size: var(--text-xs); }
+
+/* ============================================================================
  *  Workspace name link — clicking the h2 in PC overview drills into the
  *  workspace's detail view (#workspaces/<name>). Subtle so it doesn't
  *  shout "this is a link" but reveals on hover.

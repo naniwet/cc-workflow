@@ -3106,6 +3106,49 @@ function renderTasksView() {
   }
 }
 
+// Render the cron job's "recent runs" foldout. Hidden when there's
+// 0 or 1 entries (nothing useful to fold). Default collapsed — the
+// most-recent run is already linked from the stats row's "→ open".
+// Expanding shows ALL recent runs (newest first, latest tagged) so
+// the user can pick the right one when several have fired since
+// they last looked.
+//
+// Uses data-details-id so polling re-renders preserve the open
+// state (snapshotDrafts/restoreDrafts pair, see "details state
+// preservation" elsewhere in this file).
+function loopHistoryHtml(loop) {
+  const runs = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
+  if (runs.length <= 1) return '';
+  const detailsId = `loop-hist-${loop.name}`;
+  const items = runs.map((r, i) => {
+    const status = r.status || (r.finished_at != null
+      ? (r.exit_code === 0 ? 'done' : 'failed')
+      : 'running');
+    const shortId = (r.id || '').slice(0, 8);
+    const when = r.finished_at || r.started_at;
+    const rel = when ? timeAgo(when) : '';
+    const abs = when ? new Date(when * 1000).toLocaleString() : '';
+    const exitBadge = r.exit_code != null && r.exit_code !== 0
+      ? ` · exit ${esc(r.exit_code)}`
+      : '';
+    const latestTag = i === 0 ? ' <span class="muted">[latest]</span>' : '';
+    return `
+      <a class="loop-hist-row" href="#runs/${encodeURIComponent(r.id || '')}">
+        ${statusTag(status)}
+        <code>${esc(shortId)}</code>${latestTag}
+        ${rel ? `· <span title="${esc(abs)}">${esc(rel)}</span>` : ''}
+        ${exitBadge}
+      </a>
+    `;
+  }).join('');
+  return `
+    <details class="loop-history" data-details-id="${esc(detailsId)}">
+      <summary>history (${runs.length} runs)</summary>
+      <div class="loop-hist-list">${items}</div>
+    </details>
+  `;
+}
+
 function loopRowHtml(loop) {
   const enabled = !!loop.enabled;
   const last_exit = loop.last_exit != null ? loop.last_exit : '—';
@@ -3166,6 +3209,7 @@ function loopRowHtml(loop) {
       ${loop.last_output_summary
         ? `<div class="loop-last-output" title="Last output preview (truncated; full output on the run-detail page)">↳ ${esc(loop.last_output_summary)}</div>`
         : ''}
+      ${loopHistoryHtml(loop)}
     </div>
   `;
 }

@@ -779,7 +779,39 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
 
 @app.get("/loops", dependencies=PROTECT)
 def get_loops() -> list[dict]:
-    return cron_state.list_jobs()
+    """List cron loops + enrich each with up to 5 most recent runs.
+
+    `recent_runs` is a list of {id, status, finished_at, exit_code}
+    dicts in newest-first order, joined from runs.db. The PWA renders
+    this as a foldout history under each cron card so users can open
+    the right one when there are several recent fires (P0-6f).
+
+    Back-compat: jobs predating recent_run_ids fall back to single-item
+    list derived from `last_run_id`. Once they fire once after upgrade,
+    the new field is populated and the fallback drops out naturally.
+    """
+    jobs = cron_state.list_jobs()
+    for j in jobs:
+        ids = j.get("recent_run_ids") or []
+        if not ids and j.get("last_run_id"):
+            # Bootstrap from the legacy single-id field.
+            ids = [j["last_run_id"]]
+        runs: list[dict] = []
+        for rid in ids:
+            r = db.get_run(rid)
+            if r is None:
+                # Run was deleted (or never made it to db); skip rather
+                # than emit a {id, ...nulls} placeholder the UI can't use.
+                continue
+            runs.append({
+                "id": rid,
+                "status": r.get("status"),
+                "started_at": r.get("started_at"),
+                "finished_at": r.get("finished_at"),
+                "exit_code": r.get("exit_code"),
+            })
+        j["recent_runs"] = runs
+    return jobs
 
 
 class NewLoopRequest(BaseModel):
@@ -830,9 +862,10 @@ def _build_loop_on_finish(name: str, source: str):
       chat_id from job state, falling back to global cron_notify_chat).
     """
     def _on_finish(run: dict) -> None:
-        # 1. Plant last_run_id (disjoint from agent-run's job_finish writer)
+        # 1. Append run-id to history (also keeps last_run_id in sync
+        #    for back-compat with anything still reading the old field).
         try:
-            cron_state.update_job_fields(name, last_run_id=run.get("id"))
+            cron_state.append_recent_run_id(name, run.get("id"))
         except Exception:    # noqa: BLE001 — never crash the runner thread
             pass
         # 2. Feishu push-back (cron only — PWA "Run now" doesn't need it)

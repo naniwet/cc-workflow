@@ -410,10 +410,12 @@ def add_cron_loop(
 def update_job_fields(name: str, **fields) -> Optional[dict]:
     """Atomic merge of arbitrary fields into jobs/<name>.json.
 
-    Used by backend's on_finish callback to plant:
-      - last_run_id          (so PWA's cron card links to run-detail)
-    And by Feishu's `_loops_confirm` to plant:
+    Used by Feishu's `_loops_confirm` to plant:
       - chat_id              (so cron auto-push knows where to send)
+
+    See append_recent_run_id() for the run-id history writer (was
+    previously layered on top of this function but needs special
+    list-prepend semantics + cap, so it got its own function).
 
     Both writers (agent-run's job_finish + this) use mktemp+os.replace,
     so concurrent writes don't tear — last-writer-wins on the contested
@@ -426,6 +428,43 @@ def update_job_fields(name: str, **fields) -> Optional[dict]:
         return None
     for k, v in fields.items():
         data[k] = v
+    tmp = fp.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, fp)
+    return data
+
+
+# Cap on how many recent run-ids we remember per cron job. 5 is enough
+# to "I don't know which of the last few is the one I'm looking for"
+# without bloating jobs/<name>.json or /loops response payloads.
+RECENT_RUNS_CAP = 5
+
+
+def append_recent_run_id(name: str, run_id: str, cap: int = RECENT_RUNS_CAP) -> Optional[dict]:
+    """Prepend run_id to recent_run_ids[], truncate to `cap` entries.
+
+    Atomically updates jobs/<name>.json. Also keeps `last_run_id` in
+    sync (= recent_run_ids[0]) so existing readers (PWA's "→ open"
+    link, Feishu push-back) keep working without a flag day.
+
+    De-dup: if run_id is already at the head (or anywhere) in the list,
+    we move it to the head rather than keeping a duplicate. Defensive
+    against retry / double-fire scenarios.
+
+    Returns the updated job dict, or None if jobs/<name>.json missing.
+    """
+    fp = _job_file(name)
+    data = get_job(name)
+    if data is None:
+        return None
+    recent = data.get("recent_run_ids")
+    if not isinstance(recent, list):
+        recent = []
+    # Drop any pre-existing copy of run_id, then prepend, then cap.
+    recent = [run_id] + [r for r in recent if r != run_id]
+    recent = recent[:cap]
+    data["recent_run_ids"] = recent
+    data["last_run_id"] = run_id  # backward-compat mirror
     tmp = fp.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, fp)
