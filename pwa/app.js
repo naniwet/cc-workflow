@@ -437,6 +437,7 @@ function parseRoute() {
   const h = location.hash.replace('#', '');
   if (h.startsWith('runs/')) return { name: 'runs', id: h.slice(5) };
   if (h.startsWith('workspaces/')) return { name: 'workspace-detail', id: decodeURIComponent(h.slice(11)) };
+  if (h.startsWith('tasks/')) return { name: 'task-detail', id: decodeURIComponent(h.slice(6)) };
   if (h.startsWith('roundtables/')) return { name: 'roundtable-detail', id: decodeURIComponent(h.slice(12)) };
   return { name: h || 'workspaces', id: null };
 }
@@ -692,6 +693,9 @@ function render() {
   } else if (route.name === 'workspace-detail' && route.id) {
     setActiveTab('workspaces');                    // Workspaces tab stays highlighted
     renderWorkspaceDetailView(route.id, { isFreshNav });
+  } else if (route.name === 'task-detail' && route.id) {
+    setActiveTab('tasks');                          // Tasks tab stays highlighted
+    renderTaskDetailView(route.id);
   } else if (route.name === 'roundtable-detail' && route.id) {
     setActiveTab('roundtables');
     renderRoundtableDetailView(route.id, { isFreshNav });
@@ -3778,86 +3782,209 @@ function loopHistoryHtml(loop) {
   `;
 }
 
-function loopRowHtml(loop) {
+// 计算 loop 当前 "task-level" 状态:综合 enabled / latest run.status /
+// stale 失败计数。跟 sparkline 当前格 + task-card border / 大字 state
+// 公用一个语义。
+function _loopComputedStatus(loop) {
   const enabled = !!loop.enabled;
-  const last_exit = loop.last_exit != null ? loop.last_exit : '—';
   const stale = (loop.consecutive_errors || 0) >= 3;
-
-  // Use relative time for "last" with absolute as a tooltip — fits the
-  // chat-bubble style of compact-first, click-for-details.
-  const lastRel = loop.last_run_at ? timeAgo(loop.last_run_at) : '—';
-  const lastAbs = loop.last_run_at
-    ? new Date(loop.last_run_at * 1000).toLocaleString()
-    : '';
-
-  const enabledTag = enabled
-    ? `<span class="tag tag-done">${ICONS.done}enabled</span>`
-    : `<span class="tag tag-failed">${ICONS.paused}paused</span>`;
-
-  // Static fields parsed from /etc/cron.d/cc-loops by cron_state.list_jobs.
-  // For corrupt / missing entries, fall back to "—" rather than hiding the
-  // whole row (something is better than nothing for debugging).
-  const schedule = loop.schedule || '';
-  const workspace = loop.workspace || '—';
-  const engine = loop.engine || '';
-  const prompt = loop.prompt || '';
   const recentRuns = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
   const latestRun = recentRuns[0] || null;
   const latestRunning = latestRun && (latestRun.status === 'queued' || latestRun.status === 'running');
-  const loopStatus = !enabled ? 'paused'
-    : latestRunning ? 'running'
-    : stale || (loop.last_exit != null && loop.last_exit !== 0) ? 'failed'
-    : 'done';
+  if (!enabled) return 'paused';
+  if (latestRunning) return 'running';
+  if (stale || (loop.last_exit != null && loop.last_exit !== 0)) return 'failed';
+  return 'done';
+}
 
-  // Show a human-readable version of the cron expression when possible;
-  // keep the raw form available on hover (and for power users / debugging).
+// Sparkline:7 格小色块,看 cron 健康度(设计图 §3.2)。
+//   ✓ green   = done(exit 0)
+//   ✕ red     = failed(exit != 0 或 status=failed)
+//   ● cyan    = running(只可能在最后一格)
+//   空格 gray = 还没跑(< 7 次历史)
+// 输入 recent_runs(newest first,最多 5 条历史 — 后端目前只存 5)+
+// 当前 loop status。不足 7 格用 placeholder 补齐。
+function _sparklineHtml(loop) {
+  const recent = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
+  // 设计图要 Last 7,recent 最多 5(后端 cron_state 限制),前端补齐就好。
+  // 顺序:最老在左,最新在右。recent 是 newest-first → 反转后切尾 7 个。
+  const reversed = [...recent].reverse();
+  const slots = [];
+  const padCount = Math.max(0, 7 - reversed.length);
+  for (let i = 0; i < padCount; i++) {
+    slots.push({ kind: 'empty' });
+  }
+  for (const r of reversed) {
+    if (r.status === 'running' || r.status === 'queued') {
+      slots.push({ kind: 'running' });
+    } else if (r.status === 'failed' || (r.exit_code != null && r.exit_code !== 0)) {
+      slots.push({ kind: 'failed' });
+    } else {
+      slots.push({ kind: 'done' });
+    }
+  }
+  const okCount = slots.filter((s) => s.kind === 'done').length;
+  const ranCount = slots.filter((s) => s.kind !== 'empty').length;
+  const pct = ranCount > 0 ? Math.round((okCount / ranCount) * 100) : null;
+  const cells = slots.map((s) => {
+    if (s.kind === 'done') return '<span class="spark spark-done" title="ok">✓</span>';
+    if (s.kind === 'failed') return '<span class="spark spark-failed" title="failed">✕</span>';
+    if (s.kind === 'running') return '<span class="spark spark-running" title="running">●</span>';
+    return '<span class="spark spark-empty" title="—">·</span>';
+  }).join('');
+  return `
+    <span class="sparkline" title="Last ${slots.length} runs (success rate ${pct ?? '—'}%)">
+      ${cells}
+      ${pct != null ? `<span class="spark-pct muted">${pct}%</span>` : ''}
+    </span>
+  `;
+}
+
+// 紧凑 task list row:1 行 = dot + name + state + sparkline + schedule
+// + next-fire。整行可点 → #tasks/<name> detail。无内嵌 turn,无 history
+// 折叠(设计图 §3.2:Tasks tab 是列表,详情看 stream 才进 detail 页)。
+function loopRowHtml(loop) {
+  const loopStatus = _loopComputedStatus(loop);
+  const schedule = loop.schedule || '';
+  const humanSched = schedule ? humanizeCron(schedule) : '—';
+  const nextLabel = loop.enabled ? nextRunLabel(schedule) : '';
+  const schedTitle = schedule && humanSched !== schedule ? ` title="${esc(schedule)}"` : '';
+  const stale = (loop.consecutive_errors || 0) >= 3;
+  return `
+    <a class="row loop-row loop-row-link ${loopStatus}"
+       data-loop-name="${esc(loop.name)}"
+       href="#tasks/${encodeURIComponent(loop.name)}">
+      <span class="task-dot ${esc(loopStatus)}"></span>
+      <code class="loop-name">${esc(loop.name)}</code>
+      <span class="loop-row-state muted">${esc(loopStatus)}</span>
+      ${_sparklineHtml(loop)}
+      <span class="loop-row-spec muted">
+        <span${schedTitle}>${esc(humanSched)}</span>
+        · <code>${esc(loop.workspace || '—')}</code>
+        ${nextLabel ? ` · ${esc(nextLabel)}` : ''}
+        ${stale ? ` · <span class="tag-failed">stale ×${esc(loop.consecutive_errors)}</span>` : ''}
+      </span>
+    </a>
+  `;
+}
+
+// ---------- Task detail view (#tasks/<name>) ----------
+// 设计图 03 §1:cron 跑出来的内容跟 workspace turn 是同一种东西,详情页
+// 主区域 = 最近一次 run 的 stream(turn-streaming),周边再加 task 级
+// 信息(sparkline / schedule / prompt / 齿轮控制)。
+function renderTaskDetailView(name) {
+  const loops = Array.isArray(lastData.loops) ? lastData.loops : [];
+  const loop = loops.find((l) => l.name === name);
+  const view = $('view');
+  if (!loop) {
+    view.innerHTML = `
+      <p><a href="#tasks" class="back-link">← Tasks</a></p>
+      <p class="muted">Task <code>${esc(name)}</code> not found.</p>
+    `;
+    return;
+  }
+
+  const loopStatus = _loopComputedStatus(loop);
+  const enabled = !!loop.enabled;
+  const stale = (loop.consecutive_errors || 0) >= 3;
+  const schedule = loop.schedule || '';
   const humanSched = schedule ? humanizeCron(schedule) : '—';
   const nextLabel = enabled ? nextRunLabel(schedule) : '';
   const schedTitle = schedule && humanSched !== schedule ? ` title="${esc(schedule)}"` : '';
-  // Latest run 直接复用 turn-streaming(跟 workspace overview / detail
-  // 同一套 UI):默认展开,展现完整 event timeline。比之前的"loop-prompt
-  // + loop-stats + loop-last-output 三段堆叠"信息密度高 + 跟其他地方
-  // 视觉一致。loop 级 aggregate(runs N · exit X)挪到 loop-spec 行
-  // 紧凑展示。
-  const latestTurnHtml = latestRun
+  const recentRuns = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
+  const latestRun = recentRuns[0] || null;
+  const latestRunning = latestRun && (latestRun.status === 'queued' || latestRun.status === 'running');
+
+  // Latest run → expanded turn(无内联 input,无 cancel-on-turn —— 设计
+  // §3.4 cancel 在 task header 右下,本 phase 暂用 turn 自带 cancel)。
+  const streamHtml = latestRun
     ? _workspaceTurnHtml({
         id: latestRun.id || '',
         status: latestRun.status || (latestRun.exit_code === 0 ? 'done' : 'failed'),
-        prompt: prompt || '(cron)',
+        prompt: loop.prompt || '(cron)',
         started_at: latestRun.started_at,
         elapsed_s: latestRun.elapsed_s,
         exit_code: latestRun.exit_code,
         output_preview: latestRun.output_preview || '',
         expanded: true,
       })
-    : '<p class="muted" style="margin:8px 0">(no runs yet — schedule will fire next)</p>';
+    : `<p class="muted task-empty">Not yet run. ${nextLabel ? `Will trigger ${esc(nextLabel)}.` : ''} Or tap ⚙ → Run now.</p>`;
 
-  return `
-    <div class="row loop-row ${loopStatus}" data-loop-name="${esc(loop.name)}">
-      <div class="loop-head">
-        <span class="task-dot ${esc(loopStatus)}"></span>
-        <code class="loop-name">${esc(loop.name)}</code>
-        ${enabledTag}
-        ${stale ? `<span class="tag tag-failed">${ICONS.warning}stale ${esc(loop.consecutive_errors)}</span>` : ''}
-        <span class="loop-actions">
-          <button class="primary run-now-btn" data-name="${esc(loop.name)}" title="Fire one run now (out of band; doesn't change the schedule)">Run now</button>
+  // 齿轮菜单(设计图 §3.5):SCHEDULE / RUN / 删除 三段,复用 ws-actions-menu
+  // 的样式。Cron 行右侧显示表达式(常驻 ID-like 信息);Pause/Resume 文
+  // 案根据 enabled 切换;Run now 在 running 时 disabled。
+  // (Cron / Prompt edit 这次 phase 1 不做,纯展示,标 "edit in cron file"
+  // 提示用户去 ssh 改 cron.d。)
+  const gearMenuHtml = `
+    <details class="workspace-gear ws-actions-menu" data-details-id="task-detail-menu-${esc(name)}">
+      <summary class="workspace-gear-trigger ws-actions-trigger" aria-label="Task settings">${ICONS.settings}</summary>
+      <div class="workspace-menu ws-actions-menu-body">
+        <div class="ws-menu-section">
+          <span class="ws-menu-section-label">Schedule</span>
+          <div class="ws-menu-item ws-menu-readonly">
+            <span>Cron</span>
+            <code class="muted">${esc(schedule || '—')}</code>
+          </div>
+          <div class="ws-menu-item ws-menu-readonly">
+            <span>Workspace</span>
+            <code class="muted">${esc(loop.workspace || '—')}</code>
+          </div>
+        </div>
+        <div class="ws-menu-section">
+          <span class="ws-menu-section-label">Run</span>
+          <button class="run-now-btn ws-menu-item" type="button" data-name="${esc(name)}" ${latestRunning ? 'disabled' : ''}>
+            ${ICONS.running} <span>Run now ${latestRunning ? '(running…)' : ''}</span>
+          </button>
           ${enabled
-            ? `<button class="secondary pause-btn" data-name="${esc(loop.name)}">Pause</button>`
-            : `<button class="secondary resume-btn" data-name="${esc(loop.name)}">Resume</button>`}
-          <button class="danger delete-btn" data-name="${esc(loop.name)}">Delete</button>
-        </span>
+            ? `<button class="pause-btn ws-menu-item" type="button" data-name="${esc(name)}">
+                 ${ICONS.paused} <span>Pause</span>
+               </button>`
+            : `<button class="resume-btn ws-menu-item" type="button" data-name="${esc(name)}">
+                 ${ICONS.running} <span>Resume</span>
+               </button>`}
+        </div>
+        <button class="delete-btn ws-menu-item ws-menu-item-danger" type="button" data-name="${esc(name)}">
+          ${ICONS.trash} <span>Delete task</span>
+        </button>
       </div>
-      <div class="loop-spec">
+    </details>
+  `;
+
+  view.innerHTML = `
+    <div class="task-detail ${loopStatus}" data-task-name="${esc(name)}">
+      <div class="task-topbar">
+        <a class="workspace-back" href="#tasks" aria-label="Back to tasks">←</a>
+        <div class="workspace-title">
+          <strong>${esc(name)}</strong>
+          <span>${esc(loopStatus)}${nextLabel ? ` · ${esc(nextLabel)}` : ''}</span>
+        </div>
+        ${gearMenuHtml}
+      </div>
+      <div class="task-spec">
         <span class="loop-when"${schedTitle}>${esc(humanSched)}</span>
-        · <code>${esc(workspace)}</code>
-        ${engine ? ` · <span class="muted">${esc(engine)}</span>` : ''}
-        ${nextLabel ? ` · <span class="task-next">${esc(nextLabel)}</span>` : ''}
-        · <span class="muted">runs ${esc(loop.total_runs || 0)} · last exit ${esc(last_exit)}</span>
+        · <code>${esc(loop.workspace || '—')}</code>
+        ${loop.engine ? ` · <span class="muted">${esc(loop.engine)}</span>` : ''}
+        ${stale ? ` · <span class="tag tag-failed">${ICONS.warning}stale ${esc(loop.consecutive_errors)}</span>` : ''}
       </div>
-      ${latestTurnHtml}
-      ${loopHistoryHtml(loop)}
+      ${_sparklineHtml(loop)}
+      ${loop.prompt
+        ? `<div class="task-prompt">
+             <div class="task-section-label">Prompt</div>
+             <pre>${esc(loop.prompt)}</pre>
+           </div>`
+        : ''}
+      <div class="task-stream">
+        <div class="task-section-label">Latest run</div>
+        ${streamHtml}
+      </div>
     </div>
   `;
+
+  // Wire 齿轮菜单内的 cron 动作 + turn 交互(reused workspace handler)。
+  bindWorkspaceColHandlers(view);
+  for (const b of view.querySelectorAll('.run-now-btn, .pause-btn, .resume-btn, .delete-btn')) {
+    b.addEventListener('click', onLoopAction);
+  }
 }
 
 async function onAddLoop(e) {

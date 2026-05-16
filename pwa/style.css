@@ -1370,13 +1370,21 @@ pre {
    workspace + engine + prompt preview + stats). */
 .task-list { display: flex; flex-direction: column; gap: var(--space-2); }
 
-.loop-row {
-  flex-direction: column !important;     /* override .row's row-flex */
-  align-items: stretch !important;
-  gap: var(--space-2) !important;
+/* Tasks tab 紧凑列表行(设计图 03 §3.2 后):每个 cron 一行 anchor,
+   整行可点 → #tasks/<name>。无展开 turn、无折叠历史 —— 详情进 detail 页。 */
+.loop-row.loop-row-link {
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: var(--space-3) !important;
   padding: var(--space-3);
-  font-size: var(--text-sm);
-  position: relative;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: background var(--t-base), border-color var(--t-base);
+}
+.loop-row.loop-row-link:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
 }
 .loop-row.running {
   border-color: rgba(6, 182, 212, 0.45);
@@ -1384,6 +1392,104 @@ pre {
 }
 .loop-row.failed { border-color: rgba(239, 68, 68, 0.35); }
 .loop-row.paused { opacity: .55; }
+.loop-row-state {
+  min-width: 56px;
+  font-size: var(--text-sm);
+}
+.loop-row-spec {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+/* Sparkline:7 个小色块,每个 ~14px。设计图 03 §3.2。 */
+.sparkline {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+}
+.spark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 700;
+}
+.spark-done    { background: rgba(34, 197, 94, 0.18); color: var(--accent-green); }
+.spark-failed  { background: rgba(239, 68, 68, 0.18); color: var(--accent-red); }
+.spark-running { background: transparent; color: var(--accent-cyan); border: 1.5px solid var(--accent-cyan); }
+.spark-empty   { background: transparent; color: var(--text-disabled); }
+.spark-pct {
+  margin-left: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+/* Task detail 页(#tasks/<name>):跟 workspace detail 视觉接近,但没
+   sticky input(cron 无人值守)+ 多了 sparkline / prompt block / 齿轮
+   菜单(SCHEDULE/RUN/Delete 三段)。 */
+.task-detail { display: flex; flex-direction: column; gap: var(--space-3); }
+.task-topbar {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.task-spec {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.task-spec code { color: var(--accent-blue); font-family: var(--font-mono); }
+.task-prompt {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+}
+.task-prompt pre {
+  margin: var(--space-2) 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-md);
+}
+.task-section-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: var(--space-1);
+}
+.task-empty {
+  padding: var(--space-4);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+/* 齿轮菜单里的 read-only 行(SCHEDULE 段显示 cron 表达式 + workspace)。 */
+.ws-menu-readonly {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  cursor: default;
+  background: transparent !important;
+}
+.ws-menu-readonly:hover { background: transparent !important; }
 .loop-head {
   display: flex;
   align-items: center;
