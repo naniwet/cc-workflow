@@ -102,53 +102,29 @@ function _isRunningTurn(turn) {
   return turn?.status === 'running' || turn?.status === 'queued';
 }
 
-// 默认行为(设计图 §3.2):running + 最近 1 个 completed turn 展开,其余
-// 收起。manual override 可以反转任意一个。
+// Turn 展开规则(简化版,3 档):
+//   1. Manual override(用户手动 tap 过)→ 用用户选的
+//   2. Running / queued turn → 永远展开(用户在等结果,不展开看不到)
+//   3. opts.expandAll(PC detail mode)→ 全展开
+//   4. 其它(包括"最近一次完成")→ 收起
 //
-// opts.expandAll:全部默认展开(PC detail 用,屏幕宽,顺序看完整对话比
-// 一次次点开舒服)。manual override 仍然能再收起单个。
-//
-// "Auto-collapse" 触发:出现 latestCompletedIdx 之后还有 running/queued
-// turn(=用户已经开始下一轮)→ 之前那条 completed 收起。没有新 running
-// 时 latest completed 一直保留展开,让用户安心读完。
-//
-// 早期版本(b4016c9 之前)用 time-based(done 6 秒后自动收起),被用户
-// 反馈"读到一半 turn 突然收起,视口跟着跳"。改成事件驱动 trigger 后
-// 没这个问题 —— 用户主动发新消息才会发生 collapse。
+// 历史:之前有"latest completed 自动展开"规则(设计图 §3.2 + 后续
+// "newer running 来了才收"事件驱动版),用户反馈"第一次进入展开最后
+// 一个 turn 也没必要,去掉这种逻辑吧"。砍掉。现在默认全 collapsed,
+// 用户想看哪条点哪条 + 手动 override 持久;running 仍然自动展开因为
+// "看不到 live output 体验比想点开还差"。
 export function workspaceTurnExpansion(turns, manual = {}, opts = {}) {
   const safeTurns = Array.isArray(turns) ? turns : [];
   const expandAll = !!opts.expandAll;
-  let latestCompletedIdx = -1;
-  let latestRunningIdx = -1;
-  for (let i = 0; i < safeTurns.length; i++) {
-    if (_isRunningTurn(safeTurns[i])) latestRunningIdx = i;
-    else latestCompletedIdx = i;
-  }
-  // 如果 latestRunningIdx > latestCompletedIdx,说明 "前面完成的 +
-  // 后面又开了新的 running",前一条 completed 应该自动 collapse 让位
-  // 给新的对话焦点。
-  const hasNewerRunning = latestRunningIdx > latestCompletedIdx;
   return safeTurns.map((turn, idx) => {
     const id = String(turn?.id ?? idx);
-
-    // 1. Manual override beats default(running 除外 —— running 不让用户
-    //    手动收起,防止"在跑你都看不见结果"那种状态)
+    // Manual override beats default(running 除外 —— running 不让用户
+    // 手动收起,防止"在跑都看不见结果"那种状态)
     if (!_isRunningTurn(turn) && Object.prototype.hasOwnProperty.call(manual, id)) {
       return { ...turn, id, expanded: !!manual[id] };
     }
-
-    // 2. Running 永远展开
     if (_isRunningTurn(turn)) return { ...turn, id, expanded: true };
-
-    // 3. expandAll(PC detail)永远展开
     if (expandAll) return { ...turn, id, expanded: true };
-
-    // 4. 最近完成的 turn:展开,除非后面已经有新 running turn 接力
-    if (idx === latestCompletedIdx) {
-      return { ...turn, id, expanded: !hasNewerRunning };
-    }
-
-    // 5. 更早的 completed:收起
     return { ...turn, id, expanded: false };
   });
 }

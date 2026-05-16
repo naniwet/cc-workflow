@@ -44,23 +44,22 @@ test('nextRunLabel gives next-fire text for common cron shapes', () => {
   assert.equal(nextRunLabel('0 */6 * * *', now), '下次 12:00 · in 1h40m');
 });
 
-test('workspaceTurnExpansion keeps running expanded;latest completed expanded ONLY when no newer running', () => {
+test('workspaceTurnExpansion keeps only running turn expanded by default(其余全收起)', () => {
   const turns = [
     { id: 'r1', status: 'done' },
     { id: 'r2', status: 'failed' },
     { id: 'r3', status: 'done' },
   ];
 
-  // 无 running:latest completed (r3) 展开
+  // 无 running:全部收起(包括"最近完成")。用户反馈"第一次进入展开
+  // 最后一个 turn 也没必要" — 默认 0 个 expanded。
   assert.deepEqual(workspaceTurnExpansion(turns).map((t) => [t.id, t.expanded]), [
     ['r1', false],
     ['r2', false],
-    ['r3', true],
+    ['r3', false],
   ]);
 
-  // 出现 newer running (r4):latest completed (r3) 让位,收起;r4 展开。
-  // 用户 fix(2) 反馈:之前"最近完成永远展开"会在新一轮开始时还在那里挡视,
-  // 改成事件驱动 collapse 后,新对话起来旧的 turn 自动让位。
+  // 加 running:只有那条 running 展开
   assert.deepEqual(
     workspaceTurnExpansion([...turns, { id: 'r4', status: 'running' }]).map((t) => [t.id, t.expanded]),
     [
@@ -84,41 +83,16 @@ test('workspaceTurnExpansion lets manual toggles override completed turns', () =
   ]);
 });
 
-test('workspaceTurnExpansion: latest completed turn stays expanded when no newer running turn', () => {
-  // 全 done,latest 是 r2,展开;r1 收起
+test('workspaceTurnExpansion: manual override 战胜默认 collapsed', () => {
+  // 全 done,r2 被用户手动展开 → r2 保持 expanded,其余 collapsed
   const turns = [
     { id: 'r1', status: 'done' },
     { id: 'r2', status: 'done' },
-  ];
-  assert.deepEqual(
-    workspaceTurnExpansion(turns).map((t) => [t.id, t.expanded]),
-    [['r1', false], ['r2', true]],
-  );
-});
-
-test('workspaceTurnExpansion: latest completed collapses when a newer running turn appears', () => {
-  // r2 是最近完成,r3 在跑(用户已发新消息) → r2 让位,收起;r3 展开
-  const turns = [
-    { id: 'r1', status: 'done' },
-    { id: 'r2', status: 'done' },
-    { id: 'r3', status: 'running' },
-  ];
-  assert.deepEqual(
-    workspaceTurnExpansion(turns).map((t) => [t.id, t.expanded]),
-    [['r1', false], ['r2', false], ['r3', true]],
-  );
-});
-
-test('workspaceTurnExpansion: manual override 战胜 event-based auto-collapse', () => {
-  // 跟上一个 case 同样数据,但用户手动展开了 r2 —— 应该保持展开
-  const turns = [
-    { id: 'r1', status: 'done' },
-    { id: 'r2', status: 'done' },
-    { id: 'r3', status: 'running' },
+    { id: 'r3', status: 'done' },
   ];
   assert.deepEqual(
     workspaceTurnExpansion(turns, { r2: true }).map((t) => [t.id, t.expanded]),
-    [['r1', false], ['r2', true], ['r3', true]],
+    [['r1', false], ['r2', true], ['r3', false]],
   );
 });
 
