@@ -1950,6 +1950,14 @@ pre {
     padding: var(--space-3);
     scroll-behavior: smooth;
   }
+  /* 关键:阻止 flex 子元素被压缩塞进容器。
+     stream 是 flex column,子 .turn 默认 flex-shrink:1,turns 总自然
+     高度超过容器时会被等比缩到刚好不溢出,scrollHeight === clientHeight,
+     overflow-y:auto 永远不触发。flex-shrink:0 让 turns 保持自然高度,
+     总和超出时 stream 才出现内部滚动。
+     这是 bug 1 在 height:100dvh 之后仍然没出滚动条的真实根因 —— 用
+     /tmp 测试页 + Preview 验证过。 */
+  .workspace-session-stream > * { flex-shrink: 0; }
   .workspace-empty {
     margin: auto var(--space-3);
     padding: var(--space-5) var(--space-4);
