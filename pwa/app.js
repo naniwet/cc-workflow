@@ -1335,12 +1335,19 @@ function bindWorkspaceColHandlers(root) {
     _addTapFallback(b, onApprovalClick);
   }
 
-  // PC overview + detail 现在都走 turn-streaming(workspaceColHtml 渲染
-  // .turn 而不是 .run-row),所以这里把 turn-toggle / tool-result-fold
-  // 一起连上,跟 mobile 版 _bindWorkspaceSessionHandlers 行为一致。
-  // 先停所有正在跑的 turn-events poll —— 整页重画后老 timer 都失效了。
-  // 无条件停:overview / detail 任一种重画都得 reset 旧 timer。
+  // PC overview + detail + run-detail + cron 历史 turn 都走同一套
+  // turn-streaming UI。先停所有正在跑的 turn-events poll(整页重画后
+  // 老 timer 都失效),再 wire 新 DOM 的 turn 交互 + bootstrap 已展开
+  // turn 的 event load。
   _stopAllTurnEventsPolls();
+  _bindTurnInteractions(root);
+}
+
+// Turn 交互的子绑定(turn-toggle / tool-result-fold + bootstrap)。
+// 抽出来是因为 cron 的 patch path(只换一个 loop-row,不整页重画)也要
+// rewire 新 row 里的 turn 元素,但不能跟着调 _stopAllTurnEventsPolls
+// —— 那会把别的 loop-row 还活着的 poll 一起干掉。
+function _bindTurnInteractions(root) {
   for (const btn of root.querySelectorAll('.turn-toggle')) {
     btn.addEventListener('click', _onWorkspaceTurnToggle);
     _addTapFallback(btn, _onWorkspaceTurnToggle);
@@ -1349,7 +1356,6 @@ function bindWorkspaceColHandlers(root) {
     btn.addEventListener('click', _onToolResultExpand);
     _addTapFallback(btn, _onToolResultExpand);
   }
-  // Bootstrap event load for initially-expanded turns(运行中 + 最近完成)。
   for (const turn of root.querySelectorAll('.turn.turn-expanded')) {
     const runId = turn.dataset.runId;
     if (runId) _loadTurnEvents(runId);
@@ -3013,12 +3019,24 @@ function renderDesktopWorkspaceDetail(name) {
 //   - opening the link Feishu sends when output exceeds 4000 chars (P0-6e)
 
 async function renderRunDetailView(id) {
-  // Cache hit on a terminal-state row: only re-paint if the DOM doesn't
-  // already show it. This keeps text selection / scroll stable across the
-  // 3s polling re-render after the run has finished.
+  // 重写为 turn-streaming 复用版(2026-05-16):整个 run-detail 现在
+  // 就是一个 expanded turn —— USER 块装 prompt、.turn-events 装 thinking/
+  // tool_use/tool_result/text/result 五种结构化 event,同 workspace
+  // detail 完全一致。原来的 Prompt / Output / Approvals 折叠 / Transcript
+  // 折叠 / Live output 5 段堆叠下线,设计图 §3.5 本来就说要砍。
+  //
+  // 调用入口:
+  //   - 工作区 turn 列表里点 turn(其实没指向 #runs 了,turn-streaming
+  //     原地展开),但 cron card 的"→ open"链接 + 飞书的"打开 PWA"
+  //     卡片都还指向 #runs/<id>,所以这个 route + render 保留。
+  //   - 看着像 workspace detail 的"剥离单个 turn"小视图。
+  //
+  // Terminal run 缓存:已 done/failed 的 run 数据不会再变,缓存命中
+  // 时跳过 fetch + repaint —— 用户在 PWA 里翻历史 run 不会 1s 一次
+  // 把同一条 run 重新拉一遍。
   const cached = runDetailCache[id];
   if (cached && (cached.status === 'done' || cached.status === 'failed')) {
-    if (!$('view').querySelector('.run-meta')) paintRunDetail(id, cached);
+    if (!$('view').querySelector('.turn[data-run-id]')) paintRunDetail(id, cached);
     return;
   }
 
@@ -3047,115 +3065,51 @@ async function renderRunDetailView(id) {
 
 // Track the last status we painted for each run, so we can decide on
 // each refreshAll tick whether to do a full repaint or skip entirely.
-// Skipping is safe for RUNNING runs because the dynamic panels each
-// have their own internal poll:
-//   - Live output  → _pollLiveTail (2.5s)
-//   - Approvals    → _loadRunApprovals (called from _pollLiveTail)
-//   - Transcript   → lazy, only on user expand
-// The static parts (Prompt, the run's metadata header) don't change
-// while running, so re-rendering them every 3s just causes flicker.
+// Running runs:跳过 repaint —— turn-streaming 内部的 _loadTurnEvents
+// 2.5s 自己 poll /tail,events 自动续,父级不用 rerender 添乱。
 const _lastPaintedStatus = {};
 
 function paintRunDetail(id, row) {
   const status = row.status || '?';
   const view = $('view');
   // Running + already painted with same status → skip the innerHTML
-  // rewrite entirely. Internal polls keep Live output / Approvals
-  // fresh; the user sees zero flash. Switching status (running →
-  // done/failed, or first paint) falls through to the full paint
-  // below so Output / cancel-button state get refreshed.
-  const alreadyPainted = view.querySelector(`.run-meta[data-run-id="${esc(id)}"]`);
+  // rewrite。turn-streaming 的 _loadTurnEvents 自己 poll,父级 rerender
+  // 反而会清空 .turn-events 容器,触发 reload,白白浪费一次 /tail。
+  const alreadyPainted = view.querySelector(`.turn[data-run-id="${esc(id)}"]`);
   if (alreadyPainted && status === 'running' && _lastPaintedStatus[id] === 'running') {
     return;
   }
   _lastPaintedStatus[id] = status;
 
-  const startedAt = row.started_at
-    ? new Date(row.started_at * 1000).toLocaleString()
-    : '';
-  // Back link → overview. On PC the overview is the multi-column "see
-  // everything at once" surface, which is more useful than dropping back
-  // into a single workspace detail. (On mobile this link is hidden by
-  // CSS anyway — see .back-link media query.)
-  // Cancel button — only when this run is actually running (and we
-  // know its id). Placed in a dedicated .run-actions row below the
-  // meta line so it has visual weight + a clear hit target on mobile.
-  const cancelBtn = status === 'running' && id
-    ? `<button class="run-cancel-btn" type="button" data-run-id="${esc(id)}">
-         ✕  Cancel this run
-       </button>`
-    : '';
+  // Build turn data from /runs/{id} 返回值。直接给 turn.expanded = true,
+  // 渲染就是一个展开的 turn —— USER 块 + .turn-events 容器,完全套用
+  // workspace detail 那套 UI。
+  const turn = {
+    id: row.id || id,
+    status,
+    prompt: row.prompt || '',
+    started_at: row.started_at,
+    elapsed_s: row.elapsed_s,
+    exit_code: row.exit_code,
+    expanded: true,
+  };
 
-  // Live output panel — only on running runs. Empty container; the
-  // polling loop below fills it. Showing the live stream tail tells the
-  // user whether claude is actually working (new jsonl lines appearing
-  // every few seconds) or stuck (no activity for 30s+).
-  const liveBlock = status === 'running' && id ? `
-    <h3>Live output <span class="run-live-hint muted" id="run-live-hint">(loading…)</span></h3>
-    <pre class="run-live-tail" id="run-live-tail">(waiting for first chunk)</pre>
-  ` : '';
-
-  // Back link target: the workspace this run belongs to (not the
-  // generic Workspaces overview). Predictable: tap a run row, then
-  // back → exactly where you came from. We don't lean on history.back()
-  // because fullscreen-mode PWAs have no browser chrome / back gesture
-  // — this in-app button is the only reliable return path.
-  // `.run-back-link` overrides the global mobile .back-link hide.
+  // Back link → 这个 run 所属的 workspace,跟之前一致。
   const backHref = row.workspace
     ? `#workspaces/${encodeURIComponent(row.workspace)}`
     : '#workspaces';
   const backLabel = row.workspace ? esc(row.workspace) : 'Workspaces';
-  $('view').innerHTML = `
+  view.innerHTML = `
     <p><a href="${backHref}" class="back-link run-back-link">← ${backLabel}</a></p>
-    <h1>Run <code>${esc(id.slice(0, 8))}</code></h1>
-    <div class="run-meta" data-run-id="${esc(id)}">
-      ${statusTag(status)}
-      ${row.workspace ? ` <code>${esc(row.workspace)}</code>` : ''}
-      ${row.engine ? ` · ${esc(row.engine)}` : ''}
-      ${row.elapsed_s != null ? ` · ${esc(row.elapsed_s)}s` : ''}
-      ${row.exit_code != null ? ` · exit ${esc(row.exit_code)}` : ''}
-      ${row.source ? ` · ${esc(row.source)}` : ''}
-      ${startedAt ? ` · ${esc(startedAt)}` : ''}
+    <div class="ws-col ws-col-detail">
+      <div class="ws-timeline" data-ws="${esc(row.workspace || '')}">
+        ${_workspaceTurnHtml(turn)}
+      </div>
     </div>
-    ${cancelBtn ? `<div class="run-actions">${cancelBtn}</div>` : ''}
-    <h3>Prompt</h3>
-    <pre>${esc(row.prompt || '')}</pre>
-    <h3>Output</h3>
-    <div class="md-output">${row.output ? renderMarkdown(row.output) : '<p class="muted">(empty)</p>'}</div>
-    <details class="run-approvals" id="run-approvals">
-      <summary>Tool approvals <span class="muted" id="run-approvals-count">(loading…)</span></summary>
-      <div class="run-approvals-list" id="run-approvals-list"></div>
-    </details>
-    <details class="run-transcript" id="run-transcript">
-      <summary>Transcript <span class="muted" id="run-transcript-hint">(click to load)</span></summary>
-      <pre class="run-transcript-body" id="run-transcript-body">(not loaded)</pre>
-    </details>
-    ${liveBlock}
   `;
-  // Always populate the approvals audit panel — even for terminal runs,
-  // since under trust=on the user wants to see what tool calls fired
-  // (they were auto-approved without a prompt). For running runs the
-  // live poll re-fetches so newly-fired hooks appear during the run.
-  _loadRunApprovals(id);
-  // Transcript: lazy-loaded on first expand. Loading eagerly would
-  // double the network traffic of every run-detail navigation, and 90%
-  // of the time the user only wants to see the final Output (which is
-  // already painted above). Wire the lazy load here.
-  const transcriptEl = $('view').querySelector('#run-transcript');
-  if (transcriptEl) {
-    transcriptEl.addEventListener('toggle', () => {
-      if (transcriptEl.open) {
-        _loadRunTranscript(id);
-      } else {
-        // User collapsed — stop the polling timer to save bandwidth.
-        // State is preserved in _transcriptLineCount[id], so re-expand
-        // resumes from where we left off (no re-render of past lines).
-        _stopTranscriptPoll();
-      }
-    });
-  }
-  if (status === 'running' && id) _startLiveTailPoll(id);
-  else _stopLiveTailPoll();
+  // 复用 workspace detail 的同一套 handler:绑 turn-toggle / tool-result-fold,
+  // bootstrap _loadTurnEvents(已展开的 turn 会自动加载)。
+  bindWorkspaceColHandlers(view);
 }
 
 // Transcript panel: initial load on user expand, then poll-and-append
@@ -3597,12 +3551,17 @@ function renderTasksView() {
         for (const b of fresh.querySelectorAll('.run-now-btn, .pause-btn, .resume-btn, .delete-btn')) {
           b.addEventListener('click', onLoopAction);
         }
+        // 历史 run 现在渲染成 turn-collapsed,patch path 也要 rewire turn
+        // 交互。用 _bindTurnInteractions(不停 poll)避免干掉别的 row 还
+        // 活着的 timer。
+        _bindTurnInteractions(fresh);
       } else {
         existingList.insertAdjacentHTML('beforeend', newHtml);
         _loopRowCache.set(name, newHtml);
         // Bind the new row's handlers.
         const fresh = existingList.querySelector(`.loop-row[data-loop-name="${esc(name)}"]`);
         if (fresh) {
+          _bindTurnInteractions(fresh);
           for (const b of fresh.querySelectorAll('.run-now-btn, .pause-btn, .resume-btn, .delete-btn')) {
             b.addEventListener('click', onLoopAction);
           }
@@ -3667,6 +3626,10 @@ function renderTasksView() {
   for (const b of $('view').querySelectorAll('.run-now-btn, .pause-btn, .resume-btn, .delete-btn')) {
     b.addEventListener('click', onLoopAction);
   }
+  // loopHistoryHtml 现在每条历史 run 渲染成 turn-collapsed,需要 wire
+  // turn-toggle / tool-result-fold + 停 poll + 启动已展开 turn 的 event
+  // load。bindWorkspaceColHandlers 已经把这一套封装好了,直接复用。
+  bindWorkspaceColHandlers($('view'));
 }
 
 // Render the cron job's "recent runs" foldout. Hidden when there's
@@ -3683,27 +3646,25 @@ function loopHistoryHtml(loop) {
   const runs = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
   if (runs.length <= 1) return '';
   const detailsId = `loop-hist-${loop.name}`;
-  const items = runs.map((r, i) => {
-    const status = r.status || (r.finished_at != null
+  // 把每个历史 run 映射成 turn 数据,复用 _workspaceTurnHtml 渲染:
+  // 单行收起 summary,点击原地展开看 event timeline(同 workspace
+  // overview / detail 的统一交互)。
+  //
+  // cron 的 recent_runs 不带 prompt(后端不存),所以用 loop.prompt 作为
+  // 兜底 —— 同一 loop 的所有 run 用同一个 prompt,语义对得上(除非
+  // loop.prompt 中途改过,那历史 run 显示的就是新 prompt,小瑕疵)。
+  const turns = runs.map((r) => ({
+    id: r.id || '',
+    status: r.status || (r.finished_at != null
       ? (r.exit_code === 0 ? 'done' : 'failed')
-      : 'running');
-    const shortId = (r.id || '').slice(0, 8);
-    const when = r.finished_at || r.started_at;
-    const rel = when ? timeAgo(when) : '';
-    const abs = when ? new Date(when * 1000).toLocaleString() : '';
-    const exitBadge = r.exit_code != null && r.exit_code !== 0
-      ? ` · exit ${esc(r.exit_code)}`
-      : '';
-    const latestTag = i === 0 ? ' <span class="muted">[latest]</span>' : '';
-    return `
-      <a class="loop-hist-row" href="#runs/${encodeURIComponent(r.id || '')}">
-        ${statusTag(status)}
-        <code>${esc(shortId)}</code>${latestTag}
-        ${rel ? `· <span title="${esc(abs)}">${esc(rel)}</span>` : ''}
-        ${exitBadge}
-      </a>
-    `;
-  }).join('');
+      : 'running'),
+    prompt: loop.prompt || '(cron)',
+    started_at: r.started_at,
+    elapsed_s: r.elapsed_s,
+    exit_code: r.exit_code,
+    expanded: false,   // 历史 run 全部默认收起;<details> 自己已经一层折叠了
+  }));
+  const items = turns.map(_workspaceTurnHtml).join('');
   return `
     <details class="loop-history" data-details-id="${esc(detailsId)}">
       <summary>history (${runs.length} runs)</summary>
