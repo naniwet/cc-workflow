@@ -80,6 +80,41 @@ test('workspaceTurnExpansion lets manual toggles override completed turns', () =
   ]);
 });
 
+test('workspaceTurnExpansion: latest-completed turn settled > autoCollapseAfter seconds → 收起', () => {
+  const now = 1_000_000;
+  const turns = [
+    { id: 'r1', status: 'done', finished_at: now - 100 },   // 老的,已收起
+    { id: 'r2', status: 'done', finished_at: now - 10 },    // 最近完成,但 10s 前(> 6s) → 应自动收起
+  ];
+  assert.deepEqual(
+    workspaceTurnExpansion(turns, {}, { nowSec: now, autoCollapseAfterSec: 6 })
+      .map((t) => [t.id, t.expanded]),
+    [['r1', false], ['r2', false]],
+  );
+  // 同样数据但 finished 仅 3 秒前 → 还在窗口内,展开
+  const fresher = [
+    { id: 'r1', status: 'done', finished_at: now - 100 },
+    { id: 'r2', status: 'done', finished_at: now - 3 },
+  ];
+  assert.deepEqual(
+    workspaceTurnExpansion(fresher, {}, { nowSec: now, autoCollapseAfterSec: 6 })
+      .map((t) => [t.id, t.expanded]),
+    [['r1', false], ['r2', true]],
+  );
+  // 手动 override 战胜 auto-collapse
+  assert.deepEqual(
+    workspaceTurnExpansion(turns, { r2: true }, { nowSec: now, autoCollapseAfterSec: 6 })
+      .map((t) => [t.id, t.expanded]),
+    [['r1', false], ['r2', true]],
+  );
+  // expandAll 战胜 auto-collapse
+  assert.deepEqual(
+    workspaceTurnExpansion(turns, {}, { nowSec: now, autoCollapseAfterSec: 6, expandAll: true })
+      .map((t) => [t.id, t.expanded]),
+    [['r1', true], ['r2', true]],
+  );
+});
+
 test('workspaceTurnExpansion expandAll opens every turn(PC detail 模式)', () => {
   const turns = [
     { id: 'r1', status: 'done' },

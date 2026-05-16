@@ -104,22 +104,50 @@ function _isRunningTurn(turn) {
 
 // 默认行为(设计图 §3.2):running + 最近 1 个 completed turn 展开,其余
 // 收起。manual override 可以反转任意一个。
+//
 // opts.expandAll:全部默认展开(PC detail 用,屏幕宽,顺序看完整对话比
 // 一次次点开舒服)。manual override 仍然能再收起单个。
+//
+// opts.autoCollapseAfterSec:最近完成的 turn 在 done/failed 状态停留满
+// 这么多秒后,自动收起(让用户读完结果不留 clutter)。默认 6 秒,0 关闭。
+// 不影响 expandAll(PC detail 仍然全展开)和 manual override。需要传
+// opts.nowSec(测试用 deterministic time;运行时不传 → 取 Date.now)。
 export function workspaceTurnExpansion(turns, manual = {}, opts = {}) {
   const safeTurns = Array.isArray(turns) ? turns : [];
   const expandAll = !!opts.expandAll;
+  const autoCollapseAfter = opts.autoCollapseAfterSec ?? 6;
+  const now = Number(opts.nowSec ?? Math.floor(Date.now() / 1000));
   let latestCompletedIdx = -1;
   for (let i = 0; i < safeTurns.length; i++) {
     if (!_isRunningTurn(safeTurns[i])) latestCompletedIdx = i;
   }
   return safeTurns.map((turn, idx) => {
     const id = String(turn?.id ?? idx);
-    let expanded = _isRunningTurn(turn) || idx === latestCompletedIdx || expandAll;
+
+    // 1. Manual override beats default(running 除外 —— running 不让用户
+    //    手动收起,防止"在跑你都看不见结果"那种状态)
     if (!_isRunningTurn(turn) && Object.prototype.hasOwnProperty.call(manual, id)) {
-      expanded = !!manual[id];
+      return { ...turn, id, expanded: !!manual[id] };
     }
-    return { ...turn, id, expanded };
+
+    // 2. Running 永远展开
+    if (_isRunningTurn(turn)) return { ...turn, id, expanded: true };
+
+    // 3. expandAll(PC detail)永远展开,不受 auto-collapse 影响
+    if (expandAll) return { ...turn, id, expanded: true };
+
+    // 4. 最近完成的 turn:默认展开,但 done 满 autoCollapseAfter 秒后收起
+    if (idx === latestCompletedIdx) {
+      const finishedAt = Number(turn?.finished_at)
+        || (Number(turn?.started_at || 0) + Number(turn?.elapsed_s || 0));
+      const settled = autoCollapseAfter > 0
+        && finishedAt > 0
+        && (now - finishedAt) > autoCollapseAfter;
+      return { ...turn, id, expanded: !settled };
+    }
+
+    // 5. 更早的 completed:收起
+    return { ...turn, id, expanded: false };
   });
 }
 
