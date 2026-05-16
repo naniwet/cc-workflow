@@ -3686,14 +3686,19 @@ function renderTasksView() {
         _loopRowCache.set(loop.name, html);
         return html;
       }).join('')
-    : '<p class="muted">No cron loops yet. Use the form above.</p>';
+    : '<p class="muted">No cron loops yet. Click "+ New cron loop" above.</p>';
+  // Toolbar(跟 Workspaces tab 一致):h1 砍掉(topbar tab 已标明),
+  // + New 单独按钮 + 点击弹 dialog modal,创建表单平时不占空间。
   view.innerHTML = `
-    <h1>Tasks (cron)</h1>
-    <details class="add-form" data-details-id="add-loop">
-      <summary>New cron loop</summary>
-      <form data-form-id="new-loop">
+    <div class="ws-toolbar">
+      <button class="ws-new-btn" type="button" id="task-new-btn">+ New cron loop</button>
+    </div>
+    <div class="task-list">${rows}</div>
+    <dialog class="ws-new-dialog" id="task-new-dialog">
+      <form data-form-id="new-loop" class="ws-new-form">
+        <h3>New cron loop</h3>
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
-          placeholder="daily-digest" required></label>
+          placeholder="daily-digest" required autofocus></label>
         <label>workspace
           ${_renderFormPicker({
             name: 'workspace',
@@ -3701,9 +3706,6 @@ function renderTasksView() {
             value: workspaces[0] || '',
           })}
         </label>
-        <p class="muted" style="font-size:11px;margin:0">
-          Engine is determined by the workspace's setting (see the column header).
-        </p>
         <label>自然语言(可选,LLM 同时填 cron 和 prompt)
           <div class="parse-row">
             <input name="nl" placeholder="每天早上 9 点 拉一下最新代码" autocomplete="off">
@@ -3716,15 +3718,15 @@ function renderTasksView() {
         <label>prompt
           <textarea name="prompt" placeholder="summarize yesterday's commits" required></textarea>
         </label>
-        <button type="submit">Add</button>
+        <p class="muted" style="font-size:11px;margin:0">
+          Engine 跟 workspace 设置走。State 落在 <code>~/.cc-state/jobs/&lt;name&gt;.json</code>;cron 行写 <code>/etc/cron.d/cc-loops</code>。
+        </p>
+        <div class="ws-new-actions">
+          <button type="button" class="ws-new-cancel">Cancel</button>
+          <button type="submit">Add</button>
+        </div>
       </form>
-    </details>
-    <p class="muted">
-      Each loop writes state to <code>~/.cc-state/jobs/&lt;name&gt;.json</code>.
-      Pause / resume toggles <code>enabled</code>;
-      delete removes the entry from <code>/etc/cron.d/cc-loops</code>.
-    </p>
-    <div class="task-list">${rows}</div>
+    </dialog>
   `;
 
   $('view').querySelector('form[data-form-id="new-loop"]')
@@ -3738,6 +3740,15 @@ function renderTasksView() {
   // turn-toggle / tool-result-fold + 停 poll + 启动已展开 turn 的 event
   // load。bindWorkspaceColHandlers 已经把这一套封装好了,直接复用。
   bindWorkspaceColHandlers($('view'));
+  // Dialog open/close。原生 <dialog> 自带 backdrop / ESC,只 wire open
+  // 按钮 + cancel。form submit 成功后 onAddLoop 里 form.closest('dialog')?
+  // .close() 就关掉(下面把 onAddLoop 也改了)。
+  const dlg = $('task-new-dialog');
+  const openBtn = $('task-new-btn');
+  if (dlg && openBtn) {
+    openBtn.addEventListener('click', () => { if (!dlg.open) dlg.showModal(); });
+    dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
+  }
 }
 
 // Render the cron job's "recent runs" foldout. Hidden when there's
@@ -4008,6 +4019,9 @@ async function onAddLoop(e) {
     form.reset();
     clearDraft('new-loop');
     clearDetails('add-loop');
+    // PC 现在把 new-loop 表单装进 dialog,创建成功后关掉;mobile 入口
+    // 不在 dialog 里 closest 返回 null,不影响。
+    form.closest('dialog')?.close();
     refreshAll();
   } catch (err) {
     showError(`add loop failed: ${err.message}`);
@@ -4264,27 +4278,26 @@ function renderRoundtablesView() {
         return html;
       }).join('')
     : '<p class="muted">还没有圆桌会议。先写一个问题,4 个角色 + 1 个整理员会替你辩论 3 轮。</p>';
-  // Form is open by default ONLY when the list is empty — otherwise the
-  // existing sessions are what the user wants to see first. They can
-  // click the summary to expand the form when starting a new one.
-  const formOpen = rows.length === 0 ? 'open' : '';
-  // The blurb is informational; on mobile it takes a lot of vertical
-  // space above the list — hide it once the user has at least one
-  // session (they already know what the tab does by then).
+  // Empty-state blurb 留在 list 区域(替代 "还没有圆桌" 文案):第一次
+  // 用还是要个解释,有 session 了就不显示。h1 砍掉(topbar tab 已标明)。
   const blurb = rows.length === 0 ? `
     <p class="muted" style="margin-top:-8px">
       4 个固定角色(<strong>极简派 / 场景派 / 借鉴派 / 悲观派</strong>)对一个决策问题各抒己见,
       <strong>整理员</strong>把分歧整理成 <em>共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动</em>。
       不替你拍板,但给出条件化决策路径。
     </p>` : '';
+  // toolbar + dialog 模式,跟 Workspaces / Tasks tab 一致。
   view.innerHTML = `
-    <h1>Roundtable</h1>
+    <div class="ws-toolbar">
+      <button class="ws-new-btn" type="button" id="rt-new-btn">+ 新开一场</button>
+    </div>
     ${blurb}
-    <details class="add-form" data-details-id="add-roundtable" ${formOpen}>
-      <summary>新开一场</summary>
-      <form data-form-id="new-roundtable">
+    <div class="rt-list">${list}</div>
+    <dialog class="ws-new-dialog" id="rt-new-dialog">
+      <form data-form-id="new-roundtable" class="ws-new-form">
+        <h3>新开一场圆桌</h3>
         <label>问题(决策级,不是事实问题)
-          <textarea name="question" required rows="3"
+          <textarea name="question" required rows="3" autofocus
             placeholder="例:个人 side project 一开始就上严格 TDD,还是先 spike?"></textarea>
         </label>
         <div class="rt-rounds-row">
@@ -4307,15 +4320,23 @@ function renderRoundtablesView() {
         <p class="muted" style="font-size:11px;margin:0">
           结果落在 <code>~/.cc-state/roundtables/</code>;完成后 R3 推送回原聊天(飞书发起时)。
         </p>
-        <button type="submit">开始辩论</button>
+        <div class="ws-new-actions">
+          <button type="button" class="ws-new-cancel">Cancel</button>
+          <button type="submit">开始辩论</button>
+        </div>
       </form>
-    </details>
-    <div class="rt-list">${list}</div>
+    </dialog>
   `;
   $('view').querySelector('form[data-form-id="new-roundtable"]')
     ?.addEventListener('submit', onCreateRoundtable);
   for (const b of $('view').querySelectorAll('.rt-delete')) {
     b.addEventListener('click', onDeleteRoundtable);
+  }
+  const dlg = $('rt-new-dialog');
+  const openBtn = $('rt-new-btn');
+  if (dlg && openBtn) {
+    openBtn.addEventListener('click', () => { if (!dlg.open) dlg.showModal(); });
+    dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
   }
   // Populate the model config block. Cache-hot path is synchronous; cold
   // path fetches once, then patches the slot only (textarea / open state
@@ -4335,10 +4356,12 @@ function _roundtableListRow(r) {
   // turns_expected: 9 for critique_rounds=1, 13 for critique_rounds=2.
   // Old sessions without the field in their meta fall back to 9 via backend.
   const expected = r.turns_expected || 9;
+  // status 已经在 .rt-status 显示(✓ 完成 / ◯ 失败 / ● round X/Y),
+  // progress 字段补充 turn 计数,done/error 时不再重复 status 文字。
   const progress = status === 'done'
-    ? '✓ 完成'
+    ? `${expected} 轮`
     : status === 'error'
-      ? '✗ 出错'
+      ? `${r.turns_done || 0} / ${expected} 轮`
       : `${r.turns_done || 0} / ${expected} 轮`;
   const rowClass = status === 'error'
     ? 'rt-row failed'
@@ -4397,6 +4420,10 @@ async function onCreateRoundtable(e) {
       body: JSON.stringify(body),
     });
     form.reset();
+    // 新版 PC 把 new-roundtable 装进 dialog,创建成功后关掉。location.hash
+    // 切到 detail 会立刻触发 render(),dialog 没有手动关也会被 view.innerHTML
+    // 重写覆盖,但显式 close() 更干净。
+    form.closest('dialog')?.close();
     showToast('success', `圆桌已开:${r.id}`, { ttl: 2000 });
     // Jump into detail view so user sees turns appear live.
     location.hash = `#roundtables/${encodeURIComponent(r.id)}`;
