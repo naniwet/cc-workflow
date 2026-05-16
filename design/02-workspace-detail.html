@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cc-workflow · 02 · workspace 详情(手机)</title>
+<style>
+  :root{
+    --bg-canvas:#0a0b0e; --bg-surface:#14161b; --bg-elevated:#1d1f26; --bg-hover:#232631;
+    --border-subtle:#20222a; --border-strong:#2d3038;
+    --text-primary:#ededf0; --text-secondary:#9aa0aa; --text-tertiary:#6b7280; --text-disabled:#4a5060;
+    --accent-blue:#2f7eff; --accent-green:#22c55e; --accent-cyan:#06b6d4;
+    --accent-amber:#f59e0b; --accent-red:#ef4444; --accent-purple:#a855f7;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+    --radius-sm:6px; --radius-md:10px; --radius-full:999px;
+    --font-ui:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 16px;background:#1a1d24;color:var(--text-primary);
+       font-family:var(--font-ui);font-size:13px;line-height:1.5}
+  h1{font-size:20px;margin:0 0 4px;font-weight:600;letter-spacing:-.01em}
+  .lead{color:var(--text-secondary);margin:0 0 24px;max-width:820px}
+  .notes{max-width:1100px;margin:0 auto 32px;padding:16px 20px;
+         background:var(--bg-surface);border:1px solid var(--border-subtle);
+         border-radius:var(--radius-md);font-size:12px;line-height:1.6}
+  .notes h2{font-size:13px;margin:0 0 8px;color:var(--accent-blue)}
+  .notes ul{margin:0;padding-left:18px;color:var(--text-secondary)}
+  .notes li{margin:2px 0}
+  .notes b{color:var(--text-primary);font-weight:600}
+  .notes code{background:var(--bg-elevated);padding:1px 5px;border-radius:4px;
+              font-family:var(--font-mono);font-size:11px;color:var(--text-primary)}
+
+  /* layout: 主稿 + 齿轮菜单 popout(独立 floating 示意) */
+  .stage{display:flex;gap:32px;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+
+  /* phone */
+  .phone{width:420px;height:820px;background:var(--bg-canvas);
+         border:1px solid var(--border-strong);border-radius:28px;overflow:hidden;
+         position:relative;display:flex;flex-direction:column;
+         box-shadow:0 12px 40px rgba(0,0,0,.5)}
+
+  /* topbar */
+  .topbar{display:flex;align-items:center;gap:var(--space-2);
+          padding:var(--space-3) var(--space-4);
+          background:var(--bg-surface);border-bottom:1px solid var(--border-subtle);
+          flex-shrink:0;font-size:13px}
+  .topbar-back{color:var(--accent-blue);font-weight:500;text-decoration:none;
+               padding:2px 4px;border-radius:var(--radius-sm)}
+  .topbar-title{flex:1;text-align:center;font-weight:600;letter-spacing:-.01em;
+                font-size:14px}
+  .topbar-gear{width:30px;height:30px;display:flex;align-items:center;
+               justify-content:center;color:var(--text-secondary);
+               border-radius:var(--radius-sm);cursor:pointer}
+  .topbar-gear:hover{background:var(--bg-elevated);color:var(--text-primary)}
+  .topbar-gear svg{width:18px;height:18px}
+
+  /* main = scrollable stream */
+  .stream{flex:1;overflow:auto;padding:var(--space-3) 0 100px;
+          position:relative}
+  .stream::-webkit-scrollbar{display:none}
+
+  /* ============ TURN ============ */
+  .turn{margin:0 var(--space-4) var(--space-3)}
+
+  /* turn — collapsed (1 line summary) */
+  .turn-collapsed{display:flex;align-items:center;gap:var(--space-2);
+                  padding:var(--space-2) var(--space-3);
+                  background:var(--bg-surface);border:1px solid var(--border-subtle);
+                  border-radius:var(--radius-md);cursor:pointer;
+                  font-size:12px;color:var(--text-secondary)}
+  .turn-collapsed:hover{border-color:var(--border-strong)}
+  .turn-collapsed .caret{color:var(--text-disabled);font-size:10px;flex-shrink:0}
+  .turn-collapsed .user-q{color:var(--text-primary);font-weight:500;
+                          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                          flex:1;min-width:0}
+  .turn-collapsed .meta{font-size:10px;color:var(--text-tertiary);
+                        font-family:var(--font-mono);flex-shrink:0}
+  .turn-collapsed .check{color:var(--accent-green);flex-shrink:0;font-weight:700}
+
+  /* turn — expanded */
+  .turn-expanded{background:var(--bg-surface);border:1px solid var(--border-subtle);
+                 border-radius:var(--radius-md);overflow:hidden}
+  .turn-expanded.running{border-color:rgba(6,182,212,.45);
+                         box-shadow:0 0 0 1px rgba(6,182,212,.18)}
+  .turn-head{display:flex;align-items:center;gap:var(--space-2);
+             padding:var(--space-3);
+             border-bottom:1px solid var(--border-subtle);
+             cursor:pointer}
+  .turn-head .caret{color:var(--text-secondary);font-size:11px}
+  .turn-head .turn-user-msg{flex:1;color:var(--text-primary);font-weight:500;
+                            font-size:13px;line-height:1.4}
+  .turn-head .turn-status{font-size:10px;font-family:var(--font-mono);
+                          color:var(--text-tertiary);flex-shrink:0}
+  .turn-head .turn-status.running{color:var(--accent-cyan)}
+  .turn-head .turn-status.done{color:var(--accent-green)}
+  /* cancel button — only on running turn */
+  .turn-cancel{padding:3px 10px;background:transparent;
+               border:1px solid rgba(239,68,68,.4);color:var(--accent-red);
+               border-radius:var(--radius-full);font-size:11px;font-weight:600;
+               cursor:pointer;font-family:var(--font-ui)}
+  .turn-cancel:hover{background:rgba(239,68,68,.1)}
+
+  .turn-body{padding:var(--space-3) var(--space-4) var(--space-3) var(--space-4)}
+
+  /* ============ EVENTS inside a turn ============ */
+  .event{margin-bottom:var(--space-3);display:flex;gap:var(--space-2)}
+  .event:last-child{margin-bottom:0}
+
+  /* event left rail (icon column) */
+  .event-rail{width:18px;flex-shrink:0;color:var(--text-tertiary);
+              display:flex;align-items:flex-start;justify-content:center;
+              padding-top:2px}
+  .event-rail svg{width:14px;height:14px}
+
+  /* event body */
+  .event-body{flex:1;min-width:0;font-size:12px;line-height:1.55}
+  .event-label{font-size:10px;text-transform:uppercase;letter-spacing:.05em;
+               color:var(--text-tertiary);font-weight:600;margin-bottom:2px;
+               font-family:var(--font-mono)}
+
+  /* thinking */
+  .event.thinking .event-body{color:var(--text-secondary);font-style:italic}
+  .event.thinking .event-rail{color:var(--accent-purple)}
+
+  /* tool_use */
+  .event.tool .event-rail{color:var(--accent-blue)}
+  .event.tool .tool-name{color:var(--accent-blue);font-family:var(--font-mono);
+                         font-weight:600;font-size:11px}
+  .event.tool .tool-args{color:var(--text-secondary);font-family:var(--font-mono);
+                         font-size:11px;margin-left:6px}
+  .event.tool .tool-result{margin-top:6px;padding:var(--space-2) var(--space-3);
+                           background:var(--bg-canvas);border-radius:var(--radius-sm);
+                           font-family:var(--font-mono);font-size:11px;
+                           color:var(--text-secondary);line-height:1.5;
+                           border:1px solid var(--border-subtle);
+                           white-space:pre-wrap}
+  .tool-result-fold{display:inline-block;margin-top:6px;font-size:11px;
+                    color:var(--accent-blue);cursor:pointer;font-weight:500}
+
+  /* text reply (claude 文本回复) */
+  .event.text .event-rail{color:var(--accent-cyan)}
+  .event.text .event-body{color:var(--text-primary);line-height:1.6}
+
+  /* approval — Edit 待审批,内联红条 */
+  .approval{margin-top:6px;padding:var(--space-3);
+            background:rgba(245,158,11,.06);
+            border:1px solid rgba(245,158,11,.35);
+            border-radius:var(--radius-sm)}
+  .approval-head{display:flex;align-items:center;gap:6px;
+                 color:var(--accent-amber);font-size:12px;font-weight:600;
+                 margin-bottom:6px}
+  .approval-head svg{width:14px;height:14px}
+  .approval-detail{font-size:11px;color:var(--text-secondary);
+                   font-family:var(--font-mono);margin-bottom:8px;
+                   white-space:pre-wrap;line-height:1.5}
+  .approval-actions{display:flex;gap:6px}
+  .approval-btn{flex:1;padding:6px 10px;border-radius:var(--radius-sm);
+                font-size:12px;font-weight:600;cursor:pointer;border:1px solid}
+  .approval-btn.approve{background:rgba(34,197,94,.15);color:var(--accent-green);
+                        border-color:rgba(34,197,94,.4)}
+  .approval-btn.always{background:transparent;color:var(--text-secondary);
+                       border-color:var(--border-strong)}
+  .approval-btn.deny{background:rgba(239,68,68,.10);color:var(--accent-red);
+                     border-color:rgba(239,68,68,.4)}
+
+  /* typing indicator (current turn 末尾) */
+  .typing{display:flex;align-items:center;gap:6px;color:var(--text-tertiary);
+          font-size:11px;font-family:var(--font-mono);margin-top:6px}
+  .typing-dots{display:flex;gap:3px}
+  .typing-dots span{width:5px;height:5px;border-radius:50%;background:var(--accent-cyan);
+                    animation:typing 1.4s infinite}
+  .typing-dots span:nth-child(2){animation-delay:.2s}
+  .typing-dots span:nth-child(3){animation-delay:.4s}
+  @keyframes typing{0%,60%,100%{opacity:.3}30%{opacity:1}}
+
+  /* floating "↓ N 新" button */
+  .new-events{position:absolute;right:16px;bottom:90px;
+              padding:6px 12px;background:var(--accent-blue);
+              color:#fff;font-size:12px;font-weight:600;
+              border-radius:var(--radius-full);cursor:pointer;
+              box-shadow:0 4px 12px rgba(47,126,255,.4);
+              display:flex;align-items:center;gap:4px}
+  .new-events svg{width:12px;height:12px}
+
+  /* sticky input bar at bottom */
+  .input-bar{position:absolute;left:0;right:0;bottom:0;
+             background:var(--bg-surface);
+             border-top:1px solid var(--border-subtle);
+             padding:var(--space-3);
+             display:flex;gap:var(--space-2);align-items:flex-end}
+  .input-bar textarea{flex:1;background:var(--bg-elevated);
+                      border:1px solid var(--border-subtle);
+                      color:var(--text-primary);
+                      border-radius:var(--radius-md);
+                      padding:8px 12px;font-size:13px;
+                      font-family:var(--font-ui);resize:none;outline:none;
+                      min-height:38px;max-height:120px;line-height:1.4}
+  .input-bar textarea:focus{border-color:var(--accent-blue)}
+  .input-bar textarea::placeholder{color:var(--text-tertiary)}
+  .run-btn{padding:0 16px;height:38px;background:var(--accent-blue);
+           color:#fff;border:none;border-radius:var(--radius-md);
+           font-size:13px;font-weight:600;cursor:pointer;
+           display:flex;align-items:center;gap:4px}
+  .run-btn:hover{background:#4a90ff}
+  .run-btn svg{width:14px;height:14px}
+  .run-btn.disabled{background:var(--bg-elevated);color:var(--text-disabled);
+                    cursor:not-allowed}
+
+  /* ============ Gear menu popout (separate floating) ============ */
+  .gear-popout{position:relative;width:240px;background:var(--bg-elevated);
+               border:1px solid var(--border-strong);border-radius:var(--radius-md);
+               box-shadow:0 12px 40px rgba(0,0,0,.6);
+               padding:4px 0;font-size:13px}
+  .gear-popout::before{content:'';position:absolute;top:-7px;right:18px;
+                       width:12px;height:12px;background:var(--bg-elevated);
+                       border-left:1px solid var(--border-strong);
+                       border-top:1px solid var(--border-strong);
+                       transform:rotate(45deg)}
+  .gear-section{padding:6px 0;border-bottom:1px solid var(--border-subtle)}
+  .gear-section:last-child{border-bottom:none}
+  .gear-section-label{padding:4px 14px;font-size:10px;color:var(--text-tertiary);
+                      text-transform:uppercase;letter-spacing:.06em;
+                      font-family:var(--font-mono)}
+  .gear-item{padding:8px 14px;display:flex;align-items:center;gap:10px;
+             cursor:pointer;color:var(--text-primary)}
+  .gear-item:hover{background:var(--bg-hover)}
+  .gear-item svg{width:14px;height:14px;color:var(--text-secondary);flex-shrink:0}
+  .gear-item.danger{color:var(--accent-red)}
+  .gear-item.danger svg{color:var(--accent-red)}
+  .gear-item .right{margin-left:auto;font-size:10px;color:var(--text-tertiary);
+                    font-family:var(--font-mono)}
+  .gear-item.toggle .right{color:var(--accent-green);font-weight:600}
+  /* provider radio list (inline below Provider header) */
+  .provider-list{padding:2px 0 6px 0}
+  .provider-opt{display:flex;align-items:center;gap:10px;
+                padding:7px 14px 7px 30px;cursor:pointer;
+                font-size:12px;color:var(--text-secondary)}
+  .provider-opt:hover{background:var(--bg-hover);color:var(--text-primary)}
+  .provider-opt.selected{color:var(--text-primary);font-weight:500}
+  .provider-opt .radio{width:14px;height:14px;border-radius:50%;
+                       border:1.5px solid var(--border-strong);
+                       display:flex;align-items:center;justify-content:center;
+                       flex-shrink:0}
+  .provider-opt.selected .radio{border-color:var(--accent-cyan)}
+  .provider-opt.selected .radio::after{content:'';width:7px;height:7px;
+                                       border-radius:50%;background:var(--accent-cyan)}
+  .provider-opt .engine{font-family:var(--font-mono);font-size:12px}
+  .provider-opt .vendor{color:var(--text-tertiary);font-size:10px;
+                        font-family:var(--font-mono);margin-left:auto}
+
+  .frame-label{display:block;margin-top:12px;font-size:11px;color:var(--text-tertiary);
+               font-family:var(--font-mono);
+               background:var(--bg-surface);padding:4px 10px;border-radius:var(--radius-full);
+               border:1px solid var(--border-subtle);text-align:center;width:fit-content;
+               margin-left:auto;margin-right:auto}
+  .gear-label{font-size:11px;color:var(--text-tertiary);text-align:center;
+              margin-top:8px;font-family:var(--font-mono)}
+</style>
+</head>
+<body>
+
+<h1>02 · workspace 详情(手机)</h1>
+<p class="lead">workspace 卡片点进来:当前 session 内所有 turn 流式渲染。最新在底部,sticky 输入框,turn 自动折叠。<b>没有 run-detail,没有历史 runs 入口</b>——按"新对话"前所有 turn 都在这一页。</p>
+
+<div class="notes">
+  <h2>关键交互决策(本稿凝固)</h2>
+  <ul>
+    <li><b>UI 文案统一英文</b>(对齐项目现有 toast / tooltip 风格);本设计稿说明文字继续中文</li>
+    <li><b>Session = 当前对话</b>。同 session 内所有 turn 都在这一页,不论 5 个还是 50 个。按齿轮 → New chat 才清空</li>
+    <li><b>Turn 折叠默认</b>:进行中 + 最近 1 个完成 turn 展开;更早的 turn 收起为 1 行 summary;用户可手动反转</li>
+    <li><b>最新在底部</b> + auto-scroll 跟随 + sticky 输入框</li>
+    <li><b>新事件浮按钮</b>(<code>↓ N new</code>)只在用户向上滚开时显示;点了回到底 + 恢复 auto-scroll</li>
+    <li><b>tool_result 长输出</b>默认 head 5 行 + <code>Expand N lines</code>(同 Claude Code CLI)</li>
+    <li><b>Cancel</b>在进行中 turn 的头部右侧,turn 到 result 事件后消失</li>
+    <li><b>Approval 内联</b>在 tool_use 事件正下方,3 按钮:Approve / Always / Deny</li>
+    <li><b>齿轮菜单</b>聚合所有 workspace 级配置/操作(Engine / Trust / Pull latest / Sync skills / New chat / Delete)。sticky 输入框只有 Run 按钮</li>
+  </ul>
+</div>
+
+<div class="stage">
+
+  <!-- ============== PHONE: workspace detail ============== -->
+  <div>
+  <div class="phone">
+
+    <!-- topbar -->
+    <div class="topbar">
+      <a class="topbar-back">← workspaces</a>
+      <div class="topbar-title">cc-workflow</div>
+      <div class="topbar-gear" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- stream -->
+    <div class="stream">
+
+      <!-- ===== Turn 1: collapsed ===== -->
+      <div class="turn">
+        <div class="turn-collapsed">
+          <span class="caret">▶</span>
+          <span class="user-q">帮我修 PWA nav 在 hover 时的颜色</span>
+          <span class="meta">Edit · 32s</span>
+          <span class="check">✓</span>
+        </div>
+      </div>
+
+      <!-- ===== Turn 2: collapsed ===== -->
+      <div class="turn">
+        <div class="turn-collapsed">
+          <span class="caret">▶</span>
+          <span class="user-q">检查样式有没有破其他页面</span>
+          <span class="meta">5 Read · 1 Grep · 1m12s</span>
+          <span class="check">✓</span>
+        </div>
+      </div>
+
+      <!-- ===== Turn 3: expanded, completed ===== -->
+      <div class="turn">
+        <div class="turn-expanded">
+          <div class="turn-head">
+            <span class="caret">▼</span>
+            <div class="turn-user-msg">看一下 manifest.json 有没有问题</div>
+            <span class="turn-status done">✓ 18s</span>
+          </div>
+          <div class="turn-body">
+
+            <div class="event thinking">
+              <div class="event-rail">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6m0-6l-6 6"/></svg>
+              </div>
+              <div class="event-body">用户问 manifest 有没有问题。我先 Read 看看…</div>
+            </div>
+
+            <div class="event tool">
+              <div class="event-rail">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+              </div>
+              <div class="event-body">
+                <span class="tool-name">Read</span><span class="tool-args">pwa/manifest.json</span>
+                <div class="tool-result">{
+  "name": "cc-workflow",
+  "short_name": "cc-wf",
+  "start_url": "/",
+  "display": "standalone",
+  ...
+}</div>
+              </div>
+            </div>
+
+            <div class="event text">
+              <div class="event-rail">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              </div>
+              <div class="event-body">manifest.json 看起来没问题。<code>display: standalone</code> 和 <code>start_url: /</code> 都正确。<code>icons</code> 数组也都覆盖了 192/512 两个尺寸。</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== Turn 4: expanded, RUNNING ===== -->
+      <div class="turn">
+        <div class="turn-expanded running">
+          <div class="turn-head">
+            <span class="caret">▼</span>
+            <div class="turn-user-msg">把底部 nav 在小屏上的 padding 加大一点</div>
+            <button class="turn-cancel">✕ Cancel</button>
+          </div>
+          <div class="turn-body">
+
+            <div class="event thinking">
+              <div class="event-rail">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6m0-6l-6 6"/></svg>
+              </div>
+              <div class="event-body">用户想加大 bottom-nav 的 padding。我先 Grep 一下 .bottom-nav 是怎么定义的…</div>
+            </div>
+
+            <div class="event tool">
+              <div class="event-rail">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+              </div>
+              <div class="event-body">
+                <span class="tool-name">Grep</span><span class="tool-args">"\.bottom-nav" pwa/style.css</span>
+                <div class="tool-result">2 matches in pwa/style.css
+
+L1342:  .bottom-nav { display: flex; … }
+L1358:  .bottom-tab { flex: 1; text-align: center; … }</div>
+              </div>
+            </div>
+
+            <div class="event tool">
+              <div class="event-rail">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+              </div>
+              <div class="event-body">
+                <span class="tool-name">Read</span><span class="tool-args">pwa/style.css · L1340-1370</span>
+                <div class="tool-result">.bottom-nav {
+  display: flex;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0);</div>
+                <span class="tool-result-fold">↓ Expand 24 lines</span>
+              </div>
+            </div>
+
+            <!-- Edit pending approval -->
+            <div class="event tool">
+              <div class="event-rail" style="color:var(--accent-amber)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
+              </div>
+              <div class="event-body">
+                <span class="tool-name" style="color:var(--accent-amber)">Edit</span><span class="tool-args">pwa/style.css</span>
+
+                <div class="approval">
+                  <div class="approval-head">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 3.5h.01"/></svg>
+                    Pending Edit
+                  </div>
+                  <div class="approval-detail">- padding: 10px 0 14px;
++ padding: 14px 0 20px;</div>
+                  <div class="approval-actions">
+                    <button class="approval-btn approve">Approve</button>
+                    <button class="approval-btn always">Always</button>
+                    <button class="approval-btn deny">Deny</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="typing">
+              <div class="typing-dots"><span></span><span></span><span></span></div>
+              <span>Waiting for approval…</span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- floating "↓ N new" - 仅当用户向上 scroll 偏离底部时 -->
+    <div class="new-events">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14m0 0l-7-7m7 7l7-7"/></svg>
+      3 new
+    </div>
+
+    <!-- sticky input bar -->
+    <div class="input-bar">
+      <textarea placeholder="Message cc-workflow…" rows="1"></textarea>
+      <button class="run-btn disabled" title="Running, wait or cancel first">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
+        Run
+      </button>
+    </div>
+
+  </div>
+  <div class="frame-label">workspace 详情 · 当前 session 4 turn · turn 4 在跑</div>
+  </div>
+
+  <!-- ============== GEAR MENU (popout) ============== -->
+  <div>
+    <div style="margin-top:60px">
+      <div class="gear-popout">
+        <div class="gear-section">
+          <div class="gear-section-label">Engine</div>
+          <div class="provider-list">
+            <div class="provider-opt selected">
+              <span class="radio"></span>
+              <span class="engine">kimi</span>
+              <span class="vendor">moonshot</span>
+            </div>
+            <div class="provider-opt">
+              <span class="radio"></span>
+              <span class="engine">claude</span>
+              <span class="vendor">anthropic</span>
+            </div>
+            <div class="provider-opt">
+              <span class="radio"></span>
+              <span class="engine">gpt</span>
+              <span class="vendor">openai</span>
+            </div>
+            <div class="provider-opt">
+              <span class="radio"></span>
+              <span class="engine">codex</span>
+              <span class="vendor">openai</span>
+            </div>
+            <div class="provider-opt">
+              <span class="radio"></span>
+              <span class="engine">deepseek</span>
+              <span class="vendor">deepseek</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="gear-section">
+          <div class="gear-section-label">Workspace</div>
+          <div class="gear-item toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Trust workspace
+            <span class="right">ON</span>
+          </div>
+          <div class="gear-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>
+            Pull latest
+            <span class="right">git pull --ff</span>
+          </div>
+          <div class="gear-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 22v-6h6M3 12a9 9 0 0 1 15-6.7L21 8M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+            Sync skills
+          </div>
+        </div>
+
+        <div class="gear-section">
+          <div class="gear-section-label">Session</div>
+          <div class="gear-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            New chat
+          </div>
+        </div>
+
+        <div class="gear-section">
+          <div class="gear-item danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            Delete workspace
+          </div>
+        </div>
+      </div>
+      <div class="gear-label">齿轮菜单(顶部 ⚙ 点开)</div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

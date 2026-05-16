@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cc-workflow · 01 · 概览三 tab(手机)</title>
+<style>
+  /* 与 pwa/style.css :root 同源,保持设计 token 一致 */
+  :root{
+    --bg-canvas:#0a0b0e; --bg-surface:#14161b; --bg-elevated:#1d1f26; --bg-hover:#232631;
+    --border-subtle:#20222a; --border-strong:#2d3038;
+    --text-primary:#ededf0; --text-secondary:#9aa0aa; --text-tertiary:#6b7280; --text-disabled:#4a5060;
+    --accent-blue:#2f7eff; --accent-green:#22c55e; --accent-cyan:#06b6d4;
+    --accent-amber:#f59e0b; --accent-red:#ef4444; --accent-purple:#a855f7;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+    --radius-sm:6px; --radius-md:10px; --radius-full:999px;
+    --font-ui:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 16px;background:#1a1d24;color:var(--text-primary);
+       font-family:var(--font-ui);font-size:13px;line-height:1.5}
+  h1{font-size:20px;margin:0 0 4px;font-weight:600;letter-spacing:-.01em}
+  .lead{color:var(--text-secondary);margin:0 0 28px;max-width:780px}
+
+  /* phone frame */
+  .row{display:flex;gap:24px;flex-wrap:wrap;justify-content:center}
+  .phone{width:340px;height:680px;background:var(--bg-canvas);
+         border:1px solid var(--border-strong);border-radius:28px;overflow:hidden;
+         display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+
+  /* topbar */
+  .topbar{display:flex;align-items:center;gap:var(--space-3);
+          padding:var(--space-3) var(--space-4);
+          background:var(--bg-surface);border-bottom:1px solid var(--border-subtle);
+          flex-shrink:0}
+  .brand{font-weight:600;font-size:15px;letter-spacing:-.01em}
+  .topbar-right{margin-left:auto;display:flex;align-items:center;gap:var(--space-3)}
+  .status{font-size:11px;color:var(--text-tertiary);display:flex;align-items:center;gap:4px}
+  .status .dot{width:6px;height:6px;border-radius:50%;background:var(--accent-green)}
+  /* 全局待审批徽章 —— 飞书推送进来直接点这里,跳全局待审列表 */
+  .pending-badge{display:flex;align-items:center;gap:4px;
+                 padding:2px 8px;border-radius:var(--radius-full);
+                 background:rgba(239,68,68,.12);color:var(--accent-red);
+                 border:1px solid rgba(239,68,68,.35);font-size:11px;font-weight:600;
+                 cursor:pointer}
+  .pending-badge svg{width:11px;height:11px}
+
+  main{flex:1;overflow:auto;padding:var(--space-4);
+       display:flex;flex-direction:column;gap:var(--space-2)}
+  main::-webkit-scrollbar{display:none}
+
+  /* === Workspaces === */
+  .ws-card{background:var(--bg-surface);border:1px solid var(--border-subtle);
+           border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);
+           position:relative;cursor:pointer;transition:border-color .15s}
+  .ws-card:hover{border-color:var(--border-strong)}
+  .ws-card.running{border-color:rgba(6,182,212,.45);
+                   box-shadow:0 0 0 1px rgba(6,182,212,.18), inset 3px 0 0 var(--accent-cyan)}
+  .ws-head{display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)}
+  .ws-head h2{font-size:14px;margin:0;flex:1;font-weight:600;letter-spacing:-.01em}
+  .ws-engine{font-size:10px;color:var(--text-tertiary);
+             padding:2px 7px;border:1px solid var(--border-subtle);
+             border-radius:var(--radius-full);font-family:var(--font-mono);
+             text-transform:lowercase}
+  .ws-engine.claude{color:var(--accent-cyan);border-color:rgba(6,182,212,.3)}
+  .ws-engine.codex{color:var(--accent-amber);border-color:rgba(245,158,11,.3)}
+  .ws-chevron{color:var(--text-disabled);font-size:10px;transition:transform .15s}
+  /* run line: 状态 tag + 简短 meta */
+  .ws-runline{display:flex;align-items:center;gap:var(--space-2);
+              font-size:11px;color:var(--text-tertiary)}
+  .tag{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;
+       border-radius:var(--radius-full);font-size:10px;
+       border:1px solid transparent;font-weight:500}
+  .tag-running{background:rgba(6,182,212,.10);color:var(--accent-cyan);
+               border-color:rgba(6,182,212,.30)}
+  .tag-done{background:rgba(34,197,94,.10);color:var(--accent-green);
+            border-color:rgba(34,197,94,.30)}
+  .tag-failed{background:rgba(239,68,68,.10);color:var(--accent-red);
+              border-color:rgba(239,68,68,.30)}
+  .tag-paused{background:rgba(154,160,170,.08);color:var(--text-tertiary);
+              border-color:var(--border-subtle)}
+  .run-id{font-family:var(--font-mono);color:var(--text-tertiary)}
+  /* preview line —— 只对 running 卡片显示,告诉用户"现在在干什么" */
+  .ws-preview{margin-top:6px;padding-top:6px;border-top:1px dashed var(--border-subtle);
+              font-size:11px;color:var(--text-secondary);
+              display:flex;align-items:center;gap:6px;font-family:var(--font-mono)}
+  .ws-preview .pulse{width:5px;height:5px;border-radius:50%;background:var(--accent-cyan);
+                     animation:pulse 1.4s ease-in-out infinite;flex-shrink:0}
+  @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+  .ws-empty{color:var(--text-disabled);font-size:11px;font-style:italic}
+
+  /* === Tasks === */
+  .task-row{display:flex;align-items:center;gap:var(--space-3);
+            padding:var(--space-3) var(--space-4);
+            background:var(--bg-surface);border:1px solid var(--border-subtle);
+            border-radius:var(--radius-md)}
+  .task-row.running{border-color:rgba(6,182,212,.45)}
+  .task-row.paused{opacity:.55}
+  .task-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .task-dot.running{background:var(--accent-cyan);
+                    box-shadow:0 0 0 3px rgba(6,182,212,.2)}
+  .task-dot.done{background:var(--accent-green)}
+  .task-dot.failed{background:var(--accent-red)}
+  .task-dot.paused{background:var(--text-disabled)}
+  .task-body{flex:1;min-width:0}
+  .task-name{font-size:13px;color:var(--text-primary);font-weight:500;
+             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .task-meta{font-size:10px;color:var(--text-tertiary);margin-top:2px;
+             font-family:var(--font-mono);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .task-meta .sep{color:var(--text-disabled)}
+  .task-next{color:var(--accent-blue)}
+  .task-state{font-size:10px;text-align:right;font-weight:500;flex-shrink:0;
+              font-family:var(--font-mono)}
+
+  /* === Roundtable === */
+  .rt-row{background:var(--bg-surface);border:1px solid var(--border-subtle);
+          border-radius:var(--radius-md);padding:var(--space-3) var(--space-4);
+          cursor:pointer;transition:border-color .15s}
+  .rt-row:hover{border-color:var(--border-strong)}
+  .rt-row.active{border-color:rgba(6,182,212,.45);
+                 box-shadow:0 0 0 1px rgba(6,182,212,.18)}
+  .rt-row.failed{border-color:rgba(239,68,68,.30)}
+  .rt-q{font-size:13px;line-height:1.4;color:var(--text-primary);margin-bottom:6px;
+        display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .rt-meta{font-size:10px;color:var(--text-tertiary);display:flex;
+           align-items:center;gap:8px;flex-wrap:wrap}
+  .rt-status{font-weight:600}
+  .rt-status.active{color:var(--accent-cyan)}
+  .rt-status.done{color:var(--text-secondary)}
+  .rt-status.failed{color:var(--accent-red)}
+  .avatars{display:flex;gap:-2px}
+  .avatar{display:inline-flex;align-items:center;justify-content:center;
+          width:16px;height:16px;border-radius:50%;font-size:9px;
+          color:#0a0b0e;font-weight:700;
+          margin-right:-3px;border:1.5px solid var(--bg-surface)}
+  .avatar.green{background:var(--accent-green)}
+  .avatar.cyan{background:var(--accent-cyan)}
+  .avatar.amber{background:var(--accent-amber)}
+  .avatar.red{background:var(--accent-red)}
+  .avatar.purple{background:var(--accent-purple)}
+
+  /* === bottom nav === */
+  .bottom-nav{display:flex;border-top:1px solid var(--border-subtle);
+              background:var(--bg-surface);flex-shrink:0;
+              padding-bottom:env(safe-area-inset-bottom,0)}
+  .bottom-tab{flex:1;text-align:center;padding:10px 0 14px;
+              color:var(--text-tertiary);font-size:10px;font-weight:500;
+              display:flex;flex-direction:column;align-items:center;gap:2px;
+              text-decoration:none;cursor:pointer;transition:color .1s}
+  .bottom-tab.active{color:var(--accent-blue)}
+  .bottom-tab svg{width:22px;height:22px}
+
+  /* tag chips below each phone (only in this design preview, NOT in PWA) */
+  .frame{display:flex;flex-direction:column;align-items:center;gap:10px}
+  .frame-label{font-size:11px;color:var(--text-tertiary);font-family:var(--font-mono);
+               background:var(--bg-surface);padding:4px 10px;border-radius:var(--radius-full);
+               border:1px solid var(--border-subtle)}
+
+  /* design notes panel at top */
+  .notes{max-width:1100px;margin:0 auto 32px;padding:16px 20px;
+         background:var(--bg-surface);border:1px solid var(--border-subtle);
+         border-radius:var(--radius-md);font-size:12px;line-height:1.6}
+  .notes h2{font-size:13px;margin:0 0 8px;color:var(--accent-blue)}
+  .notes ul{margin:0;padding-left:18px;color:var(--text-secondary)}
+  .notes li{margin:2px 0}
+  .notes b{color:var(--text-primary);font-weight:600}
+</style>
+</head>
+<body>
+
+<h1>01 · 概览三 tab(手机)</h1>
+<p class="lead">手机进 PWA 看到的第一屏。设计目的:1 秒内扫到「有什么在跑 / 有什么待审批 / 有什么失败了」。</p>
+
+<div class="notes">
+  <h2>关键设计决策</h2>
+  <ul>
+    <li><b>顶部 pending 徽章</b> ── 飞书推送进来,用户点徽章直接到全局待审批列表(暂不画 sheet,02 再补)。徽章只在 <code>pendingApprovals &gt; 0</code> 时显示</li>
+    <li><b>Workspace 卡片只在概览露 1 行 runline</b> ── 默认 <i>不</i>展开 stream。running 卡片多一行 preview 告诉用户"现在在干什么"</li>
+    <li><b>状态色映射(全 PWA 统一)</b>:running=cyan / done=green / failed=red / queued=blue / paused/disabled=gray</li>
+    <li><b>左侧亮条(running 卡片 / cron)</b>用 <code>inset 3px 0 0 cyan</code>,比满边框软,扫一眼能找到</li>
+    <li><b>Tasks 行加 next-run 时间</b> ── 用户最关心的是"还有多久跑",仅"上次成功"信息不够</li>
+    <li><b>Roundtable 4 persona 头像</b>用单字 + 5 个固定颜色(极/场/借/悲/合)。颜色见上方变量</li>
+    <li><b>paused 状态</b>统一用 <code>opacity: .55</code>,不另起一套颜色</li>
+  </ul>
+</div>
+
+<div class="row">
+
+  <!-- ============ Workspaces ============ -->
+  <div class="frame">
+  <div class="phone">
+    <div class="topbar">
+      <span class="brand">cc-workflow</span>
+      <div class="topbar-right">
+        <span class="pending-badge" title="1 待审批">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>
+          1
+        </span>
+        <span class="status"><span class="dot"></span>在线</span>
+      </div>
+    </div>
+
+    <main>
+      <!-- running 卡片 —— 左侧亮条 + preview 行 -->
+      <div class="ws-card running">
+        <div class="ws-head">
+          <h2>cc-workflow</h2>
+          <span class="ws-engine claude">claude</span>
+          <span class="ws-chevron">▶</span>
+        </div>
+        <div class="ws-runline">
+          <span class="tag tag-running">running</span>
+          <span class="run-id">#a3f</span>
+          <span>·</span>
+          <span>1m 24s · 14 events</span>
+        </div>
+        <div class="ws-preview">
+          <span class="pulse"></span>
+          <span>Edit pwa/style.css …</span>
+        </div>
+      </div>
+
+      <!-- 待审批 hint(同一个卡片有 pending approval 时,卡片自身也透出 1 个红字) -->
+      <div class="ws-card">
+        <div class="ws-head">
+          <h2>notes</h2>
+          <span class="ws-engine codex">codex</span>
+          <span class="ws-chevron">▶</span>
+        </div>
+        <div class="ws-runline">
+          <span class="tag tag-running">running</span>
+          <span class="run-id">#a3e</span>
+          <span>·</span>
+          <span style="color:var(--accent-red);font-weight:500">1 待审批</span>
+        </div>
+      </div>
+
+      <!-- done -->
+      <div class="ws-card">
+        <div class="ws-head">
+          <h2>blog</h2>
+          <span class="ws-engine claude">claude</span>
+          <span class="ws-chevron">▶</span>
+        </div>
+        <div class="ws-runline">
+          <span class="tag tag-done">done</span>
+          <span class="run-id">#a3d</span>
+          <span>·</span>
+          <span>3m ago · /weekly</span>
+        </div>
+      </div>
+
+      <!-- failed -->
+      <div class="ws-card">
+        <div class="ws-head">
+          <h2>infra</h2>
+          <span class="ws-engine claude">claude</span>
+          <span class="ws-chevron">▶</span>
+        </div>
+        <div class="ws-runline">
+          <span class="tag tag-failed">failed</span>
+          <span class="run-id">#a3c</span>
+          <span>·</span>
+          <span>12m ago · rate limit</span>
+        </div>
+      </div>
+
+      <!-- empty -->
+      <div class="ws-card">
+        <div class="ws-head">
+          <h2>scratch</h2>
+          <span class="ws-engine claude">claude</span>
+          <span class="ws-chevron">▶</span>
+        </div>
+        <div class="ws-empty">还没跑过 · 点击开始</div>
+      </div>
+    </main>
+
+    <nav class="bottom-nav">
+      <a class="bottom-tab active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span>Workspaces</span>
+      </a>
+      <a class="bottom-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span>Tasks</span>
+      </a>
+      <a class="bottom-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="4" r="1.5"/><circle cx="12" cy="20" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="20" cy="12" r="1.5"/></svg>
+        <span>Roundtable</span>
+      </a>
+    </nav>
+  </div>
+  <div class="frame-label">Workspaces · 5 个工作区</div>
+  </div>
+
+  <!-- ============ Tasks ============ -->
+  <div class="frame">
+  <div class="phone">
+    <div class="topbar">
+      <span class="brand">cc-workflow</span>
+      <div class="topbar-right">
+        <span class="pending-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>1</span>
+        <span class="status"><span class="dot"></span>在线</span>
+      </div>
+    </div>
+
+    <main>
+      <div class="task-row running">
+        <span class="task-dot running"></span>
+        <div class="task-body">
+          <div class="task-name">每日 readme 总结</div>
+          <div class="task-meta">
+            <span>0 9 * * *</span>
+            <span class="sep">·</span>
+            <span>cc-workflow</span>
+            <span class="sep">·</span>
+            <span class="task-next">下次 明早 9:00</span>
+          </div>
+        </div>
+        <div class="task-state" style="color:var(--accent-cyan)">running<br><span style="color:var(--text-tertiary);font-weight:400">1m24s</span></div>
+      </div>
+
+      <div class="task-row">
+        <span class="task-dot done"></span>
+        <div class="task-body">
+          <div class="task-name">weekly 周报</div>
+          <div class="task-meta">
+            <span>0 10 * * 1</span>
+            <span class="sep">·</span>
+            <span>notes</span>
+            <span class="sep">·</span>
+            <span class="task-next">下次 周一 10:00</span>
+          </div>
+        </div>
+        <div class="task-state" style="color:var(--text-tertiary)">done<br><span style="font-weight:400">2m ago</span></div>
+      </div>
+
+      <div class="task-row">
+        <span class="task-dot failed"></span>
+        <div class="task-body">
+          <div class="task-name">每日 lint</div>
+          <div class="task-meta">
+            <span>0 */6 * * *</span>
+            <span class="sep">·</span>
+            <span>blog</span>
+            <span class="sep">·</span>
+            <span class="task-next">下次 14:30 · in 2h</span>
+          </div>
+        </div>
+        <div class="task-state" style="color:var(--accent-red)">failed×3<br><span style="color:var(--text-tertiary);font-weight:400">retry</span></div>
+      </div>
+
+      <div class="task-row">
+        <span class="task-dot done"></span>
+        <div class="task-body">
+          <div class="task-name">同步 skills</div>
+          <div class="task-meta">
+            <span>30 2 * * *</span>
+            <span class="sep">·</span>
+            <span>all</span>
+            <span class="sep">·</span>
+            <span class="task-next">下次 02:30</span>
+          </div>
+        </div>
+        <div class="task-state" style="color:var(--text-tertiary)">done<br><span style="font-weight:400">7h ago</span></div>
+      </div>
+
+      <div class="task-row paused">
+        <span class="task-dot paused"></span>
+        <div class="task-body">
+          <div class="task-name">月度归档</div>
+          <div class="task-meta">
+            <span>0 0 1 * *</span>
+            <span class="sep">·</span>
+            <span>infra</span>
+            <span class="sep">·</span>
+            <span style="color:var(--text-disabled)">已暂停</span>
+          </div>
+        </div>
+        <div class="task-state" style="color:var(--text-tertiary)">paused</div>
+      </div>
+    </main>
+
+    <nav class="bottom-nav">
+      <a class="bottom-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span>Workspaces</span>
+      </a>
+      <a class="bottom-tab active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span>Tasks</span>
+      </a>
+      <a class="bottom-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="4" r="1.5"/><circle cx="12" cy="20" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="20" cy="12" r="1.5"/></svg>
+        <span>Roundtable</span>
+      </a>
+    </nav>
+  </div>
+  <div class="frame-label">Tasks · 5 cron · 1 跑 · 1 fail · 1 暂停</div>
+  </div>
+
+  <!-- ============ Roundtable ============ -->
+  <div class="frame">
+  <div class="phone">
+    <div class="topbar">
+      <span class="brand">cc-workflow</span>
+      <div class="topbar-right">
+        <span class="pending-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>1</span>
+        <span class="status"><span class="dot"></span>在线</span>
+      </div>
+    </div>
+
+    <main>
+      <!-- active —— 进行中,左侧亮条同 ws-card.running -->
+      <div class="rt-row active">
+        <div class="rt-q">是否要为 cc-workflow 加入 OAuth 登录?</div>
+        <div class="rt-meta">
+          <span class="rt-status active">● round 2/2</span>
+          <div class="avatars">
+            <span class="avatar green">极</span>
+            <span class="avatar cyan">场</span>
+            <span class="avatar amber">借</span>
+            <span class="avatar red">悲</span>
+          </div>
+          <span>进行中</span>
+        </div>
+      </div>
+
+      <!-- done -->
+      <div class="rt-row">
+        <div class="rt-q">把 telemetry 落 SQLite 还是 jsonl?</div>
+        <div class="rt-meta">
+          <span class="rt-status done">✓ 完成</span>
+          <div class="avatars">
+            <span class="avatar green">极</span>
+            <span class="avatar cyan">场</span>
+            <span class="avatar amber">借</span>
+            <span class="avatar red">悲</span>
+          </div>
+          <span>昨天 18:42</span>
+        </div>
+      </div>
+
+      <!-- done -->
+      <div class="rt-row">
+        <div class="rt-q">approval 走 webhook 还是 long-poll?</div>
+        <div class="rt-meta">
+          <span class="rt-status done">✓ 完成</span>
+          <div class="avatars">
+            <span class="avatar green">极</span>
+            <span class="avatar cyan">场</span>
+            <span class="avatar amber">借</span>
+            <span class="avatar red">悲</span>
+          </div>
+          <span>3 天前</span>
+        </div>
+      </div>
+
+      <!-- done -->
+      <div class="rt-row">
+        <div class="rt-q">用户输入 cc-workflow 拼写错误时,要不要 fuzzy match?</div>
+        <div class="rt-meta">
+          <span class="rt-status done">✓ 完成</span>
+          <div class="avatars">
+            <span class="avatar green">极</span>
+            <span class="avatar cyan">场</span>
+            <span class="avatar amber">借</span>
+            <span class="avatar red">悲</span>
+          </div>
+          <span>4 天前</span>
+        </div>
+      </div>
+
+      <!-- failed —— 中途某个 persona 调用失败 -->
+      <div class="rt-row failed">
+        <div class="rt-q">是否引入 Redis 做 session 缓存?</div>
+        <div class="rt-meta">
+          <span class="rt-status failed">◯ 失败</span>
+          <span>借鉴派 · API 超时</span>
+          <span>·</span>
+          <span>1 周前</span>
+        </div>
+      </div>
+    </main>
+
+    <nav class="bottom-nav">
+      <a class="bottom-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span>Workspaces</span>
+      </a>
+      <a class="bottom-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span>Tasks</span>
+      </a>
+      <a class="bottom-tab active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="4" r="1.5"/><circle cx="12" cy="20" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="20" cy="12" r="1.5"/></svg>
+        <span>Roundtable</span>
+      </a>
+    </nav>
+  </div>
+  <div class="frame-label">Roundtable · 5 场辩论 · 1 进行中 · 1 失败</div>
+  </div>
+
+</div>
+
+</body>
+</html>

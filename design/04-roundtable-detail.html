@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cc-workflow · 04 · roundtable 详情(手机)</title>
+<style>
+  :root{
+    --bg-canvas:#0a0b0e; --bg-surface:#14161b; --bg-elevated:#1d1f26; --bg-hover:#232631;
+    --border-subtle:#20222a; --border-strong:#2d3038;
+    --text-primary:#ededf0; --text-secondary:#9aa0aa; --text-tertiary:#6b7280; --text-disabled:#4a5060;
+    --accent-blue:#2f7eff; --accent-green:#22c55e; --accent-cyan:#06b6d4;
+    --accent-amber:#f59e0b; --accent-red:#ef4444; --accent-purple:#a855f7;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+    --radius-sm:6px; --radius-md:10px; --radius-full:999px;
+    --font-ui:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 16px;background:#1a1d24;color:var(--text-primary);
+       font-family:var(--font-ui);font-size:13px;line-height:1.5}
+  h1{font-size:20px;margin:0 0 4px;font-weight:600;letter-spacing:-.01em}
+  .lead{color:var(--text-secondary);margin:0 0 24px;max-width:820px}
+  .notes{max-width:1100px;margin:0 auto 32px;padding:16px 20px;
+         background:var(--bg-surface);border:1px solid var(--border-subtle);
+         border-radius:var(--radius-md);font-size:12px;line-height:1.6}
+  .notes h2{font-size:13px;margin:0 0 8px;color:var(--accent-blue)}
+  .notes ul{margin:0;padding-left:18px;color:var(--text-secondary)}
+  .notes li{margin:2px 0}
+  .notes b{color:var(--text-primary);font-weight:600}
+  .notes code{background:var(--bg-elevated);padding:1px 5px;border-radius:4px;
+              font-family:var(--font-mono);font-size:11px;color:var(--text-primary)}
+  .stage{display:flex;gap:32px;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+
+  /* phone */
+  .phone{width:420px;height:840px;background:var(--bg-canvas);
+         border:1px solid var(--border-strong);border-radius:28px;overflow:hidden;
+         position:relative;display:flex;flex-direction:column;
+         box-shadow:0 12px 40px rgba(0,0,0,.5)}
+
+  /* topbar */
+  .topbar{display:flex;align-items:center;gap:var(--space-2);
+          padding:var(--space-3) var(--space-4);
+          background:var(--bg-surface);border-bottom:1px solid var(--border-subtle);
+          flex-shrink:0;font-size:13px}
+  .topbar-back{color:var(--accent-blue);font-weight:500;text-decoration:none;
+               padding:2px 4px;border-radius:var(--radius-sm)}
+  .topbar-title{flex:1;text-align:center;font-weight:600;letter-spacing:-.01em;
+                font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .topbar-gear{width:30px;height:30px;display:flex;align-items:center;
+               justify-content:center;color:var(--text-secondary);
+               border-radius:var(--radius-sm);cursor:pointer}
+  .topbar-gear:hover{background:var(--bg-elevated);color:var(--text-primary)}
+  .topbar-gear svg{width:18px;height:18px}
+
+  .body{flex:1;overflow:auto;padding:var(--space-3) var(--space-4) var(--space-4)}
+  .body::-webkit-scrollbar{display:none}
+
+  /* question card — 顶部大字一等公民 */
+  .question-card{background:var(--bg-surface);border:1px solid var(--border-subtle);
+                 border-radius:var(--radius-md);
+                 padding:var(--space-3) var(--space-4);
+                 margin-bottom:var(--space-3)}
+  .question-card.active{border-color:rgba(6,182,212,.45);
+                        box-shadow:0 0 0 1px rgba(6,182,212,.18),
+                                   inset 3px 0 0 var(--accent-cyan)}
+  .question-label{font-size:10px;font-family:var(--font-mono);
+                  color:var(--text-tertiary);letter-spacing:.06em;
+                  text-transform:uppercase;font-weight:600;margin-bottom:6px}
+  .question-text{font-size:15px;color:var(--text-primary);line-height:1.45;
+                 font-weight:500;letter-spacing:-.01em}
+  .question-meta{display:flex;align-items:center;gap:8px;
+                 margin-top:var(--space-3);padding-top:var(--space-3);
+                 border-top:1px dashed var(--border-subtle);
+                 font-size:11px;color:var(--text-tertiary)}
+  .progress-state{display:flex;align-items:center;gap:6px;color:var(--accent-cyan);
+                  font-weight:600;font-family:var(--font-mono);font-size:11px}
+  .progress-state .pulse{width:6px;height:6px;border-radius:50%;background:var(--accent-cyan);
+                         animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+  .progress-count{font-family:var(--font-mono);color:var(--text-secondary)}
+
+  /* round / synthesis section */
+  .section{margin-bottom:var(--space-3)}
+  .section-head{display:flex;align-items:center;gap:8px;
+                padding:var(--space-2) 4px;
+                font-size:10px;font-family:var(--font-mono);
+                color:var(--text-tertiary);letter-spacing:.06em;
+                text-transform:uppercase;font-weight:600;
+                cursor:pointer}
+  .section-head .caret{color:var(--text-disabled);font-size:10px}
+  .section-head .progress-tag{margin-left:auto;font-size:10px;font-family:var(--font-mono);
+                              padding:1px 7px;border-radius:var(--radius-full);
+                              border:1px solid transparent;font-weight:500}
+  .progress-tag.done{background:rgba(34,197,94,.10);color:var(--accent-green);
+                     border-color:rgba(34,197,94,.30)}
+  .progress-tag.running{background:rgba(6,182,212,.10);color:var(--accent-cyan);
+                        border-color:rgba(6,182,212,.30)}
+  .progress-tag.queued{background:transparent;color:var(--text-disabled);
+                       border-color:var(--border-subtle)}
+
+  /* persona block */
+  .persona{margin-bottom:6px;background:var(--bg-surface);
+           border:1px solid var(--border-subtle);
+           border-radius:var(--radius-md);overflow:hidden}
+  .persona.running{border-color:rgba(6,182,212,.45)}
+  .persona.queued{opacity:.55}
+
+  .persona-head{display:flex;align-items:center;gap:8px;
+                padding:8px 12px;cursor:pointer}
+  .persona-head .caret{color:var(--text-disabled);font-size:10px;flex-shrink:0}
+  .persona-head .avatar{display:inline-flex;align-items:center;justify-content:center;
+                        width:20px;height:20px;border-radius:50%;font-size:10px;
+                        color:#0a0b0e;font-weight:700;flex-shrink:0}
+  .avatar.green{background:var(--accent-green)}
+  .avatar.cyan{background:var(--accent-cyan)}
+  .avatar.amber{background:var(--accent-amber)}
+  .avatar.red{background:var(--accent-red)}
+  .avatar.purple{background:var(--accent-purple)}
+  .persona-name{font-size:13px;color:var(--text-primary);font-weight:500;flex-shrink:0}
+  .persona-vendor{font-size:10px;color:var(--text-tertiary);font-family:var(--font-mono);
+                  margin-left:auto}
+  .persona-time{font-size:10px;color:var(--text-tertiary);font-family:var(--font-mono)}
+  .persona-stance{font-size:11px;font-weight:600;padding:1px 7px;border-radius:var(--radius-full);
+                  border:1px solid transparent;display:inline-flex;align-items:center;gap:2px}
+  .stance-pro{background:rgba(34,197,94,.10);color:var(--accent-green);
+              border-color:rgba(34,197,94,.30)}
+  .stance-con{background:rgba(239,68,68,.10);color:var(--accent-red);
+              border-color:rgba(239,68,68,.30)}
+  .stance-flex{background:rgba(154,160,170,.08);color:var(--text-secondary);
+               border-color:var(--border-strong)}
+
+  .persona-body{padding:0 12px 12px 40px;
+                border-top:1px solid var(--border-subtle);
+                padding-top:10px;font-size:12px;line-height:1.55;
+                color:var(--text-primary)}
+  .persona-body .lead-line{font-weight:600;margin-bottom:6px;font-size:12.5px}
+  .persona-body ul{margin:4px 0 0 0;padding-left:18px;color:var(--text-secondary)}
+  .persona-body li{margin:3px 0}
+  .persona-body em{font-style:italic;color:var(--text-secondary);font-size:11.5px;
+                   display:block;margin-top:8px;padding-top:8px;
+                   border-top:1px dashed var(--border-subtle)}
+
+  /* typing(persona 正在写) */
+  .typing-block{padding:10px 12px 12px 40px;display:flex;align-items:center;gap:8px;
+                color:var(--text-tertiary);font-size:11px;font-family:var(--font-mono)}
+  .typing-dots{display:flex;gap:3px}
+  .typing-dots span{width:5px;height:5px;border-radius:50%;background:var(--accent-cyan);
+                    animation:typing 1.4s infinite}
+  .typing-dots span:nth-child(2){animation-delay:.2s}
+  .typing-dots span:nth-child(3){animation-delay:.4s}
+  @keyframes typing{0%,60%,100%{opacity:.3}30%{opacity:1}}
+
+  /* synthesis 特殊样式(更醒目,因为是最终结论) */
+  .synthesis-card{background:linear-gradient(180deg, rgba(168,85,247,.06), transparent);
+                  border:1px solid var(--border-subtle);
+                  border-radius:var(--radius-md);overflow:hidden}
+  .synthesis-card.queued{opacity:.55}
+  .synthesis-card.running{border-color:rgba(168,85,247,.4)}
+  .synthesis-card.done{border-color:rgba(168,85,247,.4)}
+
+  /* gear popout — roundtable scope (3 items only) */
+  .gear-popout{position:relative;width:240px;background:var(--bg-elevated);
+               border:1px solid var(--border-strong);border-radius:var(--radius-md);
+               box-shadow:0 12px 40px rgba(0,0,0,.6);
+               padding:4px 0;font-size:13px}
+  .gear-popout::before{content:'';position:absolute;top:-7px;right:18px;
+                       width:12px;height:12px;background:var(--bg-elevated);
+                       border-left:1px solid var(--border-strong);
+                       border-top:1px solid var(--border-strong);
+                       transform:rotate(45deg)}
+  .gear-section{padding:6px 0;border-bottom:1px solid var(--border-subtle)}
+  .gear-section:last-child{border-bottom:none}
+  .gear-item{padding:8px 14px;display:flex;align-items:center;gap:10px;
+             cursor:pointer;color:var(--text-primary)}
+  .gear-item:hover{background:var(--bg-hover)}
+  .gear-item svg{width:14px;height:14px;color:var(--text-secondary);flex-shrink:0}
+  .gear-item.danger{color:var(--accent-red)}
+  .gear-item.danger svg{color:var(--accent-red)}
+  .gear-item.disabled{opacity:.45;cursor:not-allowed}
+  .gear-item .right{margin-left:auto;font-size:10px;color:var(--text-tertiary);
+                    font-family:var(--font-mono)}
+
+  .frame-label{display:block;margin-top:12px;font-size:11px;color:var(--text-tertiary);
+               font-family:var(--font-mono);
+               background:var(--bg-surface);padding:4px 10px;border-radius:var(--radius-full);
+               border:1px solid var(--border-subtle);text-align:center;width:fit-content;
+               margin-left:auto;margin-right:auto}
+  .gear-label{font-size:11px;color:var(--text-tertiary);text-align:center;
+              margin-top:8px;font-family:var(--font-mono)}
+</style>
+</head>
+<body>
+
+<h1>04 · roundtable 详情(手机)</h1>
+<p class="lead">点进一个辩论看的页面。<b>没有 input bar(辩论一次性,问完就跑)</b>。结构 = Question + Round 1 + Round 2 + Synthesis。每个 persona 是独立折叠卡(类似 02 的 turn 折叠)。</p>
+
+<div class="notes">
+  <h2>关键交互决策</h2>
+  <ul>
+    <li><b>没有 input bar</b>(辩论是一次性,跑完就完;要新讨论开新问题) —— 跟 03 task 详情一致</li>
+    <li><b>Question 是一等公民</b>(顶部大字),不像 task 的 prompt 是配置项</li>
+    <li><b>Round → Persona 两层折叠</b>:外层按 Round 分大 section,内层每个 persona 自己一个卡片可独立折叠 / 展开</li>
+    <li><b>没有 tool_use / approval / cancel-per-persona</b>:roundtable 是纯文本推理。整个 roundtable 可以 Cancel</li>
+    <li><b>Synthesis 是高光</b>:purple 边框 + 渐变背景,默认 done 时展开(用户最关心结论)</li>
+    <li><b>Persona stance chip</b>:`↑ pro` / `↓ con` / `→ flex`,3 类色,在折叠头一眼可见,不必展开看正文</li>
+    <li><b>齿轮菜单 3 项</b>:Copy result(synthesis 完成才可点)/ Cancel(active 才可点)/ Delete</li>
+  </ul>
+</div>
+
+<div class="stage">
+
+  <!-- ============== PHONE: roundtable detail (ACTIVE 状态) ============== -->
+  <div>
+  <div class="phone">
+
+    <div class="topbar">
+      <a class="topbar-back">← Roundtable</a>
+      <div class="topbar-title">OAuth 登录?</div>
+      <div class="topbar-gear" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+    </div>
+
+    <div class="body">
+
+      <!-- question card -->
+      <div class="question-card active">
+        <div class="question-label">Question</div>
+        <div class="question-text">是否要为 cc-workflow 加入 OAuth 登录?</div>
+        <div class="question-meta">
+          <span class="progress-state">
+            <span class="pulse"></span>
+            Active
+          </span>
+          <span>·</span>
+          <span class="progress-count">Round 2/2 · 2 of 4 done</span>
+        </div>
+      </div>
+
+      <!-- Round 1 - collapsed(全 4 个 persona 折叠成 summary) -->
+      <div class="section">
+        <div class="section-head">
+          <span class="caret">▶</span>
+          Round 1
+          <span class="progress-tag done">✓ done · 4/4</span>
+        </div>
+
+        <div class="persona">
+          <div class="persona-head">
+            <span class="caret">▶</span>
+            <span class="avatar green">极</span>
+            <span class="persona-name">极简派</span>
+            <span class="persona-stance stance-con">↓ con</span>
+            <span class="persona-vendor">kimi</span>
+            <span class="persona-time">12s</span>
+          </div>
+        </div>
+
+        <div class="persona">
+          <div class="persona-head">
+            <span class="caret">▶</span>
+            <span class="avatar cyan">场</span>
+            <span class="persona-name">场景派</span>
+            <span class="persona-stance stance-pro">↑ pro</span>
+            <span class="persona-vendor">claude</span>
+            <span class="persona-time">15s</span>
+          </div>
+        </div>
+
+        <div class="persona">
+          <div class="persona-head">
+            <span class="caret">▶</span>
+            <span class="avatar amber">借</span>
+            <span class="persona-name">借鉴派</span>
+            <span class="persona-stance stance-pro">↑ pro</span>
+            <span class="persona-vendor">kimi</span>
+            <span class="persona-time">18s</span>
+          </div>
+        </div>
+
+        <div class="persona">
+          <div class="persona-head">
+            <span class="caret">▶</span>
+            <span class="avatar red">悲</span>
+            <span class="persona-name">悲观派</span>
+            <span class="persona-stance stance-con">↓ con</span>
+            <span class="persona-vendor">gpt</span>
+            <span class="persona-time">14s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Round 2 - 进行中,展开 -->
+      <div class="section">
+        <div class="section-head">
+          <span class="caret" style="color:var(--text-secondary)">▼</span>
+          Round 2
+          <span class="progress-tag running">● running · 2/4</span>
+        </div>
+
+        <!-- persona 1 done, expanded -->
+        <div class="persona">
+          <div class="persona-head">
+            <span class="caret" style="color:var(--text-secondary)">▼</span>
+            <span class="avatar green">极</span>
+            <span class="persona-name">极简派</span>
+            <span class="persona-stance stance-con">↓ con</span>
+            <span class="persona-vendor">kimi</span>
+            <span class="persona-time">9s</span>
+          </div>
+          <div class="persona-body">
+            <div class="lead-line">立场不变:不加 OAuth。</div>
+            <ul>
+              <li>场景派的"未来多人"是 YAGNI——还没发生</li>
+              <li>借鉴派引用 Vercel,但 Vercel 是面向千万用户的 SaaS,不是单人工具</li>
+              <li>多一个依赖就多一处可能 401</li>
+            </ul>
+            <em>给场景派一个让步:留 stub 函数,真到需要时 30 分钟能接上。</em>
+          </div>
+        </div>
+
+        <!-- persona 2 done, expanded -->
+        <div class="persona">
+          <div class="persona-head">
+            <span class="caret" style="color:var(--text-secondary)">▼</span>
+            <span class="avatar cyan">场</span>
+            <span class="persona-name">场景派</span>
+            <span class="persona-stance stance-flex">→ flex</span>
+            <span class="persona-vendor">claude</span>
+            <span class="persona-time">8s</span>
+          </div>
+          <div class="persona-body">
+            <div class="lead-line">立场松动:接受不加。</div>
+            <ul>
+              <li>极简派关于 YAGNI 的论据成立——目前确实没多用户场景</li>
+              <li>极简派的"留 stub 让步"是合理的折中</li>
+            </ul>
+            <em>建议:在 README 里写一句"未来若需要多用户,推荐 GitHub OAuth";不在代码里实现。</em>
+          </div>
+        </div>
+
+        <!-- persona 3 running, typing -->
+        <div class="persona running">
+          <div class="persona-head">
+            <span class="caret">▶</span>
+            <span class="avatar amber">借</span>
+            <span class="persona-name">借鉴派</span>
+            <span class="persona-vendor">kimi</span>
+          </div>
+          <div class="typing-block">
+            <div class="typing-dots"><span></span><span></span><span></span></div>
+            <span>writing…</span>
+          </div>
+        </div>
+
+        <!-- persona 4 queued -->
+        <div class="persona queued">
+          <div class="persona-head">
+            <span class="caret">○</span>
+            <span class="avatar red">悲</span>
+            <span class="persona-name">悲观派</span>
+            <span class="persona-vendor">gpt</span>
+            <span class="persona-time" style="color:var(--text-disabled)">queued</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Synthesis - queued -->
+      <div class="section">
+        <div class="section-head">
+          <span class="caret">○</span>
+          Synthesis
+          <span class="progress-tag queued">○ queued</span>
+        </div>
+
+        <div class="synthesis-card queued">
+          <div class="persona-head">
+            <span class="caret">○</span>
+            <span class="avatar purple">合</span>
+            <span class="persona-name">合成派</span>
+            <span class="persona-vendor">claude</span>
+            <span class="persona-time" style="color:var(--text-disabled)">waiting for round 2</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+  <div class="frame-label">roundtable · active · Round 2/2 进行中 · 2/4</div>
+  </div>
+
+  <!-- ============== GEAR MENU (popout) ============== -->
+  <div>
+    <div style="margin-top:60px">
+      <div class="gear-popout">
+        <div class="gear-section">
+          <div class="gear-item disabled" title="Wait until synthesis is done">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            Copy result
+            <span class="right">queued</span>
+          </div>
+          <div class="gear-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
+            Cancel
+            <span class="right">stop all</span>
+          </div>
+        </div>
+
+        <div class="gear-section">
+          <div class="gear-item danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            Delete
+          </div>
+        </div>
+      </div>
+      <div class="gear-label">齿轮菜单 · 3 项</div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
