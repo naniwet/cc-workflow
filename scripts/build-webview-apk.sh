@@ -121,6 +121,7 @@ log "[2/5] 生成 Android 项目骨架"
 rm -rf "$PROJECT"
 mkdir -p "$PROJECT/app/src/main/java/$PACKAGE_PATH"
 mkdir -p "$PROJECT/app/src/main/res/values"
+mkdir -p "$PROJECT/app/src/main/res/xml"
 mkdir -p "$PROJECT/app/src/main/res/mipmap-xhdpi"
 
 # --- settings.gradle ---
@@ -178,7 +179,10 @@ android {
     defaultConfig {
         applicationId "$PACKAGE_ID"
         minSdk 21
-        targetSdk 36
+        // targetSdk 34(Android 14)而不是 36 —— 实测 36 在卓易通系统上
+        // 触发 WebView ERR_CONNECTION_RESET,bubblewrap 用 34 没事。怀疑
+        // Android 16 引入了某种新网络隐私限制,debug 成本太高,降一档稳。
+        targetSdk 34
         versionCode 100
         versionName "1.0-webview"
     }
@@ -227,7 +231,9 @@ cat > "$PROJECT/app/src/main/AndroidManifest.xml" <<EOF
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.CCWorkflow"
         android:allowBackup="false"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config">
 
         <activity
             android:name=".MainActivity"
@@ -273,8 +279,32 @@ class MainActivity : AppCompatActivity() {
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = false
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            webViewClient = WebViewClient()  // 阻止跳到外部浏览器
+            // MIXED_CONTENT_NEVER_ALLOW 过严 —— 即便 PWA 自己全 HTTPS,某些
+            // 国产 ROM 的 WebView 会把任意请求标 mixed 然后 reset。
+            // COMPATIBILITY_MODE 跟主流浏览器对齐(默认放过 HTTPS 资源,
+            // 拒绝 HTTP active content)。
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            // 模拟 Chrome UA。卓易通系统的 WebView 默认 UA 含 "wv" 标识,
+            // 部分中间件 / 反爬规则会拒绝带 wv 的请求 → ERR_CONNECTION_RESET。
+            settings.userAgentString = settings.userAgentString
+                .replace("; wv)", ")")
+                .replace(" wv ", " ")
+            // 失败时把详细错误显示在屏幕上(默认 Chrome 那个错误页),方便 debug
+            webViewClient = object : WebViewClient() {
+                override fun onReceivedError(
+                    view: WebView?,
+                    request: android.webkit.WebResourceRequest?,
+                    error: android.webkit.WebResourceError?
+                ) {
+                    if (request?.isForMainFrame == true) {
+                        val msg = "url=\${request.url}<br>code=\${error?.errorCode}<br>desc=\${error?.description}<br>UA=\${settings.userAgentString}"
+                        view?.loadData(
+                            "<html><body style='font-family:sans-serif;padding:1em;color:#fff;background:#000'><h2>WebView 加载失败</h2><p>\$msg</p></body></html>",
+                            "text/html; charset=utf-8", "utf-8"
+                        )
+                    }
+                }
+            }
             loadUrl("https://$HOST/pwa/")
         }
         setContentView(webView)
@@ -314,6 +344,21 @@ cat > "$PROJECT/app/src/main/res/values/strings.xml" <<'EOF'
 <resources>
     <string name="app_name">cc-workflow</string>
 </resources>
+EOF
+
+# --- res/xml/network_security_config.xml(显式信任 system + user CA + 允许 cleartext) ---
+# Android 9+ 默认禁 cleartext + Android 7+ 默认不信任 user CA。明确写出来
+# 排除"WebView 因为 CA 不在 trust list 而 reset"的可能性。
+cat > "$PROJECT/app/src/main/res/xml/network_security_config.xml" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
 EOF
 
 # --- res/values/themes.xml ---
