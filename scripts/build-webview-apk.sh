@@ -269,6 +269,11 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 启用 chrome://inspect 远程 debug(USB 连接 + 开发者选项 USB 调试,
+        // PC Chrome 地址栏输 chrome://inspect 能看到这个 WebView 实例并 attach
+        // DevTools。装上要 debug 时打开,平时不影响)
+        WebView.setWebContentsDebuggingEnabled(true)
+
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -279,32 +284,44 @@ class MainActivity : AppCompatActivity() {
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = false
-            // MIXED_CONTENT_NEVER_ALLOW 过严 —— 即便 PWA 自己全 HTTPS,某些
-            // 国产 ROM 的 WebView 会把任意请求标 mixed 然后 reset。
-            // COMPATIBILITY_MODE 跟主流浏览器对齐(默认放过 HTTPS 资源,
-            // 拒绝 HTTP active content)。
+            // MIXED_CONTENT_COMPATIBILITY_MODE:跟主流浏览器对齐(放过 HTTPS、
+            // 拒绝 HTTP active content)。NEVER_ALLOW 太严,部分国产 ROM 会把
+            // 合法 HTTPS 请求也标 mixed 然后 reset。
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            // 模拟 Chrome UA。卓易通系统的 WebView 默认 UA 含 "wv" 标识,
-            // 部分中间件 / 反爬规则会拒绝带 wv 的请求 → ERR_CONNECTION_RESET。
-            settings.userAgentString = settings.userAgentString
-                .replace("; wv)", ")")
-                .replace(" wv ", " ")
-            // 失败时把详细错误显示在屏幕上(默认 Chrome 那个错误页),方便 debug
+            // 去掉 UA 末尾的 "; wv)" 标识,模拟普通 Chrome。WebView 默认 UA 带
+            // "wv" 会被部分反爬中间件拒绝 → ERR_CONNECTION_RESET。
+            settings.userAgentString = settings.userAgentString.replace("; wv)", ")")
+
+            // WebViewClient: 只 Toast 提示主 frame 错误,不替换页面。
+            // 上一版用 loadData 替换页面 → 任何子资源错误也会触发 isForMainFrame
+            // 误判 → 把 PWA 干掉变白屏。改 Toast 是非侵入式,出错能看到 code,
+            // 但 PWA 本身正常的话页面不受影响。
             webViewClient = object : WebViewClient() {
                 override fun onReceivedError(
                     view: WebView?,
                     request: android.webkit.WebResourceRequest?,
                     error: android.webkit.WebResourceError?
                 ) {
+                    android.util.Log.e("WV", "url=\${request?.url} code=\${error?.errorCode} desc=\${error?.description}")
                     if (request?.isForMainFrame == true) {
-                        val msg = "url=\${request.url}<br>code=\${error?.errorCode}<br>desc=\${error?.description}<br>UA=\${settings.userAgentString}"
-                        view?.loadData(
-                            "<html><body style='font-family:sans-serif;padding:1em;color:#fff;background:#000'><h2>WebView 加载失败</h2><p>\$msg</p></body></html>",
-                            "text/html; charset=utf-8", "utf-8"
-                        )
+                        android.widget.Toast.makeText(
+                            this@MainActivity,
+                            "主页失败 code=\${error?.errorCode}: \${error?.description}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
                     }
                 }
             }
+
+            // WebChromeClient: 把 PWA 的 console.log/warn/error 转发到 logcat。
+            // 屏幕上看不到,但接 adb 时 \`adb logcat | grep WV.console\` 能看到。
+            webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
+                    android.util.Log.d("WV.console", "[\${msg?.messageLevel()}] \${msg?.message()} @\${msg?.sourceId()}:\${msg?.lineNumber()}")
+                    return true
+                }
+            }
+
             loadUrl("https://$HOST/pwa/")
         }
         setContentView(webView)
