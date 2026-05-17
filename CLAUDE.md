@@ -122,7 +122,26 @@ trust=on 的 audit trail 是有意保留的——用户能事后看到 claude �
 
 **Prompt 模板是 Piebald-AI 社区反向工程版本,不是 Anthropic 官方**——升级 claude CLI 后建议在 staging 验证一次。改这个 prompt 时,先读 `agent-run.sh` 里 `_auto_compact` 那段注释。
 
-### 7. 通用语言(术语统一,几乎不可逆)
+### 7. PWA Android APK 套壳(2026-05 探索 + 落地)
+
+PWA 打成 Android APK 有两个脚本,共享 keystore / SDK / gradle wrapper:
+
+| 脚本 | 路线 | 当前状态 |
+|---|---|---|
+| `scripts/build-twa-apk.sh` | bubblewrap → TWA + WebView fallback | **当前在用** |
+| `scripts/build-webview-apk.sh` | 自己写 80 行 Kotlin,纯 WebView 套壳 | **死路**,仅留作研究 |
+
+**APK 是个空壳**——UI / JS / CSS 一点都不打包,每次启动从 `https://<host>/pwa/` 实时拉。改 PWA 代码**不用重打 APK**(SW 网络优先,刷新即生效)。唯二需要重打的场景:换域名 / 换 packageId。
+
+**已踩过的关键坑(都在脚本注释 + commit message 里):**
+
+- **fallbackType 字段在 Edge 接管 TWA intent 时根本不生效**——LauncherActivity 直接走 Custom Tab,toolbar 是 Edge 渲染的不在我们 APK 里。要彻底去 toolbar 只能让真正的 Chromium 浏览器(Chrome / Brave)接管 TWA + assetlinks 验证通过。国产 ROM(卓易通)+ 国产浏览器组合下,toolbar 大概率改不掉,接受现状即可
+- **装新 APK 后表现异常先卸载 / 清数据**(设置 → 应用 → cc-workflow → 存储 → 清除数据)。Android launcher cache 经常残留旧 APK state,新 APK 装上但系统还用旧 state 启动,表现成卡 splash / 白屏 / 旧版界面。今天踩了 1 小时这个坑
+- **build-webview-apk.sh 在国产 ROM 上死路**:裸 `android.webkit.WebView` 加载 PWA 触发 `ERR_CONNECTION_RESET`,卓易通系统对所有 WebView 出站做了拦截;但同一系统 WebView 在 Edge Custom Tab 包装下又能加载——根因不明,反复 debug 无果,搁置
+
+详细的踩坑历史(SDK 装组件 / gradle 镜像 / cmdline-tools 等)在 `scripts/build-twa-apk.sh` 的 header 注释里,改 APK 路线前必读。
+
+### 8. 通用语言(术语统一,几乎不可逆)
 
 | 术语 | 含义 |
 |---|---|
@@ -169,4 +188,5 @@ trust=on 的 audit trail 是有意保留的——用户能事后看到 claude �
 | `deploy/INSTALL.md` | 第一次部署,或换机器 |
 | `deploy/MIGRATE-TO-NONROOT.md` | 想切非 root 跑(claude-code#20449 兜底) |
 | `docs/feishu-usage.md` | 飞书端 slash 命令清单 / 触发 / 排错 |
+| `scripts/build-twa-apk.sh`(header 注释) | 想打 / 重打 Android APK,或 debug APK 问题(踩坑历史 + 自动化的所有 workaround) |
 | `docs/archive/` | 想理解某个决策**为什么**当时那样定。注意:**历史快照,实施期间有偏离**,当前架构以 README 为准 |
