@@ -31,6 +31,10 @@ SESSIONS_FILE = STATE_DIR / "sessions.json"
 # <slug>.jsonl with a meta header + 9 turn lines. Static — backend
 # scans this dir for the list view, reads one file for the detail view.
 ROUNDTABLES_DIR = STATE_DIR / "roundtables"
+# PWA 上传文件落地路径 — `<ws>/<turn_uuid>/<filename>`。在 workspace 仓库外面,
+# 不进 git。每周由 cron(/etc/cron.d/cc-loops 里那行 find -mtime +7 -delete)
+# 清理 7 天以上文件。详细约束见 backend/main.py:post_uploads + CLAUDE.md §7。
+UPLOADS_DIR = STATE_DIR / "uploads"
 
 # Where agent-run.sh resolves <workspace> names — must match agent-run.sh's
 # WORKSPACES_DIR constant. Used by ui_cards.run_form_card() to populate the

@@ -49,12 +49,17 @@ git clone https://github.com/naniwet/cc-workflow.git
 cd cc-workflow
 
 python3 -m venv .venv
-.venv/bin/pip install fastapi uvicorn pydantic tomli cryptography
+.venv/bin/pip install fastapi uvicorn pydantic tomli cryptography python-multipart
 ```
 
 `cryptography` is only used when Feishu Encrypt Key is configured — but it's
 small and the import is lazy, so install it preemptively to avoid runtime
 `pip install` surprises.
+
+`python-multipart` is required by FastAPI's `UploadFile` (used by the PWA file
+upload endpoint `POST /uploads/{workspace}`). Without it the backend raises
+a clear `RuntimeError: Form data requires "python-multipart" to be installed.`
+on the first upload attempt, so install it preemptively too.
 
 ## 2. Configure secrets
 

@@ -91,7 +91,7 @@ journalctl -t cc-workflow -f
 | 路径 | 内容 | 谁写 |
 |---|---|---|
 | `~/.cc-workflow/` | 配置:`config.toml` / `secrets.toml` / `providers.json` / `workspaces.json` / `.session-secret` | 人工编辑 + backend 增删 workspace |
-| `~/.cc-state/` | 运行时:`runs.db` (SQLite) / `jobs/*.json`(cron 计数器)/ `locks/*.lock` (flock) / `logs/*.jsonl`(每 run stream) | backend + agent-run.sh |
+| `~/.cc-state/` | 运行时:`runs.db` (SQLite) / `jobs/*.json`(cron 计数器)/ `locks/*.lock` (flock) / `logs/*.jsonl`(每 run stream) / `uploads/<ws>/<turn>/*`(PWA 上传文件,每周 cron 清 7 天以上) | backend + agent-run.sh |
 
 `config.py` 读 `~/.cc-workflow/`,`db.py` 读 `~/.cc-state/runs.db`,`runner.py` 写 `~/.cc-state/{logs,locks}`。**不要把这两个目录混用**。
 

@@ -489,11 +489,103 @@ const workspaceTurnOverrides = {};                   // key: run id → expanded
 const _promptQueue = {};
 let _promptQueueSeq = 0;
 
-function _enqueuePrompt(ws, prompt) {
+// 用户选了文件但还没提交的本地 File 对象 — 每个 workspace 一个数组。
+// 提交时:
+//   非 busy 路径 → 立即 POST /uploads 拿绝对 paths,再调 /run 传 attachments
+//   busy 路径    → File 对象直接塞进队列项的 attachments 字段,等出队时再上传
+// in-memory,刷新 PWA 丢失(跟 _promptQueue 一致 — 队列本来就不持久化)。
+const _pendingUploads = {};   // { [ws]: [{ tempId, name, size, file: File }] }
+let _pendingUploadSeq = 0;
+const _UPLOAD_MAX_BYTES = 10 * 1024 * 1024;   // 跟 nginx /uploads location 对齐
+const _UPLOAD_MAX_FILES = 10;                 // 跟 RunRequest.attachments max_length 对齐
+
+function _addPendingFile(ws, file) {
+  if (!_pendingUploads[ws]) _pendingUploads[ws] = [];
+  _pendingUploads[ws].push({
+    tempId: `up-${++_pendingUploadSeq}`,
+    name: file.name,
+    size: file.size,
+    file,
+  });
+}
+
+function _removePendingFile(ws, tempId) {
+  if (!_pendingUploads[ws]) return;
+  _pendingUploads[ws] = _pendingUploads[ws].filter((u) => u.tempId !== tempId);
+  if (_pendingUploads[ws].length === 0) delete _pendingUploads[ws];
+}
+
+function _clearPending(ws) {
+  delete _pendingUploads[ws];
+}
+
+function _totalPendingBytes(ws) {
+  return (_pendingUploads[ws] || []).reduce((sum, u) => sum + u.size, 0);
+}
+
+function _formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
+}
+
+// 重画指定 ws 的所有 .attach-chips 容器(card grid + mobile detail 可能并存,
+// 全部更新最稳)。空数组 → innerHTML='',容器本身保留(占位不跳)。
+function _renderChips(ws) {
+  const items = _pendingUploads[ws] || [];
+  const html = items.map((u) => `
+    <span class="attach-chip" data-tempid="${esc(u.tempId)}">
+      <span class="chip-name">${esc(u.name)}</span>
+      <span class="chip-size muted">${esc(_formatBytes(u.size))}</span>
+      <button class="chip-remove" type="button"
+              data-ws="${esc(ws)}" data-tempid="${esc(u.tempId)}"
+              aria-label="Remove ${esc(u.name)}">×</button>
+    </span>
+  `).join('');
+  for (const container of document.querySelectorAll(`.attach-chips[data-ws="${ws}"]`)) {
+    container.innerHTML = html;
+  }
+}
+
+// 把一组 File 对象走 multipart POST 上传,拿到服务器的绝对 paths 返回。
+// 不用 api() — FormData 必须让浏览器自带 Content-Type: multipart/form-data;
+// boundary=...,api() 默认塞 application/json 会破坏请求。
+// fileObjs 可以是 [{ file, ... }] 形式或者裸 File 数组。
+async function _uploadFiles(ws, fileObjs) {
+  const files = fileObjs.map((x) => x.file || x);
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f, f.name);
+  const r = await fetch(`/uploads/${encodeURIComponent(ws)}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: fd,
+  });
+  if (r.status === 401 || r.status === 403) {
+    // session 过期 — 跳登录(跟 api() 同款行为)
+    window.location.href = '/pwa/login.html?next=' + encodeURIComponent(window.location.href);
+    throw new Error('unauthorized');
+  }
+  if (!r.ok) {
+    let msg = `upload failed (${r.status})`;
+    try {
+      const body = await r.json();
+      msg = (body.detail && (body.detail.msg || body.detail.error)) || body.error || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+  const data = await r.json();
+  return data.paths || [];
+}
+
+// 第 3 参 attachments(可选)— File 对象数组(跟 _pendingUploads 同结构);
+// 出队时 _dispatchAllQueues 拿 File 上传。不持久化:刷新 PWA 队列里的 File
+// 引用丢失,跟 _promptQueue 现状一致。
+function _enqueuePrompt(ws, prompt, attachments = []) {
   if (!_promptQueue[ws]) _promptQueue[ws] = [];
   _promptQueue[ws].push({
     id: `q-${++_promptQueueSeq}`,
     prompt,
+    attachments,
     queuedAt: Math.floor(Date.now() / 1000),
   });
 }
@@ -522,6 +614,21 @@ async function _dispatchAllQueues() {
     if (queue.length === 0) delete _promptQueue[ws];
     _dispatching.add(ws);
     try {
+      // 出队时如果带附件,先 POST /uploads 拿绝对 paths,再调 /run。
+      // 上传失败把 next 塞回队头让用户再试,跟 /run 失败一致。
+      let attachmentPaths;
+      if (next.attachments && next.attachments.length > 0) {
+        try {
+          attachmentPaths = await _uploadFiles(ws, next.attachments);
+        } catch (uerr) {
+          if (!_promptQueue[ws]) _promptQueue[ws] = [];
+          _promptQueue[ws].unshift(next);
+          showError(`队列附件上传失败: ${uerr.message}`);
+          render();
+          _dispatching.delete(ws);
+          continue;
+        }
+      }
       await api('/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -530,6 +637,7 @@ async function _dispatchAllQueues() {
           prompt: next.prompt,
           session_key: `pwa-${ws}`,
           source: 'pwa',
+          ...(attachmentPaths ? { attachments: attachmentPaths } : {}),
         }),
       });
       // dispatch 后即刻 refresh + 重 render,让 UI 看到新 running turn
@@ -1459,6 +1567,65 @@ function bindWorkspaceColHandlers(root) {
     btn.addEventListener('click', _onQueueRemoveClick);
     _addTapFallback(btn, _onQueueRemoveClick);
   }
+  // 📎 按钮:点了打开 file picker(同 form 内的隐藏 input)
+  for (const btn of root.querySelectorAll('.attach-btn')) {
+    btn.addEventListener('click', _onAttachBtnClick);
+    _addTapFallback(btn, _onAttachBtnClick);
+  }
+  // file input change:用户选了文件 → 校验大小 / 数量 → 加进 _pendingUploads
+  for (const input of root.querySelectorAll('.attach-input')) {
+    input.addEventListener('change', _onAttachInputChange);
+  }
+  // chip 上的 × 按钮:从 _pendingUploads 移除
+  for (const btn of root.querySelectorAll('.chip-remove')) {
+    btn.addEventListener('click', _onChipRemoveClick);
+    _addTapFallback(btn, _onChipRemoveClick);
+  }
+  // 进入卡片 / 详情时,如果该 ws 有 _pendingUploads,重画一次 chip(因为
+  // 整页 re-render 后容器是空的,_pendingUploads 状态还在但 DOM 没显示)
+  for (const container of root.querySelectorAll('.attach-chips[data-ws]')) {
+    const ws = container.dataset.ws;
+    if (ws && _pendingUploads[ws] && _pendingUploads[ws].length > 0) _renderChips(ws);
+  }
+}
+
+function _onAttachBtnClick(e) {
+  const btn = e.currentTarget;
+  // 找同 form 内的 attach-input(隐藏的)→ trigger click 弹文件选择
+  const form = btn.closest('form');
+  const input = form?.querySelector('.attach-input');
+  if (input) input.click();
+}
+
+function _onAttachInputChange(e) {
+  const input = e.target;
+  const ws = input.dataset.ws;
+  if (!ws) return;
+  const incoming = Array.from(input.files || []);
+  for (const f of incoming) {
+    const currentCount = (_pendingUploads[ws] || []).length;
+    if (currentCount >= _UPLOAD_MAX_FILES) {
+      showError(`最多 ${_UPLOAD_MAX_FILES} 个附件,已跳过剩余文件`);
+      break;
+    }
+    if (_totalPendingBytes(ws) + f.size > _UPLOAD_MAX_BYTES) {
+      showError(`附件总大小超过 ${_UPLOAD_MAX_BYTES / (1024 * 1024)} MB,已跳过 ${f.name}`);
+      continue;
+    }
+    _addPendingFile(ws, f);
+  }
+  _renderChips(ws);
+  // 清 input value,允许下次选同名文件(否则 change 不触发)
+  input.value = '';
+}
+
+function _onChipRemoveClick(e) {
+  const btn = e.currentTarget;
+  const ws = btn.dataset.ws;
+  const tempId = btn.dataset.tempid;
+  if (!ws || !tempId) return;
+  _removePendingFile(ws, tempId);
+  _renderChips(ws);
 }
 
 function _onQueueRemoveClick(e) {
@@ -2377,6 +2544,9 @@ function workspaceColHtml(name, data, opts = {}) {
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
       ${_queueListHtml(name)}
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
+        <div class="attach-chips" data-ws="${esc(name)}"></div>
+        <input type="file" class="attach-input" data-ws="${esc(name)}" multiple hidden>
+        <button type="button" class="attach-btn" data-ws="${esc(name)}" aria-label="Attach files">📎</button>
         <textarea name="prompt"></textarea>
         <button type="submit">Run</button>
       </form>
@@ -2390,14 +2560,18 @@ function workspaceColHtml(name, data, opts = {}) {
 function _queueListHtml(ws) {
   const items = _promptQueue[ws] || [];
   if (items.length === 0) return '';
-  const rows = items.map((m) => `
-    <div class="queue-item" data-ws="${esc(ws)}" data-qid="${esc(m.id)}">
-      <span class="queue-icon">⏳</span>
-      <span class="queue-prompt">${esc((m.prompt.split(/\r?\n/)[0] || '').slice(0, 200))}</span>
-      <button class="queue-remove" type="button"
-              data-ws="${esc(ws)}" data-qid="${esc(m.id)}" title="Remove from queue">×</button>
-    </div>
-  `).join('');
+  const rows = items.map((m) => {
+    const nAttach = (m.attachments && m.attachments.length) || 0;
+    return `
+      <div class="queue-item" data-ws="${esc(ws)}" data-qid="${esc(m.id)}">
+        <span class="queue-icon">⏳</span>
+        <span class="queue-prompt">${esc((m.prompt.split(/\r?\n/)[0] || '').slice(0, 200))}</span>
+        ${nAttach ? `<span class="queue-attach" title="${nAttach} attachment(s)">📎 ${nAttach}</span>` : ''}
+        <button class="queue-remove" type="button"
+                data-ws="${esc(ws)}" data-qid="${esc(m.id)}" title="Remove from queue">×</button>
+      </div>
+    `;
+  }).join('');
   return `
     <div class="queue-list" data-ws="${esc(ws)}">
       <div class="queue-header">已排队(${items.length}),等当前 run 完成后按顺序发出</div>
@@ -2493,12 +2667,18 @@ async function onTriggerSubmit(e) {
   const ws = form.dataset.workspace;
   const prompt = form.elements.prompt.value.trim();
   if (!prompt) return;
+  // 提交时拿当前 ws 的 pending 附件(File 对象),清掉 _pendingUploads[ws]
+  // (无论走 busy / 立即提交,UI 上的 chip 都该消失)。
+  const pending = [..._pendingUploads[ws] || []];
   // Workspace 已有 run 在跑 / 已有排队 → 这条进队列,不调 /run。后端会
   // 409 拒绝(workspace_busy),前端排队 + 上一条跑完自动 dispatch 才能
   // 顺畅串起来。
   const busy = _hasActiveRun(ws) || (_promptQueue[ws]?.length > 0);
   if (busy) {
-    _enqueuePrompt(ws, prompt);
+    // File 对象塞进队列(不上传 — 等出队时 _dispatchAllQueues 再上传)
+    _enqueuePrompt(ws, prompt, pending);
+    _clearPending(ws);
+    _renderChips(ws);
     form.reset();
     clearDraft(form.dataset.formId);
     form.querySelector('textarea')?.blur();
@@ -2511,6 +2691,19 @@ async function onTriggerSubmit(e) {
   btn.disabled = true;
   btn.textContent = 'Running…';
   try {
+    // 有附件 → 先上传拿绝对 paths。上传失败 → showError + 早退,
+    // pending 留在 _pendingUploads(没清),用户可以删 chip 或重试。
+    let attachmentPaths;
+    if (pending.length > 0) {
+      try {
+        attachmentPaths = await _uploadFiles(ws, pending);
+      } catch (uerr) {
+        showError(`附件上传失败: ${uerr.message}`);
+        btn.disabled = false;
+        btn.textContent = 'Run';
+        return;
+      }
+    }
     // Provider comes from workspace settings (set via the inline header
     // select). Engine is also workspace-bound — backend derives it from
     // workspaces.json so we deliberately don't send it from here.
@@ -2522,8 +2715,11 @@ async function onTriggerSubmit(e) {
         prompt,
         session_key: `pwa-${ws}`,
         source: 'pwa',
+        ...(attachmentPaths ? { attachments: attachmentPaths } : {}),
       }),
     });
+    _clearPending(ws);
+    _renderChips(ws);
     form.reset();
     clearDraft(form.dataset.formId);
     // Blur the textarea before kicking off the refresh — render() has a
@@ -2682,6 +2878,9 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
       </button>
       ${_queueListHtml(name)}
       <form class="trigger-form workspace-input" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
+        <div class="attach-chips" data-ws="${esc(name)}"></div>
+        <input type="file" class="attach-input" data-ws="${esc(name)}" multiple hidden>
+        <button type="button" class="attach-btn" data-ws="${esc(name)}" aria-label="Attach files">📎</button>
         <textarea name="prompt"></textarea>
         <button class="run-btn" type="submit">Run</button>
       </form>

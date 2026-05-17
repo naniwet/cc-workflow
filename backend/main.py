@@ -55,7 +55,9 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
+import uuid
+
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -76,6 +78,12 @@ app = FastAPI(title="cc-workflow", version="0.1.0")
 def _on_startup() -> None:
     db.init()
     _reap_orphan_runs()
+    # 提前建好 uploads 根目录 + 严格权限 0700,避免第一次 POST /uploads 时
+    # 因为父目录不存在而抛 OSError。cron 每周清理 7 天以上的内容,这里不做。
+    try:
+        config.UPLOADS_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
+    except OSError as e:    # noqa: BLE001
+        print(f"WARNING: could not create UPLOADS_DIR {config.UPLOADS_DIR}: {e}", flush=True)
     # Plant our blanket `permissions.allow` list into ~/.claude/settings.json
     # so claude's L1 permission check passes for every tool we know about,
     # in every cwd (workspace root AND git worktree). Trust=on/off
@@ -173,6 +181,11 @@ class RunRequest(BaseModel):
     session_key: Optional[str] = Field(default=None, max_length=128)
     source: Literal["pwa", "feishu", "cron", "manual"] = "manual"
     provider: Optional[str] = Field(default=None, max_length=64)   # one-shot LLM override
+    # PWA 提交时附带的上传文件绝对路径(从 POST /uploads/{ws} 拿到)。后端会校验
+    # 每个 path 必须在 UPLOADS_DIR/<workspace>/ 子树下(防路径穿越),然后 append
+    # 到 prompt 末尾 `(附件: p1, p2)`,让 claude CLI 自己识别走 Read / vision。
+    # max_length=10 是为了避免恶意提交超长列表把 argv 撑爆。
+    attachments: Optional[list[str]] = Field(default=None, max_length=10)
 
 
 @app.get("/healthz")  # intentionally NOT protected (monitoring / liveness)
@@ -244,11 +257,46 @@ def post_run(req: RunRequest) -> dict:
                 ),
             },
         )
+    final_prompt = req.prompt
+    if req.attachments:
+        # 校验每个 path:必须绝对路径、存在、且在 UPLOADS_DIR/<workspace>/
+        # 子树下。第 3 条防"用户传 ../../../etc/passwd 让 claude 读"。
+        ws_uploads = (config.UPLOADS_DIR / req.workspace).resolve()
+        validated: list[str] = []
+        for p in req.attachments:
+            try:
+                path = Path(p).resolve(strict=True)
+            except (OSError, RuntimeError) as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": "attachment_invalid", "msg": f"path 不存在或无法访问: {p} ({e})"},
+                )
+            if not path.is_file():
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": "attachment_not_file", "msg": f"不是文件: {p}"},
+                )
+            try:
+                path.relative_to(ws_uploads)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "attachment_outside_uploads",
+                        "msg": f"attachment 必须在 {ws_uploads}/ 下,不能用别处的路径: {p}",
+                    },
+                )
+            validated.append(str(path))
+        # claude CLI 不需要 @ 前缀 — 它能识别 prompt 文本里出现的绝对路径,自己
+        # 决定走 Read tool / vision(.png/.jpg 自动 vision)。用中文括号是为了
+        # 跟 prompt 文本视觉区分;claude 不在意。
+        final_prompt = f"{req.prompt}\n\n(附件: {', '.join(validated)})"
+
     run_id = db.new_run_id()
     runner.submit(
         run_id=run_id,
         workspace=req.workspace,
-        prompt=req.prompt,
+        prompt=final_prompt,
         engine=ws_settings.engine_for(req.workspace),
         session_key=req.session_key,
         source=req.source,
@@ -257,6 +305,92 @@ def post_run(req: RunRequest) -> dict:
         trust=ws_settings.trust_for(req.workspace),
     )
     return {"task_id": run_id, "status": "queued"}
+
+
+# ---------- PWA 上传文件 (multipart) → ~/.cc-state/uploads/<ws>/<turn>/ ----------
+
+# 文件名清洗白名单:中英数字 + . _ -。不在白名单里的字符全部替换成 _,
+# 避免 shell-special / 路径穿越字符。注意:即使后端不走 shell(subprocess argv
+# 直接传),保守清洗成本极低、收益是"prompt 里看到的路径永远是 ASCII/中文",
+# 后续如果有人 grep 日志 / cat 路径不会被特殊字符卡。
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._一-鿿-]")
+# workspace 名校验:跟 RunRequest.workspace 同款约束(避免 ../ 之类直接走进 ws 目录)
+_WS_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_UPLOAD_MAX_BYTES = 10 * 1024 * 1024   # 10 MB 单请求合计上限,跟 nginx location 对齐
+
+
+def _safe_filename(name: str) -> str:
+    """把上传文件名清洗成只含白名单字符。空 / 全被滤掉 → 给个 fallback 名。"""
+    base = Path(name).name   # 去掉 ../ 之类
+    cleaned = _SAFE_FILENAME_RE.sub("_", base).strip("._")
+    return cleaned or "file"
+
+
+@app.post("/uploads/{workspace}", dependencies=PROTECT)
+async def post_uploads(workspace: str, files: list[UploadFile] = File(...)) -> dict:
+    """接 PWA 输入框旁 📎 上传的文件,落到 ~/.cc-state/uploads/<ws>/<turn>/。
+
+    返回 {"turn_id": <12-hex>, "paths": [<abs path>, ...]}。前端把这些 path
+    塞进 /run 的 attachments 字段,后端会 append 到 prompt 末尾。
+
+    单请求合计 10 MB 上限(同 nginx /uploads location 的 client_max_body_size)。
+    超限或写盘失败会清掉这次的半成品目录,抛 413 / 500,前端用 toast 提示。
+    """
+    if not _WS_NAME_RE.match(workspace):
+        raise HTTPException(status_code=400, detail={"error": "workspace_invalid"})
+    # workspace 必须真实存在,避免被恶意当作"随便建目录"的入口
+    if not (config.WORKSPACES_DIR / workspace).is_dir():
+        raise HTTPException(status_code=404, detail={"error": "workspace_not_found"})
+    if not files:
+        raise HTTPException(status_code=400, detail={"error": "no_files"})
+
+    turn_id = uuid.uuid4().hex[:12]
+    dest_dir = config.UPLOADS_DIR / workspace / turn_id
+    try:
+        dest_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail={"error": "mkdir_failed", "msg": str(e)})
+
+    paths: list[str] = []
+    total = 0
+    seen_names: dict[str, int] = {}
+    try:
+        for upload in files:
+            safe = _safe_filename(upload.filename or "file")
+            # 同次上传同名 → 后缀 -2 / -3 ...
+            count = seen_names.get(safe, 0) + 1
+            seen_names[safe] = count
+            if count > 1:
+                stem = Path(safe).stem
+                ext = Path(safe).suffix
+                safe = f"{stem}-{count}{ext}"
+            target = dest_dir / safe
+
+            # 流式读 + 累加大小 + 超限即停。FastAPI UploadFile 默认 SpooledTemporaryFile,
+            # 大文件不会一次性塞内存,但我们还要做 hard cap 避免单个 file 撑爆 10 MB。
+            with open(target, "wb") as fh:
+                while chunk := await upload.read(64 * 1024):
+                    total += len(chunk)
+                    if total > _UPLOAD_MAX_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail={
+                                "error": "too_large",
+                                "msg": f"上传文件合计超过 {_UPLOAD_MAX_BYTES // (1024*1024)} MB",
+                            },
+                        )
+                    fh.write(chunk)
+            os.chmod(target, 0o600)
+            paths.append(str(target))
+    except HTTPException:
+        # 主动抛的(too_large),清掉半成品后透传
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise
+    except OSError as e:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail={"error": "write_failed", "msg": str(e)})
+
+    return {"turn_id": turn_id, "paths": paths}
 
 
 @app.get("/runs/{task_id}/tail", dependencies=PROTECT)

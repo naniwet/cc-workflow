@@ -26,3 +26,8 @@ PATH=/usr/local/bin:/usr/bin:/bin
 #
 # (Note: cron.d files MUST end with a newline — keep the blank line below.)
 
+# --- Housekeeping (always on,不算 example) ---
+# 每周日 04:07 清理 ~/.cc-state/uploads/ 下 7 天前的 PWA 上传文件 + 空目录。
+# 非 root 部署把 /root/ 换成 ~user/(参考 deploy/MIGRATE-TO-NONROOT.md)。
+7 4 * * 0 root find /root/.cc-state/uploads/ -type f -mtime +7 -delete 2>/dev/null; find /root/.cc-state/uploads/ -type d -empty -delete 2>/dev/null
+

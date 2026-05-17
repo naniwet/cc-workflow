@@ -3024,3 +3024,95 @@ pre {
    the universal layout is .ws-meta-mobile (the name is now misleading —
    it's used on both PC + mobile). Leave the .ws-provider class rules
    above intact; nothing references them in current renderers but harmless. */
+
+/* ============================================================================
+ *  PWA 上传附件 — 📎 按钮 + chips(显示在 trigger-form / workspace-input 顶部)
+ *  实现思路:form 启用 flex-wrap,.attach-chips flex-basis:100% 强占第一行,
+ *  后面的 [📎] [textarea] [Run] 自然 wrap 到第二行,跟原有 align-items:flex-end
+ *  兼容(空 chips 时 :empty display:none,form 看起来跟改之前一样)。
+ * ============================================================================ */
+.ws-col .trigger-form,
+.workspace-input { flex-wrap: wrap; }
+
+.attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-basis: 100%;
+  margin: 0;
+}
+.attach-chips:empty { display: none; }
+
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  max-width: 100%;
+  overflow: hidden;
+}
+.attach-chip .chip-name {
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.attach-chip .chip-size {
+  font-size: 10px;
+  opacity: 0.7;
+}
+.attach-chip .chip-remove {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.attach-chip .chip-remove:hover {
+  color: var(--accent-red);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.attach-btn {
+  appearance: none;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.attach-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* 队列项里的 📎 N 标识(已排队的 prompt 带附件时显示数量)*/
+.queue-attach {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  margin-left: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
