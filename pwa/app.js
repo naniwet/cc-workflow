@@ -2763,12 +2763,42 @@ async function onTriggerSubmit(e) {
       newEvents: 0,
     };
     refreshAll();
+    // Mobile 软键盘收起动画期间 scrollHeight 不稳定 — render 立刻发生
+    // 时还在动画中,scroll 到那时的 "bottom",等动画结束 layout settle
+    // 后 "bottom" 位置又变了,视觉上就是"发完位置不准"。监听
+    // visualViewport.resize(键盘收起触发) + setTimeout 兜底,在动画
+    // 真正结束后再补一次 scroll-to-bottom。
+    _rescrollAfterKeyboardSettles(ws);
   } catch (err) {
     showError(`trigger failed: ${err.message}`);
   } finally {
     btn.disabled = false;
     btn.textContent = 'Run';
   }
+}
+
+// Mobile only:用户提交 prompt 后键盘收起,layout 重新 settle,补一次
+// scroll 把 stream 拉回底部。两条触发路径:
+//   - visualViewport.resize:键盘动画结束时浏览器触发(iOS / Android 都支持)
+//   - setTimeout 350ms 兜底:覆盖没有 visualViewport API 的浏览器,以及
+//     resize 因为 race 没触发的情况
+// 两个 race,谁先 fire 谁干活,另一个被 done 标志吞掉。
+function _rescrollAfterKeyboardSettles(ws) {
+  let done = false;
+  const fire = () => {
+    if (done) return;
+    done = true;
+    for (const s of document.querySelectorAll(`.workspace-session-stream[data-ws="${ws}"]`)) {
+      s.scrollTop = s.scrollHeight;
+    }
+    for (const t of document.querySelectorAll(`.ws-timeline[data-ws="${ws}"]`)) {
+      t.scrollTop = t.scrollHeight;
+    }
+  };
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', fire, { once: true });
+  }
+  setTimeout(fire, 350);
 }
 
 // ---------- Workspace detail view (#workspaces/<name>) ----------
