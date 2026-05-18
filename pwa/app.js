@@ -4579,6 +4579,194 @@ function _roleSlug(name) {
   })[name] || 'unknown';
 }
 
+// ---------- Command palette (Cmd+K / Ctrl+K) ----------
+// C 改造(易用性 §3):快捷跳转 — workspaces / tasks / roundtables /
+// settings / search,不用点 3 次 nav。`/keyword` 前缀直接转 #search 全文搜。
+// PC keyboard 优先(mobile 没物理键盘,用 #search 路由替代)。
+
+let _paletteOpen = false;
+let _paletteSelectedIdx = 0;
+let _paletteResults = [];
+
+function _openCommandPalette() {
+  let palette = document.getElementById('command-palette');
+  if (!palette) {
+    palette = document.createElement('div');
+    palette.id = 'command-palette';
+    palette.className = 'command-palette';
+    palette.innerHTML = `
+      <div class="cmd-palette-backdrop"></div>
+      <div class="cmd-palette-box">
+        <input class="cmd-palette-input" type="search" autocomplete="off"
+               placeholder="跳 workspace / task / 设置;/<词> 搜历史">
+        <div class="cmd-palette-results"></div>
+        <div class="cmd-palette-footer muted">↑↓ 选 · Enter 跳 · Esc 关 · /<词> 全文搜历史</div>
+      </div>
+    `;
+    document.body.appendChild(palette);
+    const input = palette.querySelector('.cmd-palette-input');
+    input.addEventListener('input', () => _updatePaletteResults(input.value));
+    input.addEventListener('keydown', _onPaletteKey);
+    palette.querySelector('.cmd-palette-backdrop').addEventListener('click', _closeCommandPalette);
+  }
+  palette.classList.add('open');
+  _paletteOpen = true;
+  _paletteSelectedIdx = 0;
+  const input = palette.querySelector('.cmd-palette-input');
+  input.value = '';
+  input.focus();
+  _updatePaletteResults('');
+}
+
+function _closeCommandPalette() {
+  const palette = document.getElementById('command-palette');
+  if (palette) palette.classList.remove('open');
+  _paletteOpen = false;
+}
+
+// 收集所有"可跳转"的项:workspaces / tasks / roundtables / settings 入口。
+// 历史 prompt 不直接列(数量可能几百,palette 不适合),用 `/keyword` 转 #search。
+function _gatherPaletteItems() {
+  const items = [];
+  for (const ws of lastData.workspaces || []) {
+    items.push({ icon: '📁', label: ws, sub: 'Workspace', href: `#workspaces/${encodeURIComponent(ws)}` });
+  }
+  for (const loop of lastData.loops || []) {
+    items.push({
+      icon: '⏰',
+      label: loop.name,
+      sub: `Task${loop.schedule ? ' · ' + loop.schedule : ''}`,
+      href: `#tasks/${encodeURIComponent(loop.name)}`,
+    });
+  }
+  for (const rt of lastData.roundtables || []) {
+    items.push({
+      icon: '🎯',
+      label: rt.question || rt.id || '(untitled)',
+      sub: 'Roundtable',
+      href: `#roundtables/${encodeURIComponent(rt.id)}`,
+    });
+  }
+  // 顶级 nav + settings 入口(常用动作)
+  items.push({ icon: '🔍', label: 'Search history', sub: 'Settings', href: '#search', aliases: ['搜索', 'find'] });
+  items.push({ icon: '⚙', label: 'Providers', sub: 'Settings', href: '#settings/providers', aliases: ['llm', 'api', 'provider'] });
+  items.push({ icon: '⚙', label: 'Settings', sub: 'Nav', href: '#settings' });
+  items.push({ icon: '🏠', label: 'Workspaces', sub: 'Nav', href: '#workspaces' });
+  items.push({ icon: '✓', label: 'Tasks', sub: 'Nav', href: '#tasks' });
+  items.push({ icon: '🎯', label: 'Roundtables', sub: 'Nav', href: '#roundtables' });
+  return items;
+}
+
+function _updatePaletteResults(rawQuery) {
+  const q = (rawQuery || '').trim();
+  // 特殊语法:`/<keyword>` → 直接转 #search,query 自动填入 search 框
+  if (q.startsWith('/')) {
+    const kw = q.slice(1);
+    _paletteResults = [{
+      icon: '🔍',
+      label: `搜历史:${kw || '(输入关键词)'}`,
+      sub: kw ? `跳到 #search?q=${kw}` : '继续输入或 Enter',
+      onSelect: () => {
+        _closeCommandPalette();
+        location.hash = '#search';
+        // 等 render 完了把 query 填到 search 框
+        setTimeout(() => {
+          const inp = document.querySelector('.search-input');
+          if (inp && kw) {
+            inp.value = kw;
+            inp.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        }, 80);
+      },
+    }];
+  } else {
+    const items = _gatherPaletteItems();
+    const lc = q.toLowerCase();
+    _paletteResults = q
+      ? items.filter((i) =>
+          i.label.toLowerCase().includes(lc) ||
+          (i.aliases || []).some((a) => a.toLowerCase().includes(lc)),
+        )
+      : items.slice(0, 24);   // 空 query 显示前 24 个(workspaces + nav + settings)
+  }
+  _paletteSelectedIdx = 0;
+  _renderPaletteResults();
+}
+
+function _renderPaletteResults() {
+  const palette = document.getElementById('command-palette');
+  if (!palette) return;
+  const container = palette.querySelector('.cmd-palette-results');
+  if (_paletteResults.length === 0) {
+    container.innerHTML = '<div class="cmd-palette-empty muted">无匹配。试 `/<关键词>` 全文搜历史。</div>';
+    return;
+  }
+  container.innerHTML = _paletteResults.map((r, i) => `
+    <div class="cmd-palette-item${i === _paletteSelectedIdx ? ' is-selected' : ''}" data-idx="${i}">
+      <span class="cmd-palette-icon">${r.icon || ''}</span>
+      <div class="cmd-palette-text">
+        <div class="cmd-palette-label">${esc(r.label)}</div>
+        ${r.sub ? `<div class="cmd-palette-sub muted">${esc(r.sub)}</div>` : ''}
+      </div>
+    </div>
+  `).join('');
+  for (const el of container.querySelectorAll('.cmd-palette-item')) {
+    el.addEventListener('click', () => {
+      _paletteSelectedIdx = parseInt(el.dataset.idx, 10);
+      _executePaletteSelected();
+    });
+    el.addEventListener('mousemove', () => {
+      const i = parseInt(el.dataset.idx, 10);
+      if (i !== _paletteSelectedIdx) {
+        _paletteSelectedIdx = i;
+        _renderPaletteResults();
+      }
+    });
+  }
+  // 滚到选中项
+  const sel = container.querySelector('.cmd-palette-item.is-selected');
+  if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+
+function _onPaletteKey(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    _closeCommandPalette();
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _paletteSelectedIdx = Math.min(_paletteSelectedIdx + 1, _paletteResults.length - 1);
+    _renderPaletteResults();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _paletteSelectedIdx = Math.max(_paletteSelectedIdx - 1, 0);
+    _renderPaletteResults();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    _executePaletteSelected();
+  }
+}
+
+function _executePaletteSelected() {
+  const item = _paletteResults[_paletteSelectedIdx];
+  if (!item) return;
+  if (item.onSelect) {
+    item.onSelect();
+  } else if (item.href) {
+    _closeCommandPalette();
+    location.hash = item.href;
+  }
+}
+
+// 全局快捷键:Cmd+K (Mac) / Ctrl+K (Win/Linux)。捕获到任何 input 焦点状态
+// 都生效(用户能从输入框直接呼出 palette)。再次按 Cmd+K 切换 close。
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if (_paletteOpen) _closeCommandPalette();
+    else _openCommandPalette();
+  }
+});
+
 // ---------- Search view (#search) ----------
 // D 改造(易用性 §3):全文搜索历史 runs 的 prompt + reply。后端走 SQLite
 // LIKE(KISS,见 backend/db.search_runs),前端 250ms debounce 输入 → 调

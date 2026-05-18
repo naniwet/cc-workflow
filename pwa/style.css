@@ -3093,6 +3093,89 @@ pre {
    above intact; nothing references them in current renderers but harmless. */
 
 /* ============================================================================
+ *  Command palette (Cmd+K / Ctrl+K) — C 改造
+ * ============================================================================ */
+.command-palette {
+  position: fixed; inset: 0; z-index: 9999;
+  display: none;
+}
+.command-palette.open { display: block; }
+.cmd-palette-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+}
+.cmd-palette-box {
+  position: relative;
+  max-width: 600px;
+  width: 92vw;
+  margin: 8vh auto 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+  overflow: hidden;
+}
+.cmd-palette-input {
+  width: 100%;
+  padding: var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cmd-palette-input:focus { outline: none; }
+.cmd-palette-results {
+  overflow-y: auto;
+  flex: 1;
+  padding: var(--space-1);
+}
+.cmd-palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.cmd-palette-item.is-selected {
+  background: var(--bg-elevated);
+  border-left: 2px solid var(--accent-blue);
+  padding-left: calc(var(--space-3) - 2px);
+}
+.cmd-palette-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 22px;
+  text-align: center;
+}
+.cmd-palette-text { flex: 1; min-width: 0; }
+.cmd-palette-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-palette-sub {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-palette-empty {
+  padding: var(--space-3);
+  text-align: center;
+  font-size: var(--text-sm);
+}
+.cmd-palette-footer {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+}
+
+/* ============================================================================
  *  Search history (#search) — D 改造
  * ============================================================================ */
 .search-page { max-width: 800px; }
