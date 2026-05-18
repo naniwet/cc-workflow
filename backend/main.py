@@ -252,9 +252,11 @@ def post_run(req: RunRequest) -> dict:
                 "since": active.get("started_at"),
                 "msg": (
                     f"workspace 「{req.workspace}」 已经有 1 个 run 在跑 "
-                    f"(id={active['id'][:8]})。等它完成或失败再提交;"
-                    f"卡死的话 ssh 上去 kill 进程即可。"
+                    f"(id={active['id'][:8]})。"
                 ),
+                "hint": "PWA 会自动排队 — 不需要手动操作;若卡死要终止,点 Fix 跳到 run 详情 cancel。",
+                "fixUrl": f"#runs/{active['id']}",
+                "fixLabel": "Run detail",
             },
         )
     final_prompt = req.prompt
@@ -377,6 +379,7 @@ async def post_uploads(workspace: str, files: list[UploadFile] = File(...)) -> d
                             detail={
                                 "error": "too_large",
                                 "msg": f"上传文件合计超过 {_UPLOAD_MAX_BYTES // (1024*1024)} MB",
+                                "hint": "拆几次小批量上传,或者大文件 scp 到服务器再用 path 引用。",
                             },
                         )
                     fh.write(chunk)
@@ -671,7 +674,8 @@ def delete_provider(name: str) -> dict:
         raise HTTPException(
             400,
             {"error": "is_default",
-             "msg": f"{name!r} 是 config.toml#provider 当前 default,删了之后默认 LLM 调用会全废。先改 config.toml 的 default 再来删。"},
+             "msg": f"{name!r} 是当前 default provider,不能删",
+             "hint": "ssh 改 ~/.cc-workflow/config.toml 的 provider 字段指向另一个 provider,然后回来删。"},
         )
     del profiles[name]
     try:
@@ -696,7 +700,14 @@ def test_provider(name: str) -> dict:
             profile_name=name,
         )
     except RuntimeError as e:
-        raise HTTPException(502, {"error": "test_failed", "detail": str(e)})
+        raise HTTPException(502, {
+            "error": "test_failed",
+            "detail": str(e),
+            "msg": f"调用 provider {name!r} 失败",
+            "hint": "检查 base_url 能否访问 / API key 是否过期 / model 名是否拼对 / 余额是否充足。",
+            "fixUrl": "#settings/providers",
+            "fixLabel": f"Edit {name}",
+        })
     return {"ok": True, "reply": reply, "name": name}
 
 
@@ -1731,7 +1742,14 @@ def parse_nl_cron(req: ParseNlRequest) -> dict:
     try:
         reply = llm.complete(prompt, max_tokens=200).strip()
     except RuntimeError as e:
-        raise HTTPException(502, {"error": "llm_call_failed", "detail": str(e)})
+        raise HTTPException(502, {
+            "error": "llm_call_failed",
+            "detail": str(e),
+            "msg": "LLM 调用失败,无法解析自然语言",
+            "hint": "检查 default provider 配置(config.toml#provider 指向的那个);可能 API key 过期 / base_url 不通 / model 名错。",
+            "fixUrl": "#settings/providers",
+            "fixLabel": "Edit providers",
+        })
 
     cleaned = _CODE_FENCE_RE.sub("", reply).strip()
 
@@ -1752,7 +1770,12 @@ def parse_nl_cron(req: ParseNlRequest) -> dict:
 
     raise HTTPException(
         422,
-        {"error": "llm_did_not_return_cron", "raw_reply": reply},
+        {
+            "error": "llm_did_not_return_cron",
+            "raw_reply": reply,
+            "msg": "LLM 没返回合法的 cron 表达式",
+            "hint": "可能 LLM 模型不擅长 JSON 输出 / 你输入的描述里没有时间词。试试换 model(deepseek-chat / kimi-k2 等)或者手动填 cron 表达式。",
+        },
     )
 
 

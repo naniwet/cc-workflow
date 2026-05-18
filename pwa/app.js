@@ -274,12 +274,14 @@ async function api(path, opts = {}) {
     // tells you WHY the call failed — prefer human-readable strings (raw
     // LLM replies, error messages) over short machine codes.
     let detail = '';
+    let detailObj = null;     // 完整 detail dict — showError 用它抽 hint / fixUrl / raw
     try {
       const body = await r.json();
       const d = body?.detail;
       if (typeof d === 'string') {
         detail = d;
       } else if (d && typeof d === 'object') {
+        detailObj = d;
         if (d.raw_reply) detail = `${d.error || 'error'} · LLM said: ${String(d.raw_reply).slice(0, 200)}`;
         else if (typeof d.msg === 'string') detail = d.msg;    // human-readable explanation (preferred)
         else if (typeof d.detail === 'string') detail = d.detail;
@@ -289,7 +291,10 @@ async function api(path, opts = {}) {
         detail = body.error;
       }
     } catch { /* body not JSON; ignore */ }
-    throw new Error(`${r.status} ${path}${detail ? ' — ' + detail : ''}`);
+    const err = new Error(`${r.status} ${path}${detail ? ' — ' + detail : ''}`);
+    err.status = r.status;
+    err.detail = detailObj;
+    throw err;
   }
   const ct = r.headers.get('content-type') || '';
   return ct.includes('json') ? r.json() : r.text();
@@ -313,15 +318,40 @@ function showToast(level, message, opts = {}) {
   const el = document.createElement('div');
   el.className = `toast toast-${level}`;
   el.dataset.id = id;
+  // opts 可选字段(都有就完整渲染,都没就退化成原版 minimal layout):
+  //   hint:     一行"可能原因 + 下一步"灰字
+  //   fixUrl:   "Fix" 按钮的目标 link(支持 #settings/... 这种 SPA 路由)
+  //   fixLabel: 按钮文字(默认 "Fix")
+  //   raw:      原始错误 dict/string,折叠在 <details> 里
+  //   ttl:      毫秒;0 = 永久(error 默认 8s 比 info/success 长,让用户看 hint)
+  const hintHtml = opts.hint ? `<div class="toast-hint">${esc(opts.hint)}</div>` : '';
+  const actionHtml = opts.fixUrl
+    ? `<a class="toast-action" href="${esc(opts.fixUrl)}">${esc(opts.fixLabel || 'Fix')}</a>`
+    : '';
+  let rawHtml = '';
+  if (opts.raw) {
+    const rawStr = typeof opts.raw === 'string' ? opts.raw : JSON.stringify(opts.raw);
+    rawHtml = `<details class="toast-raw"><summary>详情</summary><pre>${esc(rawStr.slice(0, 800))}</pre></details>`;
+  }
   el.innerHTML = `
     <span class="toast-icon">${ICONS[level] || ICONS.info}</span>
-    <span class="toast-message">${esc(message)}</span>
+    <div class="toast-body">
+      <div class="toast-message">${esc(message)}</div>
+      ${hintHtml}
+      ${actionHtml ? `<div class="toast-actions">${actionHtml}</div>` : ''}
+      ${rawHtml}
+    </div>
     <button class="toast-close" type="button" aria-label="Dismiss">×</button>
   `;
   el.querySelector('.toast-close').addEventListener('click', () => dismissToast(id));
+  // Action click 先 dismiss toast,再让 <a href="#..."> 自然触发 hashchange
+  el.querySelector('.toast-action')?.addEventListener('click', () => dismissToast(id));
   container.appendChild(el);
   requestAnimationFrame(() => el.classList.add('toast-show'));
-  setTimeout(() => dismissToast(id), opts.ttl ?? TOAST_TTL_MS);
+  // ttl=0 表示永久(给 raw 长的 error 用户充足时间看),其余按传入或默认 4s
+  const defaultTtl = level === 'error' ? TOAST_TTL_MS * 2 : TOAST_TTL_MS;
+  const ttl = opts.ttl ?? defaultTtl;
+  if (ttl > 0) setTimeout(() => dismissToast(id), ttl);
   return id;
 }
 
@@ -333,7 +363,25 @@ function dismissToast(id) {
   setTimeout(() => el.remove(), 200);                  // matches CSS exit transition
 }
 
-function showError(msg) { showToast('error', msg); }
+// showError 接受两种 call 形式:
+//   showError("string")            → 原样 toast,无 hint(老用法,backward-compat)
+//   showError(errObj, { prefix? }) → 从 err.detail.hint / fixUrl / raw 抽 action
+// 后端 HTTPException 的 detail 现在带 hint / fixUrl 字段(B 改造),前端
+// catch 时 `showError(err)` 自动渲染 "可能原因 + 一键 Fix" toast。
+function showError(msg, opts = {}) {
+  if (msg && typeof msg === 'object' && msg.message) {
+    const err = msg;
+    const d = err.detail || {};
+    const prefix = opts.prefix ? `${opts.prefix}: ` : '';
+    return showToast('error', `${prefix}${err.message}`, {
+      hint: d.hint,
+      fixUrl: d.fixUrl,
+      fixLabel: d.fixLabel,
+      raw: d.raw_reply || (typeof d === 'object' && Object.keys(d).length ? d : undefined),
+    });
+  }
+  return showToast('error', String(msg), opts);
+}
 function clearError()   { /* no-op — toasts auto-dismiss themselves */ }
 
 // ---------- shared state (refreshed every 3 s) ----------
@@ -649,7 +697,7 @@ async function _dispatchAllQueues() {
         } catch (uerr) {
           if (!_promptQueue[ws]) _promptQueue[ws] = [];
           _promptQueue[ws].unshift(next);
-          showError(`队列附件上传失败: ${uerr.message}`);
+          showError(uerr, { prefix: '队列附件上传' });
           render();
           _dispatching.delete(ws);
           continue;
@@ -2735,7 +2783,7 @@ async function onTriggerSubmit(e) {
       try {
         attachmentPaths = await _uploadFiles(ws, pending);
       } catch (uerr) {
-        showError(`附件上传失败: ${uerr.message}`);
+        showError(uerr, { prefix: '附件上传' });
         btn.disabled = false;
         btn.textContent = 'Run';
         return;
@@ -2784,7 +2832,7 @@ async function onTriggerSubmit(e) {
     // 真正结束后再补一次 scroll-to-bottom。
     _rescrollAfterKeyboardSettles(ws);
   } catch (err) {
-    showError(`trigger failed: ${err.message}`);
+    showError(err);   // 自动从 err.detail 抽 hint / fixUrl(后端 /run workspace_busy 等)
   } finally {
     btn.disabled = false;
     btn.textContent = 'Run';
@@ -3932,7 +3980,7 @@ async function onParseNl(e) {
     }
     clearError();
   } catch (err) {
-    showError(`parse-nl failed: ${err.message}`);
+    showError(err);   // backend 把 hint + fixUrl 塞进 detail,自动渲染 action button
   } finally {
     btn.disabled = false; btn.textContent = orig;
   }
@@ -4732,7 +4780,7 @@ async function _onProviderTestClick(e) {
     const r = await api(`/providers/${encodeURIComponent(name)}/test`, { method: 'POST' });
     showToast('success', `${name}: ${(r.reply || '(empty)').slice(0, 80)}`, { ttl: 4000 });
   } catch (err) {
-    showError(`${name} test failed: ${err.message}`);
+    showError(err, { prefix: `${name} test` });
   } finally {
     btn.disabled = false;
     btn.textContent = orig;
