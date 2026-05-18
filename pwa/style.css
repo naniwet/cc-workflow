@@ -2593,6 +2593,9 @@ pre {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--bg-canvas);
+  /* dropdown options 用 absolute 浮在 trigger 下面,不撑高父容器(dialog
+     / form / menu)。给 .form-picker-list 做 positioning context。 */
+  position: relative;
 }
 .form-picker > summary {
   display: flex;
@@ -2632,10 +2635,25 @@ pre {
   flex-direction: column;
   gap: 2px;
   padding: var(--space-1);
-  /* Cap height so a wallload of providers / workspaces doesn't push the
-   * form's Submit button off the viewport. Scroll within the list. */
-  max-height: 280px;
+  /* 浮在 trigger 下面,不挤掉 dialog 里下面的字段 / Submit 按钮。z-index 高
+   * 一些以盖过同一 dialog 内的其他元素。max-height 限制 overflow scroll。 */
+  position: absolute;
+  top: 100%;
+  left: -1px;
+  right: -1px;
+  margin-top: 2px;
+  z-index: 20;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
+  max-height: 240px;
   overflow-y: auto;
+}
+/* 浮层模式下 [open] 时 trigger 不再加 border-bottom 分隔(本来 inline 模式
+ * 是为了视觉分离 trigger 跟下面的 list,现在 list 浮起来不需要)。 */
+.form-picker[open] > summary {
+  border-bottom: 1px solid transparent;
 }
 
 /* Per-role model override block — collapsible <details> inside the new-
