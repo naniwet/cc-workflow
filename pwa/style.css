@@ -3049,6 +3049,98 @@ pre {
    above intact; nothing references them in current renderers but harmless. */
 
 /* ============================================================================
+ *  Settings views(#settings + #settings/providers)
+ * ============================================================================ */
+.settings-hub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 640px;
+}
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: background var(--t-base), border-color var(--t-base);
+}
+.settings-card:hover:not(.is-disabled) {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+}
+.settings-card.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.settings-card-title { display: flex; align-items: center; gap: var(--space-2); }
+
+/* Providers list */
+.providers-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 720px;
+}
+.provider-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+.provider-row.is-default {
+  border-color: var(--accent-blue-faint);
+}
+.provider-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+}
+.provider-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-sm);
+}
+.provider-field {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-mono, monospace);
+}
+.provider-field > .muted { min-width: 60px; font-family: var(--font-sans, inherit); font-size: var(--text-xs); }
+.provider-field code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--bg-canvas);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+}
+.provider-row-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.provider-row-actions button {
+  font-size: var(--text-sm);
+  padding: 4px 12px;
+}
+.provider-delete-btn:not([disabled]):hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+
+/* ============================================================================
  *  PWA 上传附件 — 📎 按钮 + chips(显示在 trigger-form / workspace-input 顶部)
  *  实现思路:form 启用 flex-wrap,.attach-chips flex-basis:100% 强占第一行,
  *  后面的 [📎] [textarea] [Run] 自然 wrap 到第二行,跟原有 align-items:flex-end

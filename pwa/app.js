@@ -439,6 +439,7 @@ const ROUTES = {
   workspaces:  renderWorkspacesView,
   tasks:       renderTasksView,
   roundtables: renderRoundtablesView,
+  settings:    renderSettingsView,
 };
 function parseRoute() {
   const h = location.hash.replace('#', '');
@@ -446,6 +447,9 @@ function parseRoute() {
   if (h.startsWith('workspaces/')) return { name: 'workspace-detail', id: decodeURIComponent(h.slice(11)) };
   if (h.startsWith('tasks/')) return { name: 'task-detail', id: decodeURIComponent(h.slice(6)) };
   if (h.startsWith('roundtables/')) return { name: 'roundtable-detail', id: decodeURIComponent(h.slice(12)) };
+  // #settings/<section>:目前只有 providers,以后加 secrets / workspaces 走同样
+  // 模式。section 缺省时 renderSettingsView 显示 hub(section 列表 link)。
+  if (h.startsWith('settings/')) return { name: 'settings-section', id: decodeURIComponent(h.slice(9)) };
   return { name: h || 'workspaces', id: null };
 }
 
@@ -915,6 +919,9 @@ function render() {
   } else if (route.name === 'roundtable-detail' && route.id) {
     setActiveTab('roundtables');
     renderRoundtableDetailView(route.id, { isFreshNav });
+  } else if (route.name === 'settings-section' && route.id) {
+    setActiveTab('settings');
+    renderSettingsSectionView(route.id);
   } else {
     const handler = ROUTES[route.name] || ROUTES.workspaces;
     setActiveTab(route.name in ROUTES ? route.name : 'workspaces');
@@ -1734,6 +1741,7 @@ function _providerOptionsHtml(selected, includeDefault) {
   // wants native <select> behavior — the form-facing surfaces now use
   // _renderFormPicker (collapsible + radio-list, dark-theme consistent
   // with the workspace ⋯ menu).
+  // /providers 返回 list[dict] {name, base_url, ...},这里只用 .name
   const list = lastData.providers || [];
   const opts = [];
   if (includeDefault) {
@@ -1741,7 +1749,8 @@ function _providerOptionsHtml(selected, includeDefault) {
     opts.push(`<option value=""${selected ? '' : ' selected'}>${label}</option>`);
   }
   for (const p of list) {
-    opts.push(`<option value="${esc(p)}"${p === selected ? ' selected' : ''}>${esc(p)}</option>`);
+    const n = p.name || p;   // 兼容老 list[str] 格式
+    opts.push(`<option value="${esc(n)}"${n === selected ? ' selected' : ''}>${esc(n)}</option>`);
   }
   return opts.join('');
 }
@@ -1755,7 +1764,10 @@ function _newWsProviderPickerHtml() {
     ? `default · ${lastData.globalProvider}`
     : 'default';
   const options = [{ value: '', label: defaultLabel }];
-  for (const p of list) options.push({ value: p, label: p });
+  for (const p of list) {
+    const n = p.name || p;   // 兼容老 list[str] 格式
+    options.push({ value: n, label: n });
+  }
   return _renderFormPicker({ name: 'provider', options, value: '' });
 }
 
@@ -1877,6 +1889,8 @@ function _providerRadioListHtml(name, wsProvider) {
   // The "" value means "no per-ws override; use config.toml default".
   rows.push(_providerRadioRowHtml(name, '', defaultLabel, !wsProvider));
   for (const p of list) {
+    // /providers 现在返回 list[dict] {name, ...},兼容老 list[str]
+    const pname = p.name || p;
     // Skip the row that's identical to the Default option in behavior.
     // Picking "Default" with globalProvider=deepseek vs. picking "deepseek"
     // explicitly produces the exact same wire effect — listing both is
@@ -1884,8 +1898,8 @@ function _providerRadioListHtml(name, wsProvider) {
     // pinned to globalDefault (the "I want to lock to this provider even
     // if I change my global default later" path), we still surface the
     // row so the user can see the pin and unpin it via the Default row.
-    if (p === globalDefault && p !== wsProvider) continue;
-    rows.push(_providerRadioRowHtml(name, p, esc(p), p === wsProvider));
+    if (pname === globalDefault && pname !== wsProvider) continue;
+    rows.push(_providerRadioRowHtml(name, pname, esc(pname), pname === wsProvider));
   }
   return rows.join('');
 }
@@ -4514,6 +4528,215 @@ function _roleSlug(name) {
     '借鉴派': 'precedent',
     '悲观派': 'pessimist',
   })[name] || 'unknown';
+}
+
+// ---------- Settings views (#settings / #settings/providers) ----------
+// 配置可视化第一弹:providers.json 可以在 PWA 里加 / 改 / 删 / 测连通性,
+// 不用 ssh。secrets.toml / workspaces.json 是后续子项,目前 Settings hub
+// 里显示成 disabled placeholder。
+
+function renderSettingsView() {
+  const view = $('view');
+  view.innerHTML = `
+    <h2 style="margin:0 0 var(--space-3)">Settings</h2>
+    <div class="settings-hub">
+      <a class="settings-card" href="#settings/providers">
+        <div class="settings-card-title"><strong>Providers</strong></div>
+        <div class="muted">LLM 服务商配置:API key / base URL / model;加 / 改 / 删 / 测连通性</div>
+      </a>
+      <div class="settings-card is-disabled">
+        <div class="settings-card-title"><strong>Secrets</strong> <span class="tag">soon</span></div>
+        <div class="muted">登录用户名/密码 / 飞书 token。目前要 ssh 改 <code>~/.cc-workflow/secrets.toml</code></div>
+      </div>
+      <div class="settings-card is-disabled">
+        <div class="settings-card-title"><strong>Workspaces</strong> <span class="tag">partial</span></div>
+        <div class="muted">每 workspace 的 trust / provider 已能在 workspace 详情页 ⚙ 改。完整管理(批量 / engine 切换)待后续</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSettingsSectionView(section) {
+  if (section === 'providers') return renderSettingsProvidersView();
+  // 未知 section → 退回 hub(避免白屏)
+  window.history.replaceState(null, '', '#settings');
+  renderSettingsView();
+}
+
+function renderSettingsProvidersView() {
+  const view = $('view');
+  const list = lastData.providers || [];
+  const rows = list.map(_settingsProviderRow).join('');
+  view.innerHTML = `
+    <p style="margin:0 0 var(--space-2)"><a href="#settings" class="back-link">← Settings</a></p>
+    <div class="ws-toolbar">
+      <button class="ws-new-btn" type="button" id="provider-new-btn">+ New provider</button>
+    </div>
+    ${list.length
+      ? `<div class="providers-list">${rows}</div>`
+      : '<p class="muted">还没有 provider。点 + New provider 加一个(deepseek / kimi / claude 等)。</p>'}
+
+    <dialog class="ws-new-dialog" id="provider-dialog">
+      <form class="ws-new-form" id="provider-form">
+        <h3 id="provider-dialog-title">New provider</h3>
+        <input type="hidden" name="original_name" value="">
+        <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+" required placeholder="deepseek"></label>
+        <label>base URL <input name="base_url" type="url" required placeholder="https://api.deepseek.com/anthropic"></label>
+        <label>model <input name="model" required placeholder="deepseek-chat"></label>
+        <label>API key
+          <input name="api_key" type="password" autocomplete="off" placeholder="sk-...">
+          <span class="muted" style="font-size:11px" id="api-key-hint">必填</span>
+        </label>
+        <p class="muted" style="font-size:11px;margin:0">
+          保存到 <code>~/.cc-workflow/providers.json</code>。改完立即生效(后端每次调用都从 json 读),不用 restart cc-workflow。
+        </p>
+        <div class="ws-new-actions">
+          <button type="button" class="ws-new-cancel">Cancel</button>
+          <button type="submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+  `;
+  view.querySelector('#provider-new-btn')?.addEventListener('click', _onProviderNewClick);
+  view.querySelector('.ws-new-cancel')?.addEventListener('click', _onProviderCancel);
+  view.querySelector('#provider-form')?.addEventListener('submit', _onProviderFormSubmit);
+  for (const btn of view.querySelectorAll('.provider-edit-btn')) btn.addEventListener('click', _onProviderEditClick);
+  for (const btn of view.querySelectorAll('.provider-delete-btn:not([disabled])')) btn.addEventListener('click', _onProviderDeleteClick);
+  for (const btn of view.querySelectorAll('.provider-test-btn')) btn.addEventListener('click', _onProviderTestClick);
+}
+
+function _settingsProviderRow(p) {
+  const dDis = p.is_default ? 'disabled title="default 不能删,先改 config.toml#provider"' : '';
+  return `
+    <div class="provider-row${p.is_default ? ' is-default' : ''}" data-name="${esc(p.name)}">
+      <div class="provider-row-head">
+        <strong>${esc(p.name)}</strong>
+        ${p.is_default ? '<span class="tag">default</span>' : ''}
+      </div>
+      <div class="provider-row-body">
+        <div class="provider-field"><span class="muted">base_url</span><code>${esc(p.base_url || '—')}</code></div>
+        <div class="provider-field"><span class="muted">model</span><code>${esc(p.model || '—')}</code></div>
+        <div class="provider-field"><span class="muted">key</span><code>${esc(p.key_masked || '—')}</code></div>
+      </div>
+      <div class="provider-row-actions">
+        <button class="provider-test-btn" type="button" data-name="${esc(p.name)}">Test</button>
+        <button class="provider-edit-btn" type="button" data-name="${esc(p.name)}">Edit</button>
+        <button class="provider-delete-btn" type="button" data-name="${esc(p.name)}" ${dDis}>Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+function _onProviderNewClick() {
+  const dlg = document.getElementById('provider-dialog');
+  const form = dlg.querySelector('form');
+  form.reset();
+  form.elements.original_name.value = '';
+  document.getElementById('provider-dialog-title').textContent = 'New provider';
+  document.getElementById('api-key-hint').textContent = '必填';
+  dlg.showModal();
+}
+
+function _onProviderEditClick(e) {
+  const name = e.currentTarget.dataset.name;
+  const p = (lastData.providers || []).find((x) => x.name === name);
+  if (!p) return;
+  const dlg = document.getElementById('provider-dialog');
+  const form = dlg.querySelector('form');
+  form.reset();
+  form.elements.original_name.value = name;
+  form.elements.name.value = name;
+  form.elements.base_url.value = p.base_url || '';
+  form.elements.model.value = p.model || '';
+  form.elements.api_key.value = '';
+  document.getElementById('provider-dialog-title').textContent = `Edit ${name}`;
+  document.getElementById('api-key-hint').textContent = `留空 = 不改(当前: ${p.key_masked || '(none)'})`;
+  dlg.showModal();
+}
+
+function _onProviderCancel() {
+  document.getElementById('provider-dialog')?.close();
+}
+
+async function _onProviderFormSubmit(e) {
+  e.preventDefault();
+  const form = e.target;
+  const original = form.elements.original_name.value;
+  const isEdit = !!original;
+  const fd = Object.fromEntries(new FormData(form).entries());
+  if (isEdit && original !== fd.name) {
+    showError(`不能改 name(${original} → ${fd.name});先 Delete 再 New 一个新的`);
+    return;
+  }
+  const body = {
+    name: fd.name,
+    base_url: fd.base_url,
+    model: fd.model,
+    api_key: fd.api_key,
+  };
+  const btn = form.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = 'Saving…';
+  try {
+    if (isEdit) {
+      await api(`/providers/${encodeURIComponent(original)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } else {
+      await api('/providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    }
+    document.getElementById('provider-dialog').close();
+    showToast('success', isEdit ? `Provider ${fd.name} 已更新` : `Provider ${fd.name} 已添加`);
+    await refreshAll();
+    renderSettingsProvidersView();
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+async function _onProviderDeleteClick(e) {
+  const name = e.currentTarget.dataset.name;
+  if (!confirm(`删除 provider 「${name}」?\nproviders.json 会被改写,不可撤销。`)) return;
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Deleting…';
+  try {
+    await api(`/providers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    showToast('success', `Provider ${name} 已删除`);
+    await refreshAll();
+    renderSettingsProvidersView();
+  } catch (err) {
+    showError(err.message);
+    btn.disabled = false;
+    btn.textContent = 'Delete';
+  }
+}
+
+async function _onProviderTestClick(e) {
+  const name = e.currentTarget.dataset.name;
+  const btn = e.currentTarget;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Testing…';
+  try {
+    const r = await api(`/providers/${encodeURIComponent(name)}/test`, { method: 'POST' });
+    showToast('success', `${name}: ${(r.reply || '(empty)').slice(0, 80)}`, { ttl: 4000 });
+  } catch (err) {
+    showError(`${name} test failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
 }
 
 // ---------- boot ----------

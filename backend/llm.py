@@ -20,27 +20,38 @@ from urllib import request as urlreq
 from . import config
 
 
-def _provider_env() -> dict:
-    """Resolve the active provider's env dict from config.toml + providers.json."""
-    cfg = config.load_config() or {}
-    name = cfg.get("provider", "claude")
+def _provider_env(profile_name: str | None = None) -> dict:
+    """Resolve a provider's env dict from config.toml + providers.json.
+
+    profile_name=None → use config.toml#provider as default(原行为)。
+    指定 name → 用这个 profile,不看 config.toml(给 POST /providers/{name}/test
+    这种"测特定 profile"的场景用)。
+    """
+    if profile_name is None:
+        cfg = config.load_config() or {}
+        profile_name = cfg.get("provider", "claude")
     try:
         providers = json.loads(config.PROVIDERS_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         raise RuntimeError(f"providers.json unreadable: {e}")
-    profile = (providers.get("profiles") or {}).get(name) or {}
+    profile = (providers.get("profiles") or {}).get(profile_name) or {}
     env = profile.get("env") or {}
     if not env:
         raise RuntimeError(
-            f"provider {name!r} has no env in providers.json — "
+            f"provider {profile_name!r} has no env in providers.json — "
             "anthropic OAuth profiles can't be used from backend"
         )
     return env
 
 
-def complete(user_msg: str, *, max_tokens: int = 256, timeout: int = 30) -> str:
-    """One-turn anthropic-compatible call. Returns the assistant's text content."""
-    env = _provider_env()
+def complete(user_msg: str, *, max_tokens: int = 256, timeout: int = 30,
+             profile_name: str | None = None) -> str:
+    """One-turn anthropic-compatible call. Returns the assistant's text content.
+
+    profile_name=None → 用 config.toml 的 default provider(原行为)。
+    指定 name → 用这个 profile(给 /providers/{name}/test 用)。
+    """
+    env = _provider_env(profile_name)
     base = env.get("ANTHROPIC_BASE_URL", "").rstrip("/")
     token = env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY", "")
     model = env.get("ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022"

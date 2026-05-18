@@ -534,8 +534,15 @@ def _load_providers_json() -> dict:
         return {}
 
 
-@app.get("/providers", dependencies=PROTECT)
-def list_providers() -> list[str]:
+def _save_providers_json(data: dict) -> None:
+    """Atomic write — temp file + rename so partial writes don't corrupt the file.
+    Used by POST/PUT/DELETE /providers endpoints。"""
+    tmp = config.PROVIDERS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(config.PROVIDERS_FILE)
+
+
+def _list_provider_names() -> list[str]:
     """Provider names that the backend can actually drive — i.e. with non-empty env.
 
     Empty-env profiles like the default `claude` slot map to "use anthropic
@@ -543,9 +550,154 @@ def list_providers() -> list[str]:
     directly because there's no API key. So we omit them from the dropdown.
     Users who want anthropic-OAuth still get it as the global config.toml
     fallback when no per-workspace override is set.
+
+    Internal helper — used by RunRequest / NewWorkspaceRequest provider
+    validators (set membership check). GET /providers endpoint returns
+    list[dict] for the PWA settings page,不能直接给 set() 用。
     """
     profiles = _load_providers_json().get("profiles") or {}
     return sorted(name for name, p in profiles.items() if (p.get("env") or {}))
+
+
+def _mask_key(token: str) -> str:
+    """Mask API key for display:show first 4 + last 4, middle ***。短 key 全 mask。"""
+    if not token:
+        return ""
+    if len(token) <= 8:
+        return "*" * len(token)
+    return f"{token[:4]}***{token[-4:]}"
+
+
+@app.get("/providers", dependencies=PROTECT)
+def list_providers() -> list[dict]:
+    """List all providers with masked API keys for PWA settings page.
+
+    每个 entry:{name, is_default, base_url, model, key_masked, has_key}。
+    is_default 标记 config.toml#provider 当前默认 — UI 用来防止删 default。
+    """
+    profiles = _load_providers_json().get("profiles") or {}
+    cfg_default = (config.load_config() or {}).get("provider", "")
+    out = []
+    for name, p in sorted(profiles.items()):
+        env = p.get("env") or {}
+        if not env:
+            continue
+        token = env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or ""
+        out.append({
+            "name": name,
+            "is_default": name == cfg_default,
+            "base_url": env.get("ANTHROPIC_BASE_URL", ""),
+            "model": env.get("ANTHROPIC_MODEL", ""),
+            "key_masked": _mask_key(token),
+            "has_key": bool(token),
+        })
+    return out
+
+
+# ---------- providers CRUD + test ----------
+# PWA #settings/providers 页面用。当前 providers.json 唯一改的入口除了 ssh 就是
+# 这里;agent-run.sh 和 backend.llm 都只读不写,所以并发风险只来自"用户同时
+# 在两个 tab 改"—— 单用户场景不会发生,_save_providers_json 用 temp+rename
+# atomic write 已经足够。
+
+
+class ProviderForm(BaseModel):
+    """Form payload for POST/PUT /providers。
+
+    api_key 空字符串在 PUT 时表示"不改 key",POST 时报 400(新建必须给 key)。
+    name pattern 跟其他 name field 一致 — 字母数字 + . _ -,避免路径 / shell 问题。
+    """
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    base_url: str = Field(..., min_length=1, max_length=256)
+    model: str = Field(..., min_length=1, max_length=128)
+    api_key: str = Field(default="", max_length=512)
+
+
+@app.post("/providers", dependencies=PROTECT)
+def add_provider(req: ProviderForm) -> dict:
+    if not req.api_key:
+        raise HTTPException(400, {"error": "api_key_required", "msg": "新建 provider 必须填 API key"})
+    data = _load_providers_json()
+    profiles = data.setdefault("profiles", {})
+    if req.name in profiles:
+        raise HTTPException(409, {"error": "exists", "msg": f"provider {req.name!r} 已存在,用 PUT 改"})
+    profiles[req.name] = {
+        "env": {
+            "ANTHROPIC_BASE_URL": req.base_url,
+            "ANTHROPIC_AUTH_TOKEN": req.api_key,
+            "ANTHROPIC_MODEL": req.model,
+        },
+    }
+    try:
+        _save_providers_json(data)
+    except OSError as e:
+        raise HTTPException(500, {"error": "write_failed", "msg": str(e)})
+    return {"ok": True}
+
+
+@app.put("/providers/{name}", dependencies=PROTECT)
+def update_provider(name: str, req: ProviderForm) -> dict:
+    if name != req.name:
+        raise HTTPException(400, {"error": "name_mismatch", "msg": "URL 里的 name 必须跟 body.name 一致"})
+    data = _load_providers_json()
+    profiles = data.setdefault("profiles", {})
+    if name not in profiles:
+        raise HTTPException(404, {"error": "not_found"})
+    env = profiles[name].setdefault("env", {})
+    env["ANTHROPIC_BASE_URL"] = req.base_url
+    env["ANTHROPIC_MODEL"] = req.model
+    if req.api_key:
+        # 空字符串 = 不改 key(原值保留)。非空 = 覆盖。
+        env["ANTHROPIC_AUTH_TOKEN"] = req.api_key
+        # 兼容:历史 profile 可能用 ANTHROPIC_API_KEY,一起更新避免出现两个不同
+        # 的 key。新 profile 不会再写 ANTHROPIC_API_KEY,只用 ANTHROPIC_AUTH_TOKEN。
+        if "ANTHROPIC_API_KEY" in env:
+            env["ANTHROPIC_API_KEY"] = req.api_key
+    try:
+        _save_providers_json(data)
+    except OSError as e:
+        raise HTTPException(500, {"error": "write_failed", "msg": str(e)})
+    return {"ok": True}
+
+
+@app.delete("/providers/{name}", dependencies=PROTECT)
+def delete_provider(name: str) -> dict:
+    data = _load_providers_json()
+    profiles = data.get("profiles") or {}
+    if name not in profiles:
+        raise HTTPException(404, {"error": "not_found"})
+    cfg_default = (config.load_config() or {}).get("provider", "")
+    if cfg_default == name:
+        raise HTTPException(
+            400,
+            {"error": "is_default",
+             "msg": f"{name!r} 是 config.toml#provider 当前 default,删了之后默认 LLM 调用会全废。先改 config.toml 的 default 再来删。"},
+        )
+    del profiles[name]
+    try:
+        _save_providers_json(data)
+    except OSError as e:
+        raise HTTPException(500, {"error": "write_failed", "msg": str(e)})
+    return {"ok": True}
+
+
+@app.post("/providers/{name}/test", dependencies=PROTECT)
+def test_provider(name: str) -> dict:
+    """Try one LLM call to verify connectivity。返回 {ok, reply, model}。
+    HTTP error → 502 + detail.detail 含 raw,让前端 toast 显示具体问题。"""
+    profiles = _load_providers_json().get("profiles") or {}
+    if name not in profiles:
+        raise HTTPException(404, {"error": "not_found"})
+    try:
+        reply = llm.complete(
+            "reply with just OK",
+            max_tokens=16,
+            timeout=15,
+            profile_name=name,
+        )
+    except RuntimeError as e:
+        raise HTTPException(502, {"error": "test_failed", "detail": str(e)})
+    return {"ok": True, "reply": reply, "name": name}
 
 
 @app.get("/skills", dependencies=PROTECT)
@@ -600,7 +752,7 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
     # Validate provider name against providers.json#profiles keys (claude
     # is currently the only supported engine; codex was removed 2026-05-14).
     if body.provider is not None and body.provider != "":
-        valid = set(list_providers())
+        valid = set(_list_provider_names())
         if body.provider not in valid:
             raise HTTPException(
                 400,
@@ -1038,7 +1190,7 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
     # Validate the optional provider FIRST so we don't leave a half-created
     # repo behind if the provider name is bad. Engine determines which list
     if req.provider:
-        valid = set(list_providers())
+        valid = set(_list_provider_names())
         if req.provider not in valid:
             raise HTTPException(
                 400,
