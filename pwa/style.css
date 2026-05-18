@@ -3093,6 +3093,92 @@ pre {
    above intact; nothing references them in current renderers but harmless. */
 
 /* ============================================================================
+ *  Search history (#search) — D 改造
+ * ============================================================================ */
+.search-page { max-width: 800px; }
+.search-form { margin-bottom: var(--space-3); }
+.search-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+}
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+.search-result-count { margin: 0 0 var(--space-2); font-size: var(--text-xs); }
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: background var(--t-base), border-color var(--t-base);
+}
+.search-result:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+}
+.search-result-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+}
+.search-field-label {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: inline-block;
+  min-width: 42px;
+}
+.search-result-prompt {
+  font-size: var(--text-sm);
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+.search-result-output {
+  font-size: var(--text-sm);
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+.search-result-output pre {
+  margin: 0;
+  font-size: 12px;
+  max-height: 80px;
+  overflow: hidden;
+  background: var(--bg-canvas);
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  white-space: pre-wrap;
+  flex: 1;
+  min-width: 0;
+}
+.search-result mark {
+  background: var(--accent-amber);
+  color: var(--bg-canvas);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* ============================================================================
  *  Settings views(#settings + #settings/providers)
  * ============================================================================ */
 .settings-hub {

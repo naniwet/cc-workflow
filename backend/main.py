@@ -1248,6 +1248,19 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
     }
 
 
+# ---------- /search(全文搜索历史 runs 的 prompt + output)----------
+# D 改造(易用性 §3):跑几百次 run 后,想找回"上周跟 claude 讨论过 X"那条,
+# 需要全文搜索。LIKE 实现(KISS,见 db.search_runs docstring)。
+
+@app.get("/search", dependencies=PROTECT)
+def search_runs(q: str = "", limit: int = 50) -> list[dict]:
+    if limit < 1 or limit > 200:
+        raise HTTPException(400, {"error": "limit_out_of_range",
+                                  "msg": "limit 必须在 1..200",
+                                  "hint": "默认 50 通常够用,翻页交给前端 query 二次过滤"})
+    return db.search_runs(q, limit=limit)
+
+
 # ---------- /loops (T+1d — P0-2 + P0-3 后半) ----------
 # pause/resume only writes the `enabled` field in jobs/<name>.json. Actual
 # enforcement (agent-run early-exits when enabled=false) is Phase 3 / P0-7g.

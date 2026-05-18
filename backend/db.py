@@ -75,6 +75,33 @@ def new_run_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def search_runs(q: str, limit: int = 50) -> list[dict]:
+    """Full-text-ish search 历史 prompt + output。
+
+    用 SQLite LIKE %q%,不上 FTS5 — 单用户单机预计 runs < 10k,LIKE 几 ms,
+    上 FTS5 多一套 trigger / backfill / virtual table,KISS 决策(将来 runs
+    多了再升级)。返回字段跟 _RUN_SUMMARY_COLS 对齐 + 高亮 snippet。
+    """
+    if not q or len(q.strip()) < 2:
+        return []
+    pat = f"%{q.strip()}%"
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, workspace, status, source, started_at, finished_at, "
+            "elapsed_s, exit_code, "
+            "substr(prompt, 1, 240) AS prompt_preview, "
+            "CASE WHEN length(output) <= 240 THEN output "
+            "     ELSE substr(output, 1, 120) || char(10) || '…' || char(10) || substr(output, -120) "
+            "END AS output_preview "
+            "FROM runs "
+            "WHERE prompt LIKE ? OR output LIKE ? "
+            "ORDER BY started_at DESC "
+            "LIMIT ?",
+            (pat, pat, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def insert_queued_run(
     *,
     run_id: str,

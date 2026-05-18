@@ -488,6 +488,7 @@ const ROUTES = {
   tasks:       renderTasksView,
   roundtables: renderRoundtablesView,
   settings:    renderSettingsView,
+  search:      renderSearchView,
 };
 function parseRoute() {
   const h = location.hash.replace('#', '');
@@ -4578,6 +4579,103 @@ function _roleSlug(name) {
   })[name] || 'unknown';
 }
 
+// ---------- Search view (#search) ----------
+// D 改造(易用性 §3):全文搜索历史 runs 的 prompt + reply。后端走 SQLite
+// LIKE(KISS,见 backend/db.search_runs),前端 250ms debounce 输入 → 调
+// /search?q=&limit=50 → 列表显示 + 高亮关键词。
+// 入口:Settings hub 一个 link。后续 C(命令面板)做了之后,Cmd+K 也能搜。
+
+function renderSearchView() {
+  const view = $('view');
+  // 从 hash 拿初始 q(如果 #search?q=xxx 这种形式 — 当前 parseRoute 不解析
+  // query string,后续可以加;现在 hash 是单纯 #search)
+  view.innerHTML = `
+    <div class="search-page">
+      <h2 style="margin:0 0 var(--space-3)">Search history</h2>
+      <form class="search-form" id="search-form">
+        <input class="search-input" name="q" type="search" autocomplete="off"
+               placeholder="搜历史 prompt / claude reply(至少 2 个字)" autofocus>
+      </form>
+      <div class="search-results" id="search-results">
+        <p class="muted">输入关键词查 runs 历史 — 在 prompt 和 reply 文本里 case-insensitive 子串匹配。</p>
+      </div>
+    </div>
+  `;
+  const input = view.querySelector('.search-input');
+  let timer = null;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    timer = setTimeout(() => _doSearch(q), 250);   // debounce 250ms,避免每个字符都打 backend
+  });
+  view.querySelector('#search-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    clearTimeout(timer);
+    _doSearch(input.value.trim());
+  });
+}
+
+async function _doSearch(q) {
+  const results = document.getElementById('search-results');
+  if (!results) return;
+  if (!q || q.length < 2) {
+    results.innerHTML = '<p class="muted">输入至少 2 个字符开始搜索。</p>';
+    return;
+  }
+  results.innerHTML = '<p class="muted">Searching…</p>';
+  try {
+    const rows = await api(`/search?q=${encodeURIComponent(q)}&limit=50`);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      results.innerHTML = `<p class="muted">没找到含 <code>${esc(q)}</code> 的 run。换个关键词试试。</p>`;
+      return;
+    }
+    results.innerHTML = `
+      <div class="search-result-count muted">${rows.length} 条匹配(按时间倒序)</div>
+      ${rows.map((r) => _searchResultRow(r, q)).join('')}
+    `;
+  } catch (err) {
+    showError(err);
+    results.innerHTML = '<p class="muted">搜索失败,看 toast 详情。</p>';
+  }
+}
+
+function _searchResultRow(r, query) {
+  const when = timeAgo(r.started_at);
+  const elapsed = r.elapsed_s ? `${r.elapsed_s}s` : '';
+  const status = r.status || '?';
+  const statusClass = status === 'done' ? 'done' : (status === 'failed' || status === 'error' ? 'failed' : 'running');
+  return `
+    <a class="search-result" href="#workspaces/${encodeURIComponent(r.workspace)}">
+      <div class="search-result-head">
+        <strong>${esc(r.workspace)}</strong>
+        <span class="tag tag-${statusClass}">${esc(status)}</span>
+        <span class="muted">${esc(r.source || '')} · ${esc(when)}${elapsed ? ' · ' + esc(elapsed) : ''}</span>
+      </div>
+      <div class="search-result-prompt">
+        <span class="search-field-label">prompt</span>
+        <span>${_highlight(r.prompt_preview || '', query)}</span>
+      </div>
+      ${r.output_preview ? `
+        <div class="search-result-output">
+          <span class="search-field-label">reply</span>
+          <pre>${_highlight(r.output_preview, query)}</pre>
+        </div>
+      ` : ''}
+    </a>
+  `;
+}
+
+// 把命中的 query 子串包成 <mark>。case-insensitive,跟后端 LIKE 行为一致。
+// 注意:先 esc 防 XSS,再 regex replace —— 否则 query 里的 < > 会破坏 DOM。
+function _highlight(text, query) {
+  if (!text) return '';
+  const escaped = esc(text);
+  if (!query) return escaped;
+  const safe = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(${safe})`, 'gi');
+  return escaped.replace(re, '<mark>$1</mark>');
+}
+
 // ---------- Settings views (#settings / #settings/providers) ----------
 // 配置可视化第一弹:providers.json 可以在 PWA 里加 / 改 / 删 / 测连通性,
 // 不用 ssh。secrets.toml / workspaces.json 是后续子项,目前 Settings hub
@@ -4588,6 +4686,10 @@ function renderSettingsView() {
   view.innerHTML = `
     <h2 style="margin:0 0 var(--space-3)">Settings</h2>
     <div class="settings-hub">
+      <a class="settings-card" href="#search">
+        <div class="settings-card-title"><strong>Search history</strong> 🔍</div>
+        <div class="muted">全文搜索历史 run 的 prompt 和 claude reply(找回上次跟 claude 讨论过的某事)</div>
+      </a>
       <a class="settings-card" href="#settings/providers">
         <div class="settings-card-title"><strong>Providers</strong></div>
         <div class="muted">LLM 服务商配置:API key / base URL / model;加 / 改 / 删 / 测连通性</div>
