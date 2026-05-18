@@ -69,12 +69,39 @@ def complete(user_msg: str, *, max_tokens: int = 256, timeout: int = 30) -> str:
         with urlreq.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urlerror.HTTPError as e:
-        snippet = e.read()[:300].decode("utf-8", "replace") if e.fp else ""
+        snippet = e.read()[:500].decode("utf-8", "replace") if e.fp else ""
         raise RuntimeError(f"LLM HTTP {e.code}: {snippet}")
     except urlerror.URLError as e:
         raise RuntimeError(f"LLM network error: {e}")
 
+    # 尝试两种 response 格式:
+    #   1. Anthropic 原生 {content: [{type: 'text', text: '...'}]} — 官方 / 真 anthropic-compat 端点
+    #   2. OpenAI-compatible {choices: [{message: {content: '...'}}]} — DeepSeek / Kimi / 大部分国产 LLM 走的格式
+    # 单独写两段是为了让 raw response 出错时 debug 信息能精确显示"两种都没匹配"。
+
+    # Anthropic 格式
     for part in data.get("content") or []:
-        if part.get("type") == "text":
-            return part.get("text", "")
-    return ""
+        if isinstance(part, dict) and part.get("type") == "text":
+            txt = part.get("text", "")
+            if txt:
+                return txt
+
+    # OpenAI-compatible 格式
+    choices = data.get("choices") or []
+    if isinstance(choices, list) and choices:
+        msg = (choices[0] or {}).get("message") or {}
+        content = msg.get("content", "")
+        if isinstance(content, str) and content:
+            return content
+        # reasoning 模型有时把内容塞 list(content blocks)
+        if isinstance(content, list):
+            for p in content:
+                if isinstance(p, dict) and p.get("type") == "text":
+                    txt = p.get("text", "")
+                    if txt:
+                        return txt
+
+    # 两种格式都没匹配 — 抛错带 raw response snippet,让调用方能看到 LLM
+    # 到底返回了啥(parse_nl_cron 会 catch 这个 RuntimeError 转 502)。
+    snippet = json.dumps(data, ensure_ascii=False)[:500]
+    raise RuntimeError(f"LLM response has no recognizable text content; raw={snippet}")
