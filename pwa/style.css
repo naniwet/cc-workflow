@@ -935,7 +935,7 @@ body.is-dragging .ws-col:not(.dragging) {
   gap: var(--space-2);
   align-items: flex-end;
 }
-.ws-col .trigger-form textarea { flex: 1; min-height: 60px; }
+.ws-col .trigger-form textarea { flex: 1 1 0; min-width: 0; min-height: 60px; }
 .ws-col .trigger-form button   { white-space: nowrap; flex: 0 0 auto; }
 
 /* ============================================================================
@@ -2266,7 +2266,12 @@ pre {
     border-top: 1px solid var(--border-subtle);
   }
   .workspace-input textarea {
-    flex: 1 1 auto;
+    /* basis 0 而不是 auto:flex-wrap 容器里 basis: auto 会按 textarea 默认
+       cols (~200px) 算自然宽度,加上 attach-btn / run-btn 容易撑过容器宽度
+       触发 wrap → 三个元素各占一行(用户报告:Run 跑去了下一行)。basis 0
+       让 textarea 从 0 开始 grow,只占剩余空间,不会把自己撑出 wrap。 */
+    flex: 1 1 0;
+    min-width: 0;     /* basis 0 + min-width 0 双保险,极窄屏也不溢出 */
     min-height: 44px;
     max-height: 140px;
   }
