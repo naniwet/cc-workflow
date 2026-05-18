@@ -476,6 +476,28 @@ const workspaceSessionScroll = {};                  // key: ws name → {scrollT
 const workspaceStreamState = {};                     // key: ws name → {eventCount,newEvents,atBottom}
 const workspaceTurnOverrides = {};                   // key: run id → expanded bool
 
+// 追踪上次 render 时每个 turn 的 status,用来 detect "刚结束" 的 turn
+// (running/queued → done/failed)。这种 turn 自动写一笔 override = true,
+// 让 workspaceTurnExpansion 的"manual override 优先"规则生效保持展开,
+// 不会因为默认规则把它突然 collapse(用户在看 live output,突然收起视觉跳)。
+// 注意:不是改默认全展开(那样历史 turn 都打开太重),只精准 pin"刚结束"的。
+const _lastSeenTurnStatuses = new Map();              // key: run id → 上次 render 时的 status
+
+function _pinJustFinishedTurns(turns) {
+  for (const t of (turns || [])) {
+    if (!t || !t.id) continue;
+    const prev = _lastSeenTurnStatuses.get(t.id);
+    const wasRunning = prev === 'running' || prev === 'queued';
+    const isRunningNow = t.status === 'running' || t.status === 'queued';
+    if (wasRunning && !isRunningNow && !Object.prototype.hasOwnProperty.call(workspaceTurnOverrides, t.id)) {
+      // 刚 finish — 自动 pin 成 expanded。仅在没 manual override 时写
+      // (用户如果之前 collapse 过,保持 collapse,不要打他脸)。
+      workspaceTurnOverrides[t.id] = true;
+    }
+    _lastSeenTurnStatuses.set(t.id, t.status);
+  }
+}
+
 // 前端 prompt 队列:workspace 有 run 在跑时,用户继续发的 prompt 排队,
 // 跑完一条自动 dispatch 下一条。后端 /run 在 workspace busy 时会 409
 // (backend/main.py:231 active_in_workspace 检查),只能前端排队。
@@ -2420,6 +2442,7 @@ function workspaceColHtml(name, data, opts = {}) {
   let timelineHtml;
   const turns = _workspaceSessionTurns(data);
   const turnsToShow = detail ? turns : turns.slice(-maxRows);
+  _pinJustFinishedTurns(turnsToShow);
   const expandedTurns = workspaceTurnExpansion(
     turnsToShow,
     workspaceTurnOverrides,
@@ -2780,6 +2803,7 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
   const currentName = sortedNames[currentIdx];
   const data = groups[currentName] || { active: [], queued: [], recent: [] };
   const turns = _workspaceSessionTurns(data);
+  _pinJustFinishedTurns(turns);
   const expandedTurns = workspaceTurnExpansion(turns, workspaceTurnOverrides);
   const eventCount = expandedTurns.length + pendingApprovalsForWorkspace(currentName).length;
   workspaceStreamState[currentName] = workspaceAutoScrollState(workspaceStreamState[currentName], {
