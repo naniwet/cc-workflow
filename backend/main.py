@@ -695,8 +695,14 @@ def test_provider(name: str) -> dict:
     try:
         reply = llm.complete(
             "reply with just OK",
-            max_tokens=16,
-            timeout=15,
+            # max_tokens=256(不是 16)是因为 reasoning model(deepseek-v4-pro /
+            # claude opus thinking / o1 等)需要先 thinking 才出 text,16 不够
+            # 跑完 thinking,response 只有 thinking block 没 text → 报"no
+            # recognizable text content"。256 对 reasoning model 也足够 thinking
+            # + 输出"OK"。
+            max_tokens=256,
+            # timeout=30 是因为 reasoning model 推理慢,15s 经常打不进 / 截断
+            timeout=30,
             profile_name=name,
         )
     except RuntimeError as e:

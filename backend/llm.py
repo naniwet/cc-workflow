@@ -112,7 +112,21 @@ def complete(user_msg: str, *, max_tokens: int = 256, timeout: int = 30,
                     if txt:
                         return txt
 
-    # 两种格式都没匹配 — 抛错带 raw response snippet,让调用方能看到 LLM
-    # 到底返回了啥(parse_nl_cron 会 catch 这个 RuntimeError 转 502)。
+    # Reasoning model fallback:有些 model(deepseek-v4-pro / claude opus thinking
+    # / o1 等)response 只有 type=='thinking' 的 content block,没单独的 text block
+    # —— 尤其当 max_tokens 太小时,thinking 还没跑完就截断,根本没轮到 text 输出。
+    # 兜底:把最后一个 thinking 的 thinking 字段返回当 text。让调用方至少能看到
+    # model 在 reason 啥,而不是 "no recognizable text content" 这种没头没尾的错。
+    last_thinking = ""
+    for part in data.get("content") or []:
+        if isinstance(part, dict) and part.get("type") == "thinking":
+            t = part.get("thinking", "")
+            if t:
+                last_thinking = t
+    if last_thinking:
+        return last_thinking
+
+    # 两种格式都没匹配 + 没 thinking — 抛错带 raw response snippet,让调用方能看
+    # 到 LLM 到底返回了啥(parse_nl_cron 会 catch 这个 RuntimeError 转 502)。
     snippet = json.dumps(data, ensure_ascii=False)[:500]
     raise RuntimeError(f"LLM response has no recognizable text content; raw={snippet}")
