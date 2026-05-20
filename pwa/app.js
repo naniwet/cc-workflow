@@ -1384,7 +1384,7 @@ async function syncSkillsFor(workspace) {
     _saveSkillsCache(workspace, Array.isArray(items) ? items : []);
     return items;
   } catch (e) {
-    showError(`sync skills failed: ${e.message}`);
+    showError(e, { prefix: 'sync /commands' });
     return null;
   }
 }
@@ -1441,7 +1441,7 @@ function _renderSlashPopupEmpty(textarea, workspace) {
     <div class="slash-popup-empty">
       <div>暂无 skills 数据。</div>
       <div class="muted" style="font-size:11px;margin-top:4px">
-        点 workspace 列头的 🔄 Sync skills 按钮拉一次。
+        点 workspace 列头的 🔄 Sync /commands 按钮拉一次。
       </div>
     </div>
   `;
@@ -2590,7 +2590,7 @@ function workspaceColHtml(name, data, opts = {}) {
               ${ICONS.download} <span>Pull latest</span>
             </button>
             <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
-              ${ICONS.refresh} <span>Sync skills</span>
+              ${ICONS.refresh} <span>Sync /commands</span>
             </button>
           </div>
           <div class="ws-menu-section">
@@ -2962,7 +2962,7 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
                 ${ICONS.download} <span>Pull latest</span>
               </button>
               <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
-                ${ICONS.refresh} <span>Sync skills</span>
+                ${ICONS.refresh} <span>Sync /commands</span>
               </button>
             </div>
             <div class="ws-menu-section">
