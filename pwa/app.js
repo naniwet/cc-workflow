@@ -1077,6 +1077,10 @@ function renderDesktopOverview() {
           <input type="checkbox" name="trust" ${lastData.globalDefaultTrust ? 'checked' : ''}>
           Auto-approve all tools (trust this workspace — Bash / git / WebFetch / etc. won't ask for permission)
         </label>
+        <label class="inline-check">
+          <input type="checkbox" name="worktree_mode_off">
+          这个 workspace 不需要 worktree 隔离(笔记 / 文档仓库选这个)
+        </label>
         <p class="muted" style="font-size:11px;margin:0">
           Creates <code>~/workspaces/&lt;name&gt;/</code> with <code>git init</code>
           + empty README + first commit. <strong>Engine is locked once created</strong>.
@@ -1288,6 +1292,10 @@ function renderMobileOverview() {
         <label class="inline-check">
           <input type="checkbox" name="trust" ${lastData.globalDefaultTrust ? 'checked' : ''}>
           Auto-approve all tools (trust)
+        </label>
+        <label class="inline-check">
+          <input type="checkbox" name="worktree_mode_off">
+          不需要 worktree 隔离(笔记 / 文档仓库)
         </label>
         <button type="submit">Create</button>
         <p class="muted" style="font-size:11px;margin:0">
@@ -2444,6 +2452,8 @@ async function onAddWorkspace(e) {
   // so the workspace's resolution doesn't drift if the global default changes
   // later.
   const trust = !!form.elements.trust?.checked;
+  // checkbox 勾上 = "off"(不要 worktree),不勾 = "auto"(当前行为)。
+  const worktreeMode = form.elements.worktree_mode_off?.checked ? 'off' : 'auto';
   if (!name) return;
   const btn = form.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = 'Creating…';
@@ -2451,7 +2461,7 @@ async function onAddWorkspace(e) {
     await api('/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, provider, engine, trust }),
+      body: JSON.stringify({ name, provider, engine, trust, worktree_mode: worktreeMode }),
     });
     form.reset();
     clearDraft('new-ws');
