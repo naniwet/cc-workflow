@@ -22,7 +22,7 @@ import subprocess
 import threading
 from typing import Callable, Optional
 
-from . import config, db
+from . import config, db, ws_settings
 
 # Callback type: receives the finished run row (db.get_run result dict).
 OnFinish = Callable[[dict], None]
@@ -50,6 +50,12 @@ def submit(
     job_name: Optional[str] = None,
     on_finish: Optional[OnFinish] = None,
 ) -> None:
+    # worktree_mode=off 把 session_key 压成 "default" — agent-run.sh 看到
+    # default 就跑 workspace 主目录不开 worktree(见 agent-run.sh:354)。
+    # 副作用:同 ws 下所有触发源共用同一个 claude session。这正是 off
+    # 模式的预期语义(笔记/文档仓库不需要 session 隔离)。
+    if ws_settings.worktree_mode_for(workspace) == "off":
+        session_key = "default"
     db.insert_queued_run(
         run_id=run_id,
         workspace=workspace,
