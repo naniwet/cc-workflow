@@ -520,6 +520,11 @@ class NewWorkspaceRequest(BaseModel):
     # WebFetch / etc.). Mutable post-creation via PUT settings, unlike
     # engine. None at create time → inherit config.toml default_trust.
     trust: Optional[bool] = None
+    # worktree_mode: "off" 让所有 run 跑 workspace 主目录(不开 worktree)。
+    # 笔记 / 文档仓库这种单分支线性提交的选这个。默认 "auto" = 当前行为
+    # (session_key != default 时建 worktree)。Mutable post-creation via
+    # PUT /workspaces/{name}/settings,跟 trust 一致。
+    worktree_mode: Literal["auto", "off"] = "auto"
 
 
 @app.get("/config", dependencies=PROTECT)
@@ -757,6 +762,9 @@ class WorkspaceSettingsRequest(BaseModel):
     # true/false → set. Use Pydantic's model_fields_set to distinguish
     # "field absent" from "field present with null".
     trust: Optional[bool] = None
+    # worktree_mode: 缺字段 → 不动;"off" → 写字段;"auto" / None → 删
+    # 字段(走 worktree_mode_for() fallback)。语义跟 trust 对称。
+    worktree_mode: Optional[Literal["auto", "off"]] = None
 
 
 @app.put("/workspaces/{name}/settings", dependencies=PROTECT)
@@ -795,6 +803,13 @@ def put_workspace_settings(name: str, body: WorkspaceSettingsRequest) -> dict:
             current.pop("trust", None)              # null → revert to default
         else:
             current["trust"] = bool(body.trust)
+
+    if "worktree_mode" in sent:
+        if body.worktree_mode == "off":
+            current["worktree_mode"] = "off"
+        else:
+            # "auto" 或 None → 删字段,让 worktree_mode_for() 走 fallback。
+            current.pop("worktree_mode", None)
 
     if current:
         data[name] = current
@@ -1241,6 +1256,10 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
     # If req.trust is None we DON'T write anything — trust_for() will
     # fall back to config.toml default_trust at runtime. Avoids freezing
     # the current global default into the workspace.
+    # 同样的 fallback 模式:默认 "auto" 不写,只有显式 "off" 才落字段。
+    # 让 worktree_mode_for() 走 fallback,避免把当前默认冻进 ws 配置。
+    if req.worktree_mode == "off":
+        settings["worktree_mode"] = "off"
     data[req.name] = settings
     ws_settings.save(data)
     # No per-workspace claude-settings sync — allow rules live globally
@@ -1251,6 +1270,7 @@ def create_workspace(req: NewWorkspaceRequest) -> dict:
     return {
         "ok": True, "name": req.name, "path": str(target),
         "provider": req.provider, "engine": req.engine, "trust": req.trust,
+        "worktree_mode": req.worktree_mode,
     }
 
 
