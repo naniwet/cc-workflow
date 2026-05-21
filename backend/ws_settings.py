@@ -29,11 +29,14 @@ Why a module of its own:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Optional
 
 from . import config
+
+_logger = logging.getLogger(__name__)
 
 # DOM path — single source of truth used by both main.py and im_feishu.py.
 _PATH = config.CCW_DIR / "workspaces.json"
@@ -79,6 +82,30 @@ def engine_for(workspace: str) -> str:
     than accepting an `engine` from user input.
     """
     return (load().get(workspace) or {}).get("engine") or DEFAULT_ENGINE
+
+
+_VALID_WORKTREE_MODES = ("auto", "off")
+
+
+def worktree_mode_for(workspace: str) -> str:
+    """Resolve per-workspace worktree mode.
+
+    Returns "off" only when explicitly set; everything else (missing field,
+    unknown workspace, invalid value, unreadable file) → "auto".
+
+    "off" means runner.submit() will squash session_key to "default" so
+    agent-run.sh runs in the workspace main dir (no git worktree). Used
+    for notes/docs repos that don't need branch isolation.
+    """
+    val = (load().get(workspace) or {}).get("worktree_mode")
+    if val in _VALID_WORKTREE_MODES:
+        return val
+    if val is not None:
+        _logger.warning(
+            "workspace %r has invalid worktree_mode %r — falling back to 'auto'",
+            workspace, val,
+        )
+    return "auto"
 
 
 def trust_for(workspace: str) -> bool:
