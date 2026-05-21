@@ -102,20 +102,26 @@ function _isRunningTurn(turn) {
   return turn?.status === 'running' || turn?.status === 'queued';
 }
 
-// Turn 展开规则(简化版,3 档):
-//   1. Manual override(用户手动 tap 过)→ 用用户选的
-//   2. Running / queued turn → 永远展开(用户在等结果,不展开看不到)
+// Turn 展开规则(4 档,优先级从高到低):
+//   1. Manual override(用户手动 tap 过)→ 用用户选的(running 除外)
+//   2. Running / queued turn → 永远展开(在等结果,不展开看不到 live output)
 //   3. opts.expandAll(PC detail mode)→ 全展开
-//   4. 其它(包括"最近一次完成")→ 收起
+//   4. 数组最后一条 → 默认展开("最近一条"对应用户最关心的)
+//   5. 其它 → 收起
 //
-// 历史:之前有"latest completed 自动展开"规则(设计图 §3.2 + 后续
-// "newer running 来了才收"事件驱动版),用户反馈"第一次进入展开最后
-// 一个 turn 也没必要,去掉这种逻辑吧"。砍掉。现在默认全 collapsed,
-// 用户想看哪条点哪条 + 手动 override 持久;running 仍然自动展开因为
-// "看不到 live output 体验比想点开还差"。
+// 历史:
+// - 最早版本:有"latest completed 自动展开"规则。
+// - 中间版本:用户反馈"第一次进入展开最后一个 turn 也没必要" → 砍掉,
+//   全 collapsed(running 除外)。
+// - 2026-05-21:用户改主意,加回"最后一条默认展开"(本版)— PC overview
+//   / 手机进来都觉得"什么都不展开"反而要多点一下,展开最后一条对应
+//   "默认看到最新一次的输出"更顺。
+//
+// 手动 collapse 仍然战胜默认 expand-last(用户明确点收起就尊重)。
 export function workspaceTurnExpansion(turns, manual = {}, opts = {}) {
   const safeTurns = Array.isArray(turns) ? turns : [];
   const expandAll = !!opts.expandAll;
+  const lastIdx = safeTurns.length - 1;
   return safeTurns.map((turn, idx) => {
     const id = String(turn?.id ?? idx);
     // Manual override beats default(running 除外 —— running 不让用户
@@ -125,7 +131,8 @@ export function workspaceTurnExpansion(turns, manual = {}, opts = {}) {
     }
     if (_isRunningTurn(turn)) return { ...turn, id, expanded: true };
     if (expandAll) return { ...turn, id, expanded: true };
-    return { ...turn, id, expanded: false };
+    // 数组最后一条默认展开("最近一次"用户最关心的输出);其余收起。
+    return { ...turn, id, expanded: idx === lastIdx };
   });
 }
 

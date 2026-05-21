@@ -44,22 +44,22 @@ test('nextRunLabel gives next-fire text for common cron shapes', () => {
   assert.equal(nextRunLabel('0 */6 * * *', now), '下次 12:00 · in 1h40m');
 });
 
-test('workspaceTurnExpansion keeps only running turn expanded by default(其余全收起)', () => {
+test('workspaceTurnExpansion expands the last turn by default(其余全收起)', () => {
   const turns = [
     { id: 'r1', status: 'done' },
     { id: 'r2', status: 'failed' },
     { id: 'r3', status: 'done' },
   ];
 
-  // 无 running:全部收起(包括"最近完成")。用户反馈"第一次进入展开
-  // 最后一个 turn 也没必要" — 默认 0 个 expanded。
+  // 默认规则:数组最后一条展开(用户最关心的"最近一次"),其余收起。
+  // 2026-05-21 重新引入 — 之前砍掉过一次,用户改主意了。
   assert.deepEqual(workspaceTurnExpansion(turns).map((t) => [t.id, t.expanded]), [
     ['r1', false],
     ['r2', false],
-    ['r3', false],
+    ['r3', true],
   ]);
 
-  // 加 running:只有那条 running 展开
+  // 加 running:running 是最后一条 → 只它展开,前面 done 全收
   assert.deepEqual(
     workspaceTurnExpansion([...turns, { id: 'r4', status: 'running' }]).map((t) => [t.id, t.expanded]),
     [
@@ -68,6 +68,17 @@ test('workspaceTurnExpansion keeps only running turn expanded by default(其余�
       ['r3', false],
       ['r4', true],
     ],
+  );
+});
+
+test('workspaceTurnExpansion: 空数组无副作用', () => {
+  assert.deepEqual(workspaceTurnExpansion([]), []);
+});
+
+test('workspaceTurnExpansion: 单个 done turn 默认展开(it is the last)', () => {
+  assert.deepEqual(
+    workspaceTurnExpansion([{ id: 'only', status: 'done' }]).map((t) => [t.id, t.expanded]),
+    [['only', true]],
   );
 });
 
@@ -84,7 +95,8 @@ test('workspaceTurnExpansion lets manual toggles override completed turns', () =
 });
 
 test('workspaceTurnExpansion: manual override 战胜默认 collapsed', () => {
-  // 全 done,r2 被用户手动展开 → r2 保持 expanded,其余 collapsed
+  // 全 done,r2 被用户手动展开 → r2 保持 expanded;
+  // r3 是最后一条 → 默认展开;r1 收起。
   const turns = [
     { id: 'r1', status: 'done' },
     { id: 'r2', status: 'done' },
@@ -92,7 +104,20 @@ test('workspaceTurnExpansion: manual override 战胜默认 collapsed', () => {
   ];
   assert.deepEqual(
     workspaceTurnExpansion(turns, { r2: true }).map((t) => [t.id, t.expanded]),
-    [['r1', false], ['r2', true], ['r3', false]],
+    [['r1', false], ['r2', true], ['r3', true]],
+  );
+});
+
+test('workspaceTurnExpansion: manual collapse 战胜默认 expand-last', () => {
+  // r3 是最后一条 — 但用户手动收起过 → 尊重用户。
+  const turns = [
+    { id: 'r1', status: 'done' },
+    { id: 'r2', status: 'done' },
+    { id: 'r3', status: 'done' },
+  ];
+  assert.deepEqual(
+    workspaceTurnExpansion(turns, { r3: false }).map((t) => [t.id, t.expanded]),
+    [['r1', false], ['r2', false], ['r3', false]],
   );
 });
 
