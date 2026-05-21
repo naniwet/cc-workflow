@@ -110,6 +110,19 @@ Claude Code CLI 的 `--permission-mode` 合法值**只有** `default / acceptEdi
 
 trust=on 的 audit trail 是有意保留的——用户能事后看到 claude 实际跑了哪些工具。**不要为了"加速"删掉 audit 写入**。
 
+### 4.5 worktree_mode:per-workspace 关 worktree 的开关
+
+`workspaces.json` 字段 `worktree_mode`:
+
+- `"auto"`(默认 / 缺字段)→ 当前行为:`session_key != "default"` 时 `agent-run.sh:354` 建 worktree。
+- `"off"` → `runner.submit()` 把 session_key 压成 `"default"`,所有 run 跑 workspace 主目录,**不开 worktree**。
+
+用例:笔记 / 文档仓库这种单分支线性提交的,worktree 没意义反而碍事。
+
+**副作用:** off 模式下 PWA / 飞书 / cron 在同一 ws 共用同一个 claude session(session_key 都被压成 default)。这正是 off 的预期语义。需要"关 worktree 但保留 session 分离"时再考虑给 `agent-run.sh` 加 `--no-worktree` flag(目前 YAGNI)。
+
+**切换时老 worktree 处理:** auto → off 翻转后,老的 `~/workspaces/.wt/<ws>-*/` worktree 留着不动,backend 不主动清。用户自己决定:merge 进 main(`POST /workspaces/<ws>/merge-session-branch`)还是删(`git worktree remove`)。
+
 ### 5. PWA SW 是网络优先 + 强制绕过浏览器 cache
 
 `pwa/sw.js` 用 `fetch(request, { cache: 'no-store' })` 强制绕过浏览器 HTTP cache。这是经验教训:nginx `expires 1h` + cache-first SW 会让用户拿到坏的旧 `app.js`。改 SW 策略前先读 `pwa/sw.js` 的注释,**特别是 HTTPS 迁移后那段"newWsProviderPicker fix"故事**。
