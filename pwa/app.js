@@ -1630,6 +1630,10 @@ function bindWorkspaceColHandlers(root) {
     // work the approval buttons needed.
     _addTapFallback(b, onTrustToggleClick);
   }
+  for (const b of root.querySelectorAll('.ws-worktree-mode-toggle')) {
+    b.addEventListener('click', onWorktreeModeToggleClick);
+    _addTapFallback(b, onWorktreeModeToggleClick);
+  }
   for (const b of root.querySelectorAll('.event-filter-toggle')) {
     b.addEventListener('click', _onEventFilterToggle);
     _addTapFallback(b, _onEventFilterToggle);
@@ -2384,6 +2388,31 @@ async function onTrustToggleClick(e) {
   }
 }
 
+async function onWorktreeModeToggleClick(e) {
+  const btn = e.currentTarget;
+  const name = btn.dataset.ws;
+  const wasOff = btn.dataset.mode === 'off';
+  const next = wasOff ? 'auto' : 'off';
+  btn.disabled = true;
+  try {
+    await api(`/workspaces/${encodeURIComponent(name)}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktree_mode: next }),
+    });
+    showToast(
+      'success',
+      `${name}: worktree ${next === 'off' ? 'OFF (主目录)' : 'ON (隔离)'}`,
+      { ttl: 2500 },
+    );
+    refreshAll();
+  } catch (err) {
+    showError(`save worktree_mode failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function _onProviderRadioClick(e) {
   const btn = e.currentTarget;
   const name = btn.dataset.ws;
@@ -2578,6 +2607,7 @@ function workspaceColHtml(name, data, opts = {}) {
   // all events toggle)也只 mobile 有。用户反馈"pc 端的菜单怎么跟移动
   // 端不一样 保持一致吧" —— 这里以 mobile 版为准重写 PC body。
   const trustOnPC = effectiveTrust(name);
+  const worktreeOffPC = lastData.wsSettings[name]?.worktree_mode === 'off';
   const providerEngineBlock = `
     <div class="ws-meta-mobile">
       ${providerLabel}
@@ -2595,6 +2625,10 @@ function workspaceColHtml(name, data, opts = {}) {
                     data-ws="${esc(name)}" data-trusted="${trustOnPC ? '1' : '0'}">
               ${trustOnPC ? ICONS.unlock : ICONS.lock}
               <span>Trust workspace <strong>${trustOnPC ? 'ON' : 'OFF'}</strong></span>
+            </button>
+            <button class="ws-worktree-mode-toggle ws-menu-item" type="button"
+                    data-ws="${esc(name)}" data-mode="${worktreeOffPC ? 'off' : 'auto'}">
+              <span>Worktree 隔离 <strong>${worktreeOffPC ? 'OFF' : 'ON'}</strong></span>
             </button>
             <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}">
               ${ICONS.download} <span>Pull latest</span>
@@ -2935,6 +2969,7 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
   const trustOn = effectiveTrust(name);
+  const worktreeOff = lastData.wsSettings[name]?.worktree_mode === 'off';
   const providerRows = isRunning
     ? _providerRadioListHtml(name, wsProvider).replace(/<button /g, '<button disabled ')
     : _providerRadioListHtml(name, wsProvider);
@@ -2967,6 +3002,10 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
                       data-ws="${esc(name)}" data-trusted="${trustOn ? '1' : '0'}">
                 ${trustOn ? ICONS.unlock : ICONS.lock}
                 <span>Trust workspace <strong>${trustOn ? 'ON' : 'OFF'}</strong></span>
+              </button>
+              <button class="ws-worktree-mode-toggle ws-menu-item" type="button"
+                      data-ws="${esc(name)}" data-mode="${worktreeOff ? 'off' : 'auto'}">
+                <span>Worktree 隔离 <strong>${worktreeOff ? 'OFF' : 'ON'}</strong></span>
               </button>
               <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
                 ${ICONS.download} <span>Pull latest</span>
