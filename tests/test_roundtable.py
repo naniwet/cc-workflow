@@ -184,5 +184,51 @@ class RoundtableTests(unittest.TestCase):
         self.assertIn("因磁盘满而崩", pessimistic_r1.content)
 
 
+class _FakeHttpResp:
+    """假 urlopen 返回值 — 实现 context manager + read 即可。"""
+    def __init__(self, payload: dict):
+        self._payload = payload
+    def read(self):
+        return json.dumps(self._payload).encode("utf-8")
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+
+
+class HttpChatReasoningContentFallback(unittest.TestCase):
+    """`_http_chat` 解析 reasoning model 响应 — 答案在 reasoning_content
+    而非 content 字段(kimi-k2.6 / DeepSeek reasoner / o1 等)。"""
+
+    def _call(self, message_dict: dict) -> str:
+        from unittest.mock import patch
+        from backend.roundtable import model
+        payload = {"choices": [{"message": message_dict}]}
+        with patch.object(model.urlreq, "urlopen", return_value=_FakeHttpResp(payload)):
+            return model._http_chat(
+                base_url="https://x.example",
+                api_key="k",
+                model="m",
+                system="s",
+                user="u",
+                temperature=0.5,
+                max_tokens=16,
+                timeout=5,
+            )
+
+    def test_content_present_takes_precedence(self):
+        out = self._call({"content": "正答案", "reasoning_content": "想了一会儿"})
+        self.assertEqual(out, "正答案")
+
+    def test_falls_back_to_reasoning_content_when_content_empty(self):
+        out = self._call({"content": "", "reasoning_content": "用 reasoning 兜底"})
+        self.assertEqual(out, "用 reasoning 兜底")
+
+    def test_returns_empty_when_both_missing(self):
+        # 两个都空 → 返回 "",call_model 那层会抛 EmptyModelOutputError。
+        out = self._call({"content": "", "reasoning_content": ""})
+        self.assertEqual(out, "")
+
+
 if __name__ == "__main__":
     unittest.main()

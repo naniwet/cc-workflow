@@ -162,9 +162,14 @@ def _http_chat(
         raise ModelTransientError(f"network: {e}") from e
 
     try:
-        return payload["choices"][0]["message"]["content"] or ""
+        msg = payload["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as e:
         raise ModelBadRequestError(f"unexpected response shape: {payload!r}") from e
+    # Reasoning model(kimi-k2.6 / DeepSeek reasoner / o1 系列)把答案放
+    # `reasoning_content` 字段,留 `content=""`。content 优先,缺则 fallback
+    # 到 reasoning_content,两者皆空回 "" 让 call_model 抛 EmptyModelOutputError。
+    # 跟 backend/llm.py:115-127 的 thinking-block fallback 同一思路。
+    return (msg.get("content") or msg.get("reasoning_content") or "")
 
 
 # --------------------------------------------------------------------------- #

@@ -102,18 +102,21 @@ SCENARIO = Role(
 
 PRECEDENT = Role(
     name="借鉴派",
-    # 默认与其他三派一致,使用 deepseek-chat 单源跑通。
+    # 借鉴派用 Kimi(K2.6,中文母语 + 通用知识广度)— 假设是"借鉴派需要
+    # 横跨数据库 / OS / 分布式的系统设计史,Kimi 中文圈案例覆盖更广"。
     #
-    # 历史:AgentRoundtable §2 D 多模型实验把借鉴派切到 Kimi(K2,中文母语 +
-    # 通用知识广度;假设是"借鉴派需要横跨数据库/OS/分布式的系统设计史,
-    # Kimi 中文圈案例覆盖更广")。2026-05-14 退回 deepseek-chat 单源,因为
-    # Kimi key 经常出 401,而跨模型视角对实际辩论质量的提升尚未验证。
+    # 历史:
+    # - 最早版本就用 kimi(AgentRoundtable §2 D 多模型实验)。
+    # - 2026-05-14 退回 deepseek-chat,因 Kimi key 经常 401。
+    # - 2026-05-24 切回 kimi-k2.6 — 新 moonshot key 测过有效,且修了
+    #   model.py:_http_chat 的 reasoning_content fallback bug(kimi-k2.6
+    #   是 reasoning model,答案在 reasoning_content 而非 content;之前
+    #   _http_chat 只读 content → 永远抛 EmptyModelOutputError → 切不上)。
     #
-    # 想恢复跨模型实验:改回 "kimi-k2.6"(或其他 MODEL_ENDPOINTS 里登记过
-    # 的 key),并确认 providers.json#openai_endpoints.moonshot.api_key 是
-    # 有效的 Moonshot/Kimi API key(平台:platform.moonshot.cn 或
-    # platform.kimi.com,二者已合并)。
-    preferred_model="deepseek-chat",
+    # 想换 model:MODEL_ENDPOINTS 里登记过的 key 都行(kimi-k2.6 /
+    # kimi-k2-0905-preview / moonshot-v1-32k)。非 k2.6 系列不是 reasoning
+    # model,拿到的就是 content 字段普通答案,不走 reasoning fallback 路径。
+    preferred_model="kimi-k2.6",
     system_prompt="""你是借鉴派,一位工程师。你信奉:
 
 - 成熟系统积累了无数血泪经验,大概率比你聪明
