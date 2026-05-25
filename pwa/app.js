@@ -5138,36 +5138,38 @@ async function renderSettingsRolesView() {
   const allModels = data.models || [];
   const allRoles = data.roles || [];
 
+  // Vertical stacked cards(不再用 <table>)— 解决:
+  // 1. 展开 <details> 不会让左列角色名跟右列错位
+  // 2. 手机端窄屏不被横向 layout 挤压,每个角色一张紧凑卡片
+  // 3. textarea rows 减到 8(可拖大),手机不被它撑满屏
   const rows = allRoles.map(role => {
     const opts = allModels.map(m =>
       `<option value="${esc(m.name)}" ${m.name === role.default_model ? 'selected' : ''}>${esc(m.name)}</option>`
     ).join('');
     return `
-      <tr style="vertical-align:top">
-        <td style="padding-top:8px">${esc(role.name)} <span class="muted" style="font-size:11px">(${esc(role.kind)})</span></td>
-        <td>
-          <select data-role="${esc(role.name)}" class="role-model-select">${opts}</select>
-          <details class="role-prompt-toggle" style="margin-top:8px">
-            <summary class="muted" style="font-size:11px;cursor:pointer">
-              ▸ 自定义 system_prompt(可选,清空 = 用默认)
-            </summary>
-            <textarea data-role-prompt="${esc(role.name)}" class="role-prompt-textarea"
-                      rows="12"
-                      style="width:100%;font-family:monospace;font-size:12px;margin-top:6px;box-sizing:border-box"
-                      placeholder="留空使用 roles.py 的默认 prompt">${esc(role.default_system_prompt || '')}</textarea>
-            <button type="button" class="role-prompt-reset" data-role="${esc(role.name)}"
-                    style="font-size:11px;margin-top:4px">重置为默认(清空 textarea)</button>
-          </details>
-        </td>
-      </tr>`;
+      <div class="role-config-row" style="margin-bottom:var(--space-3);padding:var(--space-2);border:1px solid var(--c-border, #333);border-radius:6px">
+        <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px">
+          <strong>${esc(role.name)}</strong>
+          <span class="muted" style="font-size:11px">(${esc(role.kind)})</span>
+        </div>
+        <select data-role="${esc(role.name)}" class="role-model-select" style="width:100%;max-width:320px">${opts}</select>
+        <details class="role-prompt-toggle" style="margin-top:8px">
+          <summary class="muted" style="font-size:11px;cursor:pointer;user-select:none">
+            自定义 system_prompt(可选,清空 = 用默认)
+          </summary>
+          <textarea data-role-prompt="${esc(role.name)}" class="role-prompt-textarea"
+                    rows="8"
+                    style="width:100%;font-family:monospace;font-size:12px;margin-top:6px;box-sizing:border-box;resize:vertical"
+                    placeholder="留空使用 roles.py 的默认 prompt">${esc(role.default_system_prompt || '')}</textarea>
+          <button type="button" class="role-prompt-reset ws-new-btn" data-role="${esc(role.name)}"
+                  style="margin-top:6px;background:transparent;color:var(--c-fg);font-size:12px">重置为默认(清空 textarea)</button>
+        </details>
+      </div>`;
   }).join('');
 
   $('roles-table').innerHTML = `
-    <table style="width:100%;border-collapse:collapse">
-      <thead><tr><th style="text-align:left">角色</th><th style="text-align:left">默认 model</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2)">
+    <div>${rows}</div>
+    <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap">
       <button class="ws-new-btn" id="roles-save-btn" type="button">保存</button>
       <button class="ws-new-btn" id="roles-reset-btn" type="button" style="background:transparent;color:var(--c-fg)">全部重置(回 hardcode)</button>
     </div>`;
