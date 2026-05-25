@@ -259,6 +259,56 @@ def run_session(
                     ts=clock(),
                 ))
 
+    def _run_follow_up_iteration(
+        round_no: int,
+        follow_up_question: str,
+        prior_synth: str,
+        source: str,                     # "auto" | "user"
+    ) -> None:
+        """跑一轮 follow-up:user_question(若 source=user)→ 4 派 follow_up
+        × N → 新 synth。auto-drill loop 和 /continue 都调这个。"""
+        from .synth import build_follow_up_synth_prompt
+
+        if source == "user":
+            _record(AgentTurn(
+                round=round_no, role="__user__", type="user_question",
+                content=follow_up_question, ts=clock(),
+            ))
+
+        def _follow_up_prompt(role: Role) -> str:
+            return f"""原问题:{question}
+
+上一次 synth(territory map):
+
+{prior_synth}
+
+新追问(来源 {"用户" if source == "user" else "自动追问"}):
+{follow_up_question}
+
+---
+
+请用 **≤ 200 字** 针对这次追问回应,延续你的人设立场。
+不要重复你在前面 round 已经说过的内容。"""
+
+        _run_role_round(round_no, "follow_up", _follow_up_prompt)
+
+        # 新 synth
+        follow_up_turns = [
+            t for t in session.turns if t.round == round_no and t.type == "follow_up"
+        ]
+        synth_text = model_fn(
+            overrides.get(synthesizer.name) or synthesizer.preferred_model,
+            synthesizer.system_prompt,
+            build_follow_up_synth_prompt(
+                original_question=question,
+                prior_synth=prior_synth,
+                follow_up_question=follow_up_question,
+                follow_up_turns=follow_up_turns,
+            ),
+            synthesizer.temperature,
+        )
+        _record(AgentTurn(round=round_no, role=synthesizer.name, type="synth", content=synth_text, ts=clock()))
+
     # --- Round 1: initial answers (every persona, no context but the question) #
     _run_role_round(
         1,
