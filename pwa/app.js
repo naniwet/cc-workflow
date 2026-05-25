@@ -5001,6 +5001,10 @@ function renderSettingsView() {
         <div class="settings-card-title"><strong>Providers</strong></div>
         <div class="muted">LLM 服务商配置:API key / base URL / model;加 / 改 / 删 / 测连通性</div>
       </a>
+      <a class="settings-card" href="#settings/roles">
+        <div class="settings-card-title"><strong>Roundtable Roles</strong></div>
+        <div class="muted">每个角色(极简派 / 场景派 / 借鉴派 / 悲观派 / 整理员 / 审查员)默认用哪个 model</div>
+      </a>
       <div class="settings-card is-disabled">
         <div class="settings-card-title"><strong>Secrets</strong> <span class="tag">soon</span></div>
         <div class="muted">登录用户名/密码 / 飞书 token。目前要 ssh 改 <code>~/.cc-workflow/secrets.toml</code></div>
@@ -5015,6 +5019,7 @@ function renderSettingsView() {
 
 function renderSettingsSectionView(section) {
   if (section === 'providers') return renderSettingsProvidersView();
+  if (section === 'roles') return renderSettingsRolesView();   // 角色默认 model 配置
   // 未知 section → 退回 hub(避免白屏)
   window.history.replaceState(null, '', '#settings');
   renderSettingsView();
@@ -5060,6 +5065,92 @@ function renderSettingsProvidersView() {
   for (const btn of view.querySelectorAll('.provider-edit-btn')) btn.addEventListener('click', _onProviderEditClick);
   for (const btn of view.querySelectorAll('.provider-delete-btn:not([disabled])')) btn.addEventListener('click', _onProviderDeleteClick);
   for (const btn of view.querySelectorAll('.provider-test-btn')) btn.addEventListener('click', _onProviderTestClick);
+}
+
+async function renderSettingsRolesView() {
+  const view = $('view');
+  view.innerHTML = `
+    <p style="margin:0 0 var(--space-2)"><a href="#settings" class="back-link">← Settings</a></p>
+    <h3 style="margin:0 0 var(--space-2)">Roundtable Roles</h3>
+    <p class="muted" style="margin:0 0 var(--space-3)">配每个角色默认用哪个 model。新建 round 表单的 per-role 下拉仍可临时 override 这里的默认。</p>
+    <div id="roles-table" class="muted">加载中...</div>`;
+
+  let data;
+  try {
+    data = await api('/roundtables/models');
+  } catch (err) {
+    $('roles-table').innerHTML = `<p class="muted">加载失败: ${esc(err.message)}</p>`;
+    return;
+  }
+
+  const allModels = data.models || [];
+  const allRoles = data.roles || [];
+
+  const rows = allRoles.map(role => {
+    const opts = allModels.map(m =>
+      `<option value="${esc(m.name)}" ${m.name === role.default_model ? 'selected' : ''}>${esc(m.name)}</option>`
+    ).join('');
+    return `
+      <tr>
+        <td>${esc(role.name)} <span class="muted" style="font-size:11px">(${esc(role.kind)})</span></td>
+        <td><select data-role="${esc(role.name)}" class="role-model-select">${opts}</select></td>
+      </tr>`;
+  }).join('');
+
+  $('roles-table').innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="text-align:left">角色</th><th style="text-align:left">默认 model</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2)">
+      <button class="ws-new-btn" id="roles-save-btn" type="button">保存</button>
+      <button class="ws-new-btn" id="roles-reset-btn" type="button" style="background:transparent;color:var(--c-fg)">全部重置(回 hardcode)</button>
+    </div>`;
+
+  $('roles-save-btn').addEventListener('click', _onRolesSave);
+  $('roles-reset-btn').addEventListener('click', _onRolesReset);
+}
+
+async function _onRolesSave(e) {
+  const btn = e.currentTarget;
+  btn.disabled = true; btn.textContent = '保存中...';
+  // 收集所有 <select data-role>,组成 {role: model}
+  const selects = document.querySelectorAll('select.role-model-select');
+  const role_models = {};
+  for (const s of selects) {
+    role_models[s.dataset.role] = s.value;
+  }
+  try {
+    await api('/settings/role-models', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role_models }),
+    });
+    showToast('success', 'role-models 已保存', { ttl: 2500 });
+  } catch (err) {
+    showError(`保存失败: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = '保存';
+  }
+}
+
+async function _onRolesReset(e) {
+  if (!confirm('清空所有 role override,所有角色回到 hardcode 默认?')) return;
+  const btn = e.currentTarget;
+  btn.disabled = true; btn.textContent = '清空中...';
+  try {
+    await api('/settings/role-models', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role_models: {} }),
+    });
+    showToast('success', '已清空所有 override', { ttl: 2500 });
+    renderSettingsRolesView();    // 刷新当前页
+  } catch (err) {
+    showError(`清空失败: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = '全部重置(回 hardcode)';
+  }
 }
 
 function _settingsProviderRow(p) {
