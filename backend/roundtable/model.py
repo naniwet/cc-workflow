@@ -76,14 +76,13 @@ MODEL_ENDPOINTS: dict[str, str] = {
     "kimi-k2.6": "moonshot",
     "kimi-k2-0905-preview": "moonshot",
     "moonshot-v1-32k": "moonshot",
-    # Kimi Code 官方推荐:用统一 ID `kimi-for-coding` + 单独的
-    # api.kimi.com/coding/v1 endpoint(跟 moonshot.cn 是两套服务,
-    # kimi-code 给 coding agent 用,SLA / 模型路由都不同)。
-    # 需要在 providers.json#openai_endpoints.kimi-code 配:
-    #   base_url: https://api.kimi.com/coding/v1
-    #   api_key:  sk-kimi-...(从 Kimi Code 控制台,跟 ANTHROPIC_API_KEY 同一把)
-    # 见 https://www.kimi.com/code/docs/third-party-tools/other-coding-agents.html
-    "kimi-for-coding": "kimi-code",
+    # NB: 2026-05-25 短暂加过 "kimi-for-coding" → "kimi-code" 路径
+    # (api.kimi.com/coding/v1),但 Kimi 服务端用 user-agent / 调用方
+    # whitelist 判定为非 "Coding Agent" 直接 403:
+    #   {"error":{"message":"Kimi For Coding is currently only available
+    #    for Coding Agents such as Kimi CLI, Claude Code, Roo Code,
+    #    Kilo Code, etc."}}
+    # roundtable 不在白名单里,移除避免误导用户。
 }
 
 
@@ -139,7 +138,6 @@ _REASONING_MODELS = frozenset({
     "kimi-k2.5",
     "kimi-k2-thinking",
     "kimi-k2-thinking-turbo",
-    "kimi-for-coding",       # 文档:"Reasoning Effort: Medium 推荐",是 reasoning
     "deepseek-reasoner",     # deprecated alias,仍纳入(thinking 阶段慢)
     "deepseek-v4-flash",     # thinking default(2026-05 rebrand)
     "deepseek-v4-pro",       # always reasoning
