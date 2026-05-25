@@ -266,5 +266,17 @@ class ParseVerdictTests(unittest.TestCase):
         self.assertTrue(v.converged)
 
 
+class ReviewerRoleTests(unittest.TestCase):
+    def test_reviewer_prompt_carries_required_anchors(self):
+        from backend.roundtable.roles import REVIEWER
+        # spec §3.1 要求 prompt 包含关键 anchor — 不强校验全文,只校验
+        # 必须出现的字面值,以免 prompt 演化时不小心删了 schema 关键词。
+        self.assertEqual(REVIEWER.name, "审查员")
+        self.assertEqual(REVIEWER.temperature, 0.0)
+        self.assertEqual(REVIEWER.preferred_model, "deepseek-chat")
+        for anchor in ("CONVERGED", "NEEDS_DRILL", "## 判断", "## 理由", "## 追问问题"):
+            self.assertIn(anchor, REVIEWER.system_prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
