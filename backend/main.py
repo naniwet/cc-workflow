@@ -398,6 +398,72 @@ async def post_uploads(workspace: str, files: list[UploadFile] = File(...)) -> d
     return {"turn_id": turn_id, "paths": paths}
 
 
+@app.post("/roundtable-uploads", dependencies=PROTECT)
+async def post_roundtable_uploads(files: list[UploadFile] = File(...)) -> dict:
+    """接 PWA 新建 roundtable 时上传的文本文件,落到
+    ~/.cc-state/roundtable-uploads/<upload_id>/。
+
+    返回 {"upload_id": <12-hex>, "paths": [<abs path>, ...]}。前端塞
+    进 POST /roundtables 的 attachments 字段,backend 读文件内容拼
+    进 question 喂给所有派。
+
+    跟 POST /uploads/{workspace} 完全独立路径,避免在 workspace 名 =
+    "roundtable" 时 FastAPI 路由 shadow 掉它的真实路径(spec §2.3)。
+
+    单请求合计 10 MB 上限。比 100KB enriched-prompt 上限大,因为 multipart
+    上传不限内容是否能塞进 prompt — 那是 create_roundtable 阶段才 enforce
+    (spec §2.4)。
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail={"error": "no_files"})
+
+    upload_id = uuid.uuid4().hex[:12]
+    dest_dir = config.ROUNDTABLE_UPLOADS_DIR / upload_id
+    try:
+        dest_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail={"error": "mkdir_failed", "msg": str(e)})
+
+    paths: list[str] = []
+    total = 0
+    seen_names: dict[str, int] = {}
+    try:
+        for upload in files:
+            safe = _safe_filename(upload.filename or "file")
+            count = seen_names.get(safe, 0) + 1
+            seen_names[safe] = count
+            if count > 1:
+                stem = Path(safe).stem
+                ext = Path(safe).suffix
+                safe = f"{stem}-{count}{ext}"
+            target = dest_dir / safe
+
+            with open(target, "wb") as fh:
+                while chunk := await upload.read(64 * 1024):
+                    total += len(chunk)
+                    if total > _UPLOAD_MAX_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail={
+                                "error": "too_large",
+                                "msg": f"上传文件合计超过 {_UPLOAD_MAX_BYTES // (1024*1024)} MB",
+                                "hint": "拆几次小批量上传。",
+                            },
+                        )
+                    fh.write(chunk)
+            os.chmod(target, 0o600)
+            paths.append(str(target))
+    except HTTPException:
+        # 半成品清掉避免占地方
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise
+    except Exception as e:  # noqa: BLE001
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail={"error": "upload_failed", "msg": str(e)})
+
+    return {"upload_id": upload_id, "paths": paths}
+
+
 @app.get("/runs/{task_id}/tail", dependencies=PROTECT)
 def tail_run(task_id: str, lines: int = 50) -> dict:
     """Return the most recent N lines from this run's live stream jsonl.

@@ -36,6 +36,12 @@ ROUNDTABLES_DIR = STATE_DIR / "roundtables"
 # 清理 7 天以上文件。详细约束见 backend/main.py:post_uploads + CLAUDE.md §7。
 UPLOADS_DIR = STATE_DIR / "uploads"
 
+# Roundtable 文件上传专属顶层目录。**不**在 UPLOADS_DIR 下,因为
+# _WS_NAME_RE 允许下划线 / 包含 "roundtable" 的字符串作为 workspace 名,
+# 共用 uploads/ 子目录会名字冲突。spec §2.3。
+# 每周 cron 清 7 天以上(实现:加进 cc-loops cron 的 find 命令覆盖路径)。
+ROUNDTABLE_UPLOADS_DIR = STATE_DIR / "roundtable-uploads"
+
 # Where agent-run.sh resolves <workspace> names — must match agent-run.sh's
 # WORKSPACES_DIR constant. Used by ui_cards.run_form_card() to populate the
 # workspace dropdown.
