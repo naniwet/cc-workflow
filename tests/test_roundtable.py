@@ -319,13 +319,11 @@ class AutoDrillLoopTests(unittest.TestCase):
     def test_converged_immediately_no_extra_rounds(self):
         from backend.roundtable.debate import run_session
 
-        calls = {"count": 0}
         verdict_text = self._verdict_text(converged=True)
         def model_fn(model, system, user, temp):
-            calls["count"] += 1
             if "审查员" in (system or ""):
                 return verdict_text
-            return f"call {calls['count']}"
+            return "stub"
 
         with tempfile.TemporaryDirectory() as d:
             session = run_session(
