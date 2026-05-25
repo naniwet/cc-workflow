@@ -32,6 +32,17 @@ _PATH = config.CCW_DIR / "role_models.json"
 # 接受的内层字段白名单 — 未知 key 在 load() 阶段过滤
 _KNOWN_FIELDS = ("model", "system_prompt")
 
+# 2026-05 DeepSeek rebrand:老 model 名 → 新 v4 名。在读时静默重映射,
+# 不写回磁盘 — 等用户下次 save() 才落新名(避免 load 副作用,跟既有
+# flat→nested 升级策略对齐)。Picker 已经把老名字从 MODEL_ENDPOINTS 删了,
+# 这里是 backward-compat 兜底,让 user 的 role_models.json 不破。
+# 映射依据:deepseek-chat 是便宜通用 → flash;deepseek-reasoner 是
+# 推理 → pro。等所有用户配置都迁移完后,这张表可以删。
+_DEPRECATED_MODEL_ALIASES = {
+    "deepseek-chat": "deepseek-v4-flash",
+    "deepseek-reasoner": "deepseek-v4-pro",
+}
+
 
 def _read_raw() -> dict:
     """读 JSON 文件,返回顶层 dict;{} on missing / unreadable / non-dict。"""
@@ -50,18 +61,22 @@ def _read_raw() -> dict:
 
 def load() -> dict[str, dict]:
     """Return overrides dict;always nested shape {role: {model?, system_prompt?}}。
-    老 flat string value 自动升级到 {"model": value};未知 key 过滤;空 entry 丢。"""
+    老 flat string value 自动升级到 {"model": value};未知 key 过滤;空 entry 丢;
+    deprecated model 名(deepseek-chat / deepseek-reasoner)自动重映射到 v4 名字
+    (见 _DEPRECATED_MODEL_ALIASES)— 都是 in-memory only,不写回文件。"""
     raw = _read_raw()
     out: dict[str, dict] = {}
     for role_name, val in raw.items():
         if isinstance(val, str):
             if val:
-                out[role_name] = {"model": val}
+                out[role_name] = {"model": _DEPRECATED_MODEL_ALIASES.get(val, val)}
         elif isinstance(val, dict):
             cleaned: dict[str, str] = {}
             for field in _KNOWN_FIELDS:
                 v = val.get(field)
                 if isinstance(v, str) and v:
+                    if field == "model":
+                        v = _DEPRECATED_MODEL_ALIASES.get(v, v)
                     cleaned[field] = v
             if cleaned:
                 out[role_name] = cleaned

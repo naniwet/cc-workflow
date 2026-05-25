@@ -27,7 +27,7 @@ TurnType = Literal["answer", "critique", "synth", "review", "follow_up", "user_q
 class Role:
     name: str
     system_prompt: str
-    preferred_model: str = "deepseek-chat"
+    preferred_model: str = "deepseek-v4-flash"
     temperature: float = 0.7
 
 

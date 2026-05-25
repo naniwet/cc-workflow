@@ -40,12 +40,12 @@ class RoleModelsStoreTests(unittest.TestCase):
         """同文件混合(部分 flat string、部分 nested dict)都正确处理。"""
         with _patched_path({
             "极简派": "kimi-k2.6",
-            "悲观派": {"model": "deepseek-reasoner"},
+            "悲观派": {"model": "moonshot-v1-32k"},
             "借鉴派": {"system_prompt": "你是借鉴派(自定义)..."},
         }):
             out = role_models_store.load()
             self.assertEqual(out["极简派"], {"model": "kimi-k2.6"})
-            self.assertEqual(out["悲观派"], {"model": "deepseek-reasoner"})
+            self.assertEqual(out["悲观派"], {"model": "moonshot-v1-32k"})
             self.assertEqual(out["借鉴派"], {"system_prompt": "你是借鉴派(自定义)..."})
 
     def test_load_skips_garbage_values(self):
@@ -84,22 +84,22 @@ class RoleModelsStoreTests(unittest.TestCase):
         with _patched_path(None):
             role_models_store.save({
                 "借鉴派": {"model": "kimi-k2.6"},
-                "悲观派": {"model": "deepseek-reasoner", "system_prompt": "..."},
+                "悲观派": {"model": "moonshot-v1-32k", "system_prompt": "..."},
             })
             self.assertEqual(role_models_store.load(), {
                 "借鉴派": {"model": "kimi-k2.6"},
-                "悲观派": {"model": "deepseek-reasoner", "system_prompt": "..."},
+                "悲观派": {"model": "moonshot-v1-32k", "system_prompt": "..."},
             })
 
     def test_effective_model_for_uses_override_when_present(self):
         with _patched_path({"极简派": {"model": "kimi-k2.6"}}):
             self.assertEqual(
-                role_models_store.effective_model_for("极简派", "deepseek-chat"),
+                role_models_store.effective_model_for("极简派", "kimi-k2-0905-preview"),
                 "kimi-k2.6",
             )
             self.assertEqual(
-                role_models_store.effective_model_for("场景派", "deepseek-chat"),
-                "deepseek-chat",
+                role_models_store.effective_model_for("场景派", "kimi-k2-0905-preview"),
+                "kimi-k2-0905-preview",
             )
 
     def test_effective_system_prompt_for_uses_override_when_present(self):

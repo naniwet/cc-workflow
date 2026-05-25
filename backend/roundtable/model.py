@@ -55,20 +55,19 @@ class EmptyModelOutputError(ModelError):
 # Model name → endpoint key                                                   #
 # --------------------------------------------------------------------------- #
 # Adding a new model: append here AND make sure providers.json has the
-# matching roundtable_endpoints.<endpoint> block. Both deepseek-chat and
-# deepseek-reasoner share endpoint key "deepseek" — same base_url / api_key,
+# matching roundtable_endpoints.<endpoint> block. Both deepseek-v4-flash and
+# deepseek-v4-pro share endpoint key "deepseek" — same base_url / api_key,
 # only the model string differs in the request body.
 
 MODEL_ENDPOINTS: dict[str, str] = {
-    # DeepSeek 2026-05 rebrand:deepseek-chat / deepseek-reasoner 改成
-    # deepseek-v4-flash / deepseek-v4-pro。v4-flash 同时支持 thinking
-    # (default)和 non-thinking;v4-pro 是更强的 reasoning model。
-    # 老名字 deepseek-chat / deepseek-reasoner 仍兼容但官方标 deprecated,
-    # 留作 backward compat — 用户老 config 不破。
+    # DeepSeek 2026-05 rebrand:老 deepseek-chat / deepseek-reasoner 已下线。
+    # v4-flash 同时支持 thinking(default)和 non-thinking;v4-pro 是更强的
+    # reasoning model。
+    # 老名字 deepseek-chat / deepseek-reasoner 不在 picker 里,但用户
+    # role_models.json 里如果留着,role_models_store.load() 会静默重映射到
+    # 新名字(_DEPRECATED_MODEL_ALIASES),所以老 config 不破。
     "deepseek-v4-flash": "deepseek",
     "deepseek-v4-pro": "deepseek",
-    "deepseek-chat": "deepseek",         # deprecated alias → v4-flash non-thinking
-    "deepseek-reasoner": "deepseek",     # deprecated alias → v4-flash thinking
     # Kimi: per platform.kimi.com/docs (2026-05-14), kimi-k2.6 is the
     # current top model (256k context, function calling, multimodal)。
     # Old preview name kept as alias so anyone with stale config doesn't
@@ -123,7 +122,7 @@ def _load_endpoint(name: str) -> dict:
 
 # Reasoning model API quirk:某些 model 强制 temperature=1.0,传别的值直接 400。
 # 已知:kimi-k2.6 → "invalid temperature: only 1 is allowed for this model"。
-# o1 / o3 / deepseek-reasoner 类似,但 deepseek 是静默忽略不报错。
+# o1 / o3 / deepseek-v4-pro 类似,但 deepseek 是静默忽略不报错。
 # 这里 hardcode 锁列表 — 真到 3 个以上 model 受影响再考虑抽 config。
 _TEMP_LOCKED_MODELS = frozenset({"kimi-k2.6"})
 
@@ -138,7 +137,6 @@ _REASONING_MODELS = frozenset({
     "kimi-k2.5",
     "kimi-k2-thinking",
     "kimi-k2-thinking-turbo",
-    "deepseek-reasoner",     # deprecated alias,仍纳入(thinking 阶段慢)
     "deepseek-v4-flash",     # thinking default(2026-05 rebrand)
     "deepseek-v4-pro",       # always reasoning
 })

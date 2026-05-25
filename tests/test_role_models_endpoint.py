@@ -189,7 +189,7 @@ class CreateRoundtableMergesRoleModelsTests(unittest.TestCase):
         self.role_models_file.write_text(
             json.dumps({
                 "极简派": {"model": "kimi-k2.6"},
-                "悲观派": {"model": "deepseek-reasoner"},
+                "悲观派": {"model": "kimi-k2.6"},
             }),
             encoding="utf-8",
         )
@@ -211,14 +211,14 @@ class CreateRoundtableMergesRoleModelsTests(unittest.TestCase):
         # merged 是 flat dict[str, str](submit signature),per-session override 优先,
         # persistent 其它 key 保留
         self.assertEqual(merged["极简派"], "moonshot-v1-32k")
-        self.assertEqual(merged["悲观派"], "deepseek-reasoner")
+        self.assertEqual(merged["悲观派"], "kimi-k2.6")
 
     def test_ghost_key_in_persistent_does_not_break_create(self):
         """Spec §4: persistent role_models.json 里的 ghost key 不让 create_roundtable 400。"""
         self.role_models_file.write_text(
             json.dumps({
                 "已删派": {"model": "kimi-k2.6"},
-                "极简派": {"model": "deepseek-chat"},
+                "极简派": {"model": "moonshot-v1-32k"},
             }),
             encoding="utf-8",
         )
@@ -233,7 +233,7 @@ class CreateRoundtableMergesRoleModelsTests(unittest.TestCase):
         merged = captured["role_models"]
         # 不含 per-session,只含 persistent 的 model 部分(ghost 也在,run_session 会无视)
         self.assertIn("已删派", merged)
-        self.assertEqual(merged["极简派"], "deepseek-chat")
+        self.assertEqual(merged["极简派"], "moonshot-v1-32k")
 
 
 if __name__ == "__main__":

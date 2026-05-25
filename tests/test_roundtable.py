@@ -263,8 +263,8 @@ class HttpChatTemperatureLockTests(unittest.TestCase):
         self.assertEqual(body["temperature"], 1.0)
 
     def test_non_locked_model_uses_caller_temp(self):
-        """deepseek-chat 等非 locked model 按 caller 传的 temp。"""
-        body = self._captured_body("deepseek-chat", 0.3)
+        """moonshot-v1-32k 等非 locked model 按 caller 传的 temp。"""
+        body = self._captured_body("moonshot-v1-32k", 0.3)
         self.assertEqual(body["temperature"], 0.3)
 
 
@@ -292,13 +292,13 @@ class ReasoningModelTimeoutTests(unittest.TestCase):
         """kimi-k2.6 是 reasoning model → 自动用 300s。"""
         self.assertEqual(self._captured_timeout("kimi-k2.6"), 300)
 
-    def test_deepseek_reasoner_uses_300s_timeout(self):
-        self.assertEqual(self._captured_timeout("deepseek-reasoner"), 300)
+    def test_deepseek_v4_pro_uses_300s_timeout(self):
+        self.assertEqual(self._captured_timeout("deepseek-v4-pro"), 300)
 
     def test_non_reasoning_model_uses_default_120s(self):
-        """deepseek-chat / moonshot-v1-32k 等非 reasoning model 走 caller 默认。"""
-        self.assertEqual(self._captured_timeout("deepseek-chat"), 120)
+        """moonshot-v1-32k 等非 reasoning model 走 caller 默认。"""
         self.assertEqual(self._captured_timeout("moonshot-v1-32k"), 120)
+        self.assertEqual(self._captured_timeout("kimi-k2-0905-preview"), 120)
 
 
 class ParseVerdictTests(unittest.TestCase):
@@ -344,7 +344,7 @@ class ReviewerRoleTests(unittest.TestCase):
         # 必须出现的字面值,以免 prompt 演化时不小心删了 schema 关键词。
         self.assertEqual(REVIEWER.name, "审查员")
         self.assertEqual(REVIEWER.temperature, 0.0)
-        self.assertEqual(REVIEWER.preferred_model, "deepseek-chat")
+        self.assertEqual(REVIEWER.preferred_model, "deepseek-v4-flash")
         for anchor in ("CONVERGED", "NEEDS_DRILL", "## 判断", "## 理由", "## 追问问题"):
             self.assertIn(anchor, REVIEWER.system_prompt)
 
@@ -662,6 +662,49 @@ class RoleCustomizationTests(unittest.TestCase):
         with patch.object(role_models_store, "load", return_value={"极简派": {"model": "kimi-k2.6"}}):
             result = runner._customize_role(original)
         self.assertIs(result, original)
+
+
+class RoleModelsStoreAliasMigrationTests(unittest.TestCase):
+    """`role_models_store.load()` 读到 deprecated deepseek-chat / deepseek-reasoner
+    时自动重映射到新 v4 名字 — 2026-05 DeepSeek rebrand 之后避免 user 老 config
+    被 MODEL_ENDPOINTS 当 unknown model 拒掉。"""
+
+    def _write_and_load(self, raw_dict: dict) -> dict:
+        """写一个 fake role_models.json,patch _PATH 让 load() 读它,返回 result。"""
+        import json
+        import tempfile
+        from unittest.mock import patch
+        from pathlib import Path as P
+        from backend.roundtable import role_models_store
+        with tempfile.TemporaryDirectory() as d:
+            fake_path = P(d) / "role_models.json"
+            fake_path.write_text(json.dumps(raw_dict), encoding="utf-8")
+            with patch.object(role_models_store, "_PATH", fake_path):
+                return role_models_store.load()
+
+    def test_load_remaps_deprecated_deepseek_chat_to_v4_flash(self):
+        result = self._write_and_load({"悲观派": {"model": "deepseek-chat"}})
+        self.assertEqual(result["悲观派"]["model"], "deepseek-v4-flash")
+
+    def test_load_remaps_deprecated_deepseek_reasoner_to_v4_pro(self):
+        result = self._write_and_load({"整理员": {"model": "deepseek-reasoner"}})
+        self.assertEqual(result["整理员"]["model"], "deepseek-v4-pro")
+
+    def test_load_remaps_flat_legacy_format_too(self):
+        # flat string 老格式(`{role: model}`)也走 alias 迁移
+        result = self._write_and_load({"极简派": "deepseek-chat"})
+        self.assertEqual(result["极简派"]["model"], "deepseek-v4-flash")
+
+    def test_load_passes_through_non_deprecated_names_unchanged(self):
+        result = self._write_and_load({"极简派": {"model": "kimi-k2.6"}})
+        self.assertEqual(result["极简派"]["model"], "kimi-k2.6")
+
+    def test_load_preserves_system_prompt_alongside_alias_remap(self):
+        result = self._write_and_load({
+            "悲观派": {"model": "deepseek-chat", "system_prompt": "be paranoid"},
+        })
+        self.assertEqual(result["悲观派"]["model"], "deepseek-v4-flash")
+        self.assertEqual(result["悲观派"]["system_prompt"], "be paranoid")
 
 
 if __name__ == "__main__":

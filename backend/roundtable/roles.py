@@ -24,7 +24,7 @@ from .data import Role
 
 MINIMALIST = Role(
     name="极简派",
-    preferred_model="deepseek-chat",
+    preferred_model="deepseek-v4-flash",
     system_prompt="""你是极简派,一位工程师。你信奉:
 
 - YAGNI: You Ain't Gonna Need It
@@ -62,7 +62,7 @@ MINIMALIST = Role(
 
 SCENARIO = Role(
     name="场景派",
-    preferred_model="deepseek-chat",
+    preferred_model="deepseek-v4-flash",
     system_prompt="""你是场景派,一位工程师。你信奉:
 
 - 真实使用场景驱动一切
@@ -107,7 +107,8 @@ PRECEDENT = Role(
     #
     # 历史:
     # - 最早版本就用 kimi(AgentRoundtable §2 D 多模型实验)。
-    # - 2026-05-14 退回 deepseek-chat,因 Kimi key 经常 401。
+    # - 2026-05-14 退回 deepseek-chat(后被 2026-05-25 rebrand 替成 v4-flash),
+    #   因 Kimi key 经常 401。
     # - 2026-05-24 切回 kimi-k2.6 — 新 moonshot key 测过有效,且修了
     #   model.py:_http_chat 的 reasoning_content fallback bug(kimi-k2.6
     #   是 reasoning model,答案在 reasoning_content 而非 content;之前
@@ -158,7 +159,7 @@ PRECEDENT = Role(
 
 PESSIMIST = Role(
     name="悲观派",
-    preferred_model="deepseek-chat",
+    preferred_model="deepseek-v4-flash",
     system_prompt="""你是悲观派,一位工程师。你信奉:
 
 - 一切都会崩——问题不是会不会,而是哪里先崩、什么时候崩
@@ -212,7 +213,7 @@ ROLES: list[Role] = [MINIMALIST, SCENARIO, PRECEDENT, PESSIMIST]
 
 SYNTHESIZER = Role(
     name="整理员",
-    preferred_model="deepseek-reasoner",
+    preferred_model="deepseek-v4-pro",
     temperature=0.3,  # 整理任务要稳定,不要 R1/R2 的 0.7
     system_prompt="""你是整理员。你不是一个有立场的角色,你不参与判断。
 
@@ -256,12 +257,16 @@ SYNTHESIZER = Role(
 # --------------------------------------------------------------------------- #
 # 审查员 — 元角色,不参与辩论,只判断"是否收敛"                                #
 # --------------------------------------------------------------------------- #
-# 跟 SYNTHESIZER 同列(都是 meta-role)。spec §3.1 把 model 锁 deepseek-chat
-# 不用 reasoning model — structured output 任务,reasoning_content 反而干扰。
+# 跟 SYNTHESIZER 同列(都是 meta-role)。spec §3.1 把 model 锁 deepseek-v4-flash
+# (2026-05-25 rebrand 后 deepseek-chat 的等价)。
+# 注意:v4-flash 是 thinking-default,跟原 deepseek-chat 不完全等价 — REVIEWER
+# 解析器看 content 字段,reasoning_content 会被 fallback 取(_http_chat:213),
+# 实测应 OK。如真出现 structured output 被 thinking 干扰,override 到
+# moonshot-v1-32k(非 reasoning)。
 
 REVIEWER = Role(
     name="审查员",
-    preferred_model="deepseek-chat",
+    preferred_model="deepseek-v4-flash",
     temperature=0.0,
     system_prompt="""你是审查员,不参与论辩,只判断"圆桌讨论是否已收敛到足够清晰的答案"。
 
