@@ -62,7 +62,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import approvals, auth, config, cron_state, db, im_feishu, llm, runner, skills, ws_settings
+from . import agents_store, approvals, auth, config, cron_state, db, im_feishu, llm, runner, skills, ws_settings
 from .roundtable import io as roundtable_io
 from .roundtable import model as roundtable_model
 from .roundtable import roles as roundtable_roles
@@ -1770,6 +1770,65 @@ def put_role_models(req: RoleModelsRequest) -> dict:
 
     role_models_store.save(cleaned)
     return {"ok": True, "role_models": cleaned}
+
+
+# ============================================================================
+# Subagents management(~/.claude/agents/*.md)— spec §3.2
+# ============================================================================
+
+_AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+class AgentRequest(BaseModel):
+    description: str = Field(default="", max_length=500)
+    tools: list[str] = Field(default_factory=list, max_length=50)
+    system_prompt: str = Field(default="", max_length=50_000)
+
+
+@app.get("/agents", dependencies=PROTECT)
+def list_agents() -> list[dict]:
+    """List all user-global subagents in ~/.claude/agents/。"""
+    import dataclasses
+    return [dataclasses.asdict(a) for a in agents_store.list_agents()]
+
+
+@app.put("/agents/{name}", dependencies=PROTECT)
+def put_agent(name: str, req: AgentRequest) -> dict:
+    """Create or update a subagent。Atomic write。"""
+    if not _AGENT_NAME_RE.match(name):
+        raise HTTPException(400, {
+            "error": "invalid agent name",
+            "must_match": _AGENT_NAME_RE.pattern,
+            "got": name,
+        })
+    for t in req.tools:
+        if not _TOOL_NAME_RE.match(t):
+            raise HTTPException(400, {
+                "error": "invalid tool name",
+                "got": t,
+            })
+    # round-trip 保留 extra_frontmatter(已有文件的 `model:` 等)
+    existing = agents_store.read_agent(name)
+    extras = existing.extra_frontmatter if existing else {}
+    agents_store.save_agent(agents_store.Agent(
+        name=name,
+        description=req.description,
+        tools=req.tools,
+        system_prompt=req.system_prompt,
+        extra_frontmatter=extras,
+    ))
+    return {"ok": True, "name": name}
+
+
+@app.delete("/agents/{name}", dependencies=PROTECT)
+def delete_agent(name: str) -> dict:
+    if not _AGENT_NAME_RE.match(name):
+        raise HTTPException(400, {"error": "invalid agent name", "got": name})
+    removed = agents_store.delete_agent(name)
+    if not removed:
+        raise HTTPException(404, {"error": "agent not found", "name": name})
+    return {"ok": True, "name": name}
 
 
 @app.post("/roundtables", dependencies=PROTECT, status_code=202)
