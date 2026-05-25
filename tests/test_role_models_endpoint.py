@@ -118,5 +118,52 @@ class PutRoleModelsTests(unittest.TestCase):
         self.assertEqual(body.get("role_models"), {"极简派": "kimi-k2.6"})
 
 
+class CreateRoundtableMergesRoleModelsTests(unittest.TestCase):
+    """POST /roundtables 把 per-session role_models 跟 persistent 合并 —
+    per-session 字段覆盖 persistent。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+        self.role_models_file = self.tmp_path / "role_models.json"
+        self.patches = [
+            patch.object(role_models_store, "_PATH", self.role_models_file),
+        ]
+        for p in self.patches:
+            p.start()
+        main.app.dependency_overrides[auth.require_user] = lambda: "test-user"
+        self.client = TestClient(main.app)
+
+    def tearDown(self):
+        main.app.dependency_overrides.clear()
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_per_session_role_models_override_persistent(self):
+        self.role_models_file.write_text(
+            json.dumps({"极简派": "kimi-k2.6", "悲观派": "deepseek-reasoner"}),
+            encoding="utf-8",
+        )
+        from unittest.mock import patch as _patch
+        captured = {}
+        def _fake_submit(*args, **kwargs):
+            captured.update(kwargs)
+            return Path("/tmp/fake-session.jsonl")
+        with _patch("backend.main.roundtable_runner.submit", side_effect=_fake_submit):
+            r = self.client.post(
+                "/roundtables",
+                json={
+                    "question": "Q?",
+                    "role_models": {"极简派": "moonshot-v1-32k"},  # 覆盖 persistent
+                },
+            )
+        self.assertEqual(r.status_code, 202, r.text)
+        merged = captured["role_models"]
+        # per-session 字段覆盖,persistent 其他 key 保留
+        self.assertEqual(merged["极简派"], "moonshot-v1-32k")
+        self.assertEqual(merged["悲观派"], "deepseek-reasoner")
+
+
 if __name__ == "__main__":
     unittest.main()

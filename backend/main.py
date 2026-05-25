@@ -1679,14 +1679,19 @@ def put_role_models(req: RoleModelsRequest) -> dict:
 
 @app.post("/roundtables", dependencies=PROTECT, status_code=202)
 def create_roundtable(req: NewRoundtableRequest) -> dict:
-    """Kick off a new roundtable session. Returns immediately with the
-    session id; the 9 LLM calls run in a background thread."""
-    if req.role_models:
+    """Kick off a new roundtable session. role_models 解析三层:
+    per-session (req.role_models) > persistent (role_models.json) > hardcode。
+    """
+    persistent = role_models_store.load()
+    merged = {**persistent, **(req.role_models or {})}
+
+    if merged:
         valid_roles = (
             {r.name for r in roundtable_roles.ROLES}
             | {roundtable_roles.SYNTHESIZER.name}
+            | {roundtable_roles.REVIEWER.name}
         )
-        for role_name, model_name in req.role_models.items():
+        for role_name, model_name in merged.items():
             if role_name not in valid_roles:
                 raise HTTPException(400, {"error": f"unknown role: {role_name!r}"})
             if model_name not in roundtable_model.MODEL_ENDPOINTS:
@@ -1696,7 +1701,7 @@ def create_roundtable(req: NewRoundtableRequest) -> dict:
                 })
     path = roundtable_runner.submit(
         req.question.strip(),
-        role_models=req.role_models,
+        role_models=merged,
         critique_rounds=req.critique_rounds,
     )
     return {"id": path.stem, "status": "queued", "question": req.question}
