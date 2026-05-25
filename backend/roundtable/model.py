@@ -107,6 +107,12 @@ def _load_endpoint(name: str) -> dict:
 # HTTP call — OpenAI-compatible Chat Completions                              #
 # --------------------------------------------------------------------------- #
 
+# Reasoning model API quirk:某些 model 强制 temperature=1.0,传别的值直接 400。
+# 已知:kimi-k2.6 → "invalid temperature: only 1 is allowed for this model"。
+# o1 / o3 / deepseek-reasoner 类似,但 deepseek 是静默忽略不报错。
+# 这里 hardcode 锁列表 — 真到 3 个以上 model 受影响再考虑抽 config。
+_TEMP_LOCKED_MODELS = frozenset({"kimi-k2.6"})
+
 
 def _http_chat(
     *,
@@ -123,7 +129,11 @@ def _http_chat(
 
     Classifies HTTP failures into ModelTransientError vs ModelBadRequestError
     so call_model's retry loop knows what to do.
+
+    `_TEMP_LOCKED_MODELS` 里的 model 会被强制 temperature=1.0(reasoning model
+    API quirk),caller 传的 temperature 被忽略。
     """
+    effective_temp = 1.0 if model in _TEMP_LOCKED_MODELS else temperature
     body = json.dumps(
         {
             "model": model,
@@ -131,7 +141,7 @@ def _http_chat(
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": temperature,
+            "temperature": effective_temp,
             "max_tokens": max_tokens,
         }
     ).encode("utf-8")

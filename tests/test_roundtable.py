@@ -231,6 +231,43 @@ class HttpChatReasoningContentFallback(unittest.TestCase):
         self.assertEqual(out, "")
 
 
+class HttpChatTemperatureLockTests(unittest.TestCase):
+    """`_http_chat` 对 _TEMP_LOCKED_MODELS 里的 model 强制 temperature=1.0
+    (reasoning model API quirk;kimi-k2.6 传别的温度直接 400)。"""
+
+    def _captured_body(self, model_name: str, requested_temp: float) -> dict:
+        from unittest.mock import patch
+        from backend.roundtable import model as model_mod
+        payload = {"choices": [{"message": {"content": "ok"}}]}
+        captured = {}
+        def _fake_urlopen(req, *a, **kw):
+            # req.data 是 POST body JSON 字节
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return _FakeHttpResp(payload)
+        with patch.object(model_mod.urlreq, "urlopen", side_effect=_fake_urlopen):
+            model_mod._http_chat(
+                base_url="https://x.example",
+                api_key="k",
+                model=model_name,
+                system="s",
+                user="u",
+                temperature=requested_temp,
+                max_tokens=16,
+                timeout=5,
+            )
+        return captured["body"]
+
+    def test_kimi_k26_forces_temperature_to_1(self):
+        """kimi-k2.6 不管 caller 传啥都 send temp=1.0(避免 400)。"""
+        body = self._captured_body("kimi-k2.6", 0.7)
+        self.assertEqual(body["temperature"], 1.0)
+
+    def test_non_locked_model_uses_caller_temp(self):
+        """deepseek-chat 等非 locked model 按 caller 传的 temp。"""
+        body = self._captured_body("deepseek-chat", 0.3)
+        self.assertEqual(body["temperature"], 0.3)
+
+
 class ParseVerdictTests(unittest.TestCase):
     """审查员输出解析 — fallback 表见 spec §3.2。"""
 
