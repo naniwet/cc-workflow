@@ -162,3 +162,43 @@ def parse_synthesis(text: str) -> dict[str, list[str]]:
             result[current].append(bullet_match.group(1).strip())
 
     return result
+
+
+def build_follow_up_synth_prompt(
+    original_question: str,
+    prior_synth: str,
+    follow_up_question: str,
+    follow_up_turns: list[AgentTurn],
+) -> str:
+    """Auto-drill / 续问 后的 synth prompt — 让整理员接着上一次的 synth
+    更新,而不是从零写一个新 synth。
+
+    follow_up_turns: 该 round 内 4 派对 follow-up question 的回应。
+    """
+    persona_block = "\n\n".join(
+        f"- **{t.role}**: {t.content}" for t in follow_up_turns
+    )
+    return f"""原始问题:
+{original_question}
+
+上一次 synth(territory map):
+
+{prior_synth}
+
+---
+
+新追问:
+{follow_up_question}
+
+4 派对这次追问的回应:
+
+{persona_block}
+
+---
+
+请**接着上一次** synth 更新 — 保留仍然成立的部分,根据这次追问 + 4 派的
+新回应,**只更新被影响的段落**。输出结构跟首次 synth 一致(5 段:
+## 共识点 / ## 分歧轴 / ## 关键判断 / ## 条件性结论 / ## 下一步行动)。
+
+约束跟首次 synth 一样 — 不允许直接替用户拍板,只摆 tradeoff + 留判断给人。
+"""

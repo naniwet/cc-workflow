@@ -278,5 +278,21 @@ class ReviewerRoleTests(unittest.TestCase):
             self.assertIn(anchor, REVIEWER.system_prompt)
 
 
+class FollowUpSynthPromptTests(unittest.TestCase):
+    def test_follow_up_prompt_includes_prior_synth_and_followup_question(self):
+        from backend.roundtable.synth import build_follow_up_synth_prompt
+        prompt = build_follow_up_synth_prompt(
+            original_question="要不要用 worktree?",
+            prior_synth="上一次 synth 内容",
+            follow_up_question="如果是笔记仓库呢?",
+            follow_up_turns=[],
+        )
+        self.assertIn("要不要用 worktree?", prompt)
+        self.assertIn("上一次 synth 内容", prompt)
+        self.assertIn("如果是笔记仓库呢?", prompt)
+        # 必须显式要求 LLM "接着前一次 synth 更新",而不是从零开始
+        self.assertIn("接着上一次", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
