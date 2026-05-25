@@ -60,10 +60,17 @@ class EmptyModelOutputError(ModelError):
 # only the model string differs in the request body.
 
 MODEL_ENDPOINTS: dict[str, str] = {
-    "deepseek-chat": "deepseek",
-    "deepseek-reasoner": "deepseek",
+    # DeepSeek 2026-05 rebrand:deepseek-chat / deepseek-reasoner 改成
+    # deepseek-v4-flash / deepseek-v4-pro。v4-flash 同时支持 thinking
+    # (default)和 non-thinking;v4-pro 是更强的 reasoning model。
+    # 老名字 deepseek-chat / deepseek-reasoner 仍兼容但官方标 deprecated,
+    # 留作 backward compat — 用户老 config 不破。
+    "deepseek-v4-flash": "deepseek",
+    "deepseek-v4-pro": "deepseek",
+    "deepseek-chat": "deepseek",         # deprecated alias → v4-flash non-thinking
+    "deepseek-reasoner": "deepseek",     # deprecated alias → v4-flash thinking
     # Kimi: per platform.kimi.com/docs (2026-05-14), kimi-k2.6 is the
-    # current top model (256k context, function calling, multimodal).
+    # current top model (256k context, function calling, multimodal)。
     # Old preview name kept as alias so anyone with stale config doesn't
     # break — moonshot's gateway may also still accept it.
     "kimi-k2.6": "moonshot",
@@ -124,7 +131,9 @@ _REASONING_MODELS = frozenset({
     "kimi-k2.5",
     "kimi-k2-thinking",
     "kimi-k2-thinking-turbo",
-    "deepseek-reasoner",
+    "deepseek-reasoner",     # deprecated alias,仍纳入(thinking 阶段慢)
+    "deepseek-v4-flash",     # thinking default(2026-05 rebrand)
+    "deepseek-v4-pro",       # always reasoning
 })
 _REASONING_TIMEOUT_S = 300
 
