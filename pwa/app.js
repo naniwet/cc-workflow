@@ -4488,14 +4488,18 @@ function paintRoundtableDetail(id, row) {
   // Group every non-synth turn by round. We don't hardcode {1,2} anymore —
   // critique_rounds=2 sessions have R3 critique turns (round=3, type=critique)
   // that need their own grid block.
+  // auto-drill / 续问 会产生 round >= synth_round+1 的 follow_up / review /
+  // user_question turns,动态收集所有 round,不再 pre-allocate 固定上限。
   const critiqueRounds = row.critique_rounds || 1;
   const turnsByRound = {};
-  for (let r = 1; r <= critiqueRounds + 1; r++) turnsByRound[r] = {};
-  for (const t of row.turns || []) {
+  for (const t of (row.turns || [])) {
     if (t.type === 'synth') continue;    // synth is handled by row.r3 below
-    if (turnsByRound[t.round]) {
-      turnsByRound[t.round][t.role] = t.content;
-    }
+    if (!turnsByRound[t.round]) turnsByRound[t.round] = {};
+    turnsByRound[t.round][t.role] = t.content;
+  }
+  // 保底:round 1..critiqueRounds+1 总是存在(空 session 时也能渲染占位槽)
+  for (let r = 1; r <= critiqueRounds + 1; r++) {
+    if (!turnsByRound[r]) turnsByRound[r] = {};
   }
 
   const r3 = row.r3;
@@ -4530,11 +4534,13 @@ function paintRoundtableDetail(id, row) {
   `);
 
   // Render one block per round that has any content (so partial sessions
-  // show what's done so far). Loops R1 → R(critiqueRounds+1).
+  // show what's done so far). 遍历所有 discovered round(含 auto-drill 续问
+  // 产生的 round >= critiqueRounds+2),按 round 升序排列。
   const roundBlocks = [];
-  for (let r = 1; r <= critiqueRounds + 1; r++) {
+  for (const rKey of Object.keys(turnsByRound).sort((a, b) => +a - +b)) {
+    const r = +rKey;
     const cells = _ROLE_ORDER.map((name) => _rtCell(name, turnsByRound[r][name])).join('');
-    const label = _RT_ROUND_LABELS[r] || `Round ${r}`;
+    const label = _RT_ROUND_LABELS[r] || `续问 Round ${r}`;
     roundBlocks.push(_rtRoundBlock(label, cells));
   }
 
