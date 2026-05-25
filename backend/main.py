@@ -1638,6 +1638,45 @@ def list_roundtable_models() -> dict:
     }
 
 
+class RoleModelsRequest(BaseModel):
+    role_models: dict[str, str] = Field(default_factory=dict)
+
+
+@app.put("/settings/role-models", dependencies=PROTECT)
+def put_role_models(req: RoleModelsRequest) -> dict:
+    """更新 persistent per-role model overrides。
+
+    Body: {"role_models": {"<role>": "<model>", ...}}
+    空 dict = 清掉所有 override,所有 role 回 hardcode 默认。
+
+    校验:role 必须是已知 role(ROLES + SYNTHESIZER + REVIEWER),
+    model 必须在 MODEL_ENDPOINTS 里。任一失败 → 400 不写入。
+    """
+    valid_roles = (
+        {r.name for r in roundtable_roles.ROLES}
+        | {roundtable_roles.SYNTHESIZER.name}
+        | {roundtable_roles.REVIEWER.name}
+    )
+    valid_models = set(roundtable_model.MODEL_ENDPOINTS)
+
+    for role_name, model_name in req.role_models.items():
+        if role_name not in valid_roles:
+            raise HTTPException(400, {
+                "error": "unknown role",
+                "got": role_name,
+                "valid": sorted(valid_roles),
+            })
+        if model_name not in valid_models:
+            raise HTTPException(400, {
+                "error": "unknown model",
+                "got": model_name,
+                "valid": sorted(valid_models),
+            })
+
+    role_models_store.save(req.role_models)
+    return {"ok": True, "role_models": req.role_models}
+
+
 @app.post("/roundtables", dependencies=PROTECT, status_code=202)
 def create_roundtable(req: NewRoundtableRequest) -> dict:
     """Kick off a new roundtable session. Returns immediately with the

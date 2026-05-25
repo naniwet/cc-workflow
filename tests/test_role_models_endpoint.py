@@ -52,5 +52,71 @@ class RoundtableModelsEndpointTests(unittest.TestCase):
         self.assertEqual(minimalist["default_model"], "kimi-k2.6")
 
 
+class PutRoleModelsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+        self.role_models_file = self.tmp_path / "role_models.json"
+        self.patches = [
+            patch.object(role_models_store, "_PATH", self.role_models_file),
+        ]
+        for p in self.patches:
+            p.start()
+        main.app.dependency_overrides[auth.require_user] = lambda: "test-user"
+        self.client = TestClient(main.app)
+
+    def tearDown(self):
+        main.app.dependency_overrides.clear()
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_put_writes_overrides_to_file(self):
+        r = self.client.put(
+            "/settings/role-models",
+            json={"role_models": {"极简派": "kimi-k2.6"}},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        data = json.loads(self.role_models_file.read_text(encoding="utf-8"))
+        self.assertEqual(data, {"极简派": "kimi-k2.6"})
+
+    def test_put_empty_dict_clears_all_overrides(self):
+        # 先写入一个 override,然后 PUT 空 dict 应该清掉
+        self.role_models_file.write_text(
+            json.dumps({"极简派": "kimi-k2.6"}), encoding="utf-8",
+        )
+        r = self.client.put("/settings/role-models", json={"role_models": {}})
+        self.assertEqual(r.status_code, 200)
+        data = json.loads(self.role_models_file.read_text(encoding="utf-8"))
+        self.assertEqual(data, {})
+
+    def test_put_rejects_unknown_role(self):
+        r = self.client.put(
+            "/settings/role-models",
+            json={"role_models": {"幻觉派": "kimi-k2.6"}},
+        )
+        self.assertEqual(r.status_code, 400, r.text)
+        body = r.json()
+        self.assertIn("unknown role", str(body))
+
+    def test_put_rejects_unknown_model(self):
+        r = self.client.put(
+            "/settings/role-models",
+            json={"role_models": {"极简派": "gpt-5-turbo-pro"}},
+        )
+        self.assertEqual(r.status_code, 400, r.text)
+        body = r.json()
+        self.assertIn("unknown model", str(body))
+
+    def test_put_returns_current_effective_map(self):
+        r = self.client.put(
+            "/settings/role-models",
+            json={"role_models": {"极简派": "kimi-k2.6"}},
+        )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body.get("role_models"), {"极简派": "kimi-k2.6"})
+
+
 if __name__ == "__main__":
     unittest.main()
