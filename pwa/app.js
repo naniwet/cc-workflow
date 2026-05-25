@@ -4268,6 +4268,11 @@ function renderRoundtablesView() {
           <textarea name="question" required rows="3" autofocus
             placeholder="例:个人 side project 一开始就上严格 TDD,还是先 spike?"></textarea>
         </label>
+        <label class="rt-attach-row">
+          <span>参考文件(可选,仅文本,合计 ≤ 100KB)</span>
+          <input type="file" multiple accept="text/*"
+                 id="rt-attach-input">
+        </label>
         <div class="rt-rounds-row">
           <label class="rt-rounds-label">辩论轮数</label>
           ${_renderFormPicker({
@@ -4379,9 +4384,36 @@ async function onCreateRoundtable(e) {
   const btn = form.querySelector('button[type="submit"]');
   btn.disabled = true; btn.textContent = '开始中…';
   try {
+    // === 客户端附件处理(spec §3.3) ===
+    const attachInput = form.querySelector('#rt-attach-input');
+    const fileList = attachInput?.files || [];
+    // 总字节预校验 — 100KB hard limit,与 backend _ROUNDTABLE_ATTACHMENT_MAX_BYTES 一致。
+    // 避免上传大文件后才到 413(spec suggestion #6)。
+    const totalBytes = Array.from(fileList).reduce((sum, f) => sum + f.size, 0);
+    if (totalBytes > 100 * 1024) {
+      showError(`参考文件合计 ${(totalBytes / 1024).toFixed(1)}KB,超过 100KB 上限。拆小或只贴关键段。`);
+      return;     // finally 段仍会执行,重置按钮
+    }
+
+    let attachments = [];
+    if (fileList.length > 0) {
+      const formData = new FormData();
+      for (const f of fileList) formData.append('files', f);
+      const upResp = await fetch('/roundtable-uploads', {
+        method: 'POST', body: formData, credentials: 'same-origin',
+      });
+      if (!upResp.ok) {
+        throw new Error(`upload 失败 (HTTP ${upResp.status}): ${await upResp.text()}`);
+      }
+      const upData = await upResp.json();
+      attachments = upData.paths || [];
+    }
+    // === 附件处理结束 ===
+
     const body = { question: fd.question };
     if (Object.keys(overrides).length > 0) body.role_models = overrides;
     if (rounds === 2) body.critique_rounds = 2;
+    if (attachments.length > 0) body.attachments = attachments;
     const r = await api('/roundtables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
