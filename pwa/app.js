@@ -4274,6 +4274,10 @@ function renderRoundtablesView() {
   view.innerHTML = `
     <div class="ws-toolbar">
       <button class="ws-new-btn" type="button" id="rt-new-btn">+ 新开一场</button>
+      <a href="#settings/roles" class="ws-toolbar-link"
+         style="margin-left:12px;font-size:13px;text-decoration:none;color:var(--accent)">
+        ⚙ 角色配置
+      </a>
     </div>
     ${blurb}
     <div class="rt-list">${list}</div>
@@ -5139,9 +5143,22 @@ async function renderSettingsRolesView() {
       `<option value="${esc(m.name)}" ${m.name === role.default_model ? 'selected' : ''}>${esc(m.name)}</option>`
     ).join('');
     return `
-      <tr>
-        <td>${esc(role.name)} <span class="muted" style="font-size:11px">(${esc(role.kind)})</span></td>
-        <td><select data-role="${esc(role.name)}" class="role-model-select">${opts}</select></td>
+      <tr style="vertical-align:top">
+        <td style="padding-top:8px">${esc(role.name)} <span class="muted" style="font-size:11px">(${esc(role.kind)})</span></td>
+        <td>
+          <select data-role="${esc(role.name)}" class="role-model-select">${opts}</select>
+          <details class="role-prompt-toggle" style="margin-top:8px">
+            <summary class="muted" style="font-size:11px;cursor:pointer">
+              ▸ 自定义 system_prompt(可选,清空 = 用默认)
+            </summary>
+            <textarea data-role-prompt="${esc(role.name)}" class="role-prompt-textarea"
+                      rows="12"
+                      style="width:100%;font-family:monospace;font-size:12px;margin-top:6px;box-sizing:border-box"
+                      placeholder="留空使用 roles.py 的默认 prompt">${esc(role.default_system_prompt || '')}</textarea>
+            <button type="button" class="role-prompt-reset" data-role="${esc(role.name)}"
+                    style="font-size:11px;margin-top:4px">重置为默认(清空 textarea)</button>
+          </details>
+        </td>
       </tr>`;
   }).join('');
 
@@ -5157,24 +5174,39 @@ async function renderSettingsRolesView() {
 
   $('roles-save-btn').addEventListener('click', _onRolesSave);
   $('roles-reset-btn').addEventListener('click', _onRolesReset);
+  for (const btn of document.querySelectorAll('.role-prompt-reset')) {
+    btn.addEventListener('click', _onRolePromptReset);
+  }
 }
 
 async function _onRolesSave(e) {
   const btn = e.currentTarget;
   btn.disabled = true; btn.textContent = '保存中...';
-  // 收集所有 <select data-role>,组成 {role: model}
-  const selects = document.querySelectorAll('select.role-model-select');
+
+  // 收集 nested {role: {model?, system_prompt?}}
   const role_models = {};
-  for (const s of selects) {
-    role_models[s.dataset.role] = s.value;
+  for (const s of document.querySelectorAll('select.role-model-select')) {
+    const role = s.dataset.role;
+    if (!role_models[role]) role_models[role] = {};
+    role_models[role].model = s.value;
   }
+  for (const ta of document.querySelectorAll('textarea[data-role-prompt]')) {
+    const role = ta.dataset.rolePrompt;
+    const prompt = ta.value.trim();
+    if (!role_models[role]) role_models[role] = {};
+    if (prompt) {
+      role_models[role].system_prompt = prompt;
+    }
+    // 空 prompt 不加字段 → backend 看到只有 model 没 prompt → 清掉 prompt override
+  }
+
   try {
     await api('/settings/role-models', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ role_models }),
     });
-    showToast('success', 'role-models 已保存', { ttl: 2500 });
+    showToast('success', 'role overrides 已保存', { ttl: 2500 });
   } catch (err) {
     showError(`保存失败: ${err.message}`);
   } finally {
@@ -5199,6 +5231,14 @@ async function _onRolesReset(e) {
   } finally {
     btn.disabled = false; btn.textContent = '全部重置(回 hardcode)';
   }
+}
+
+function _onRolePromptReset(e) {
+  const role = e.currentTarget.dataset.role;
+  const ta = document.querySelector(`textarea[data-role-prompt="${CSS.escape(role)}"]`);
+  if (ta) { ta.value = ''; ta.focus(); }
+  // 不立即调 API — 用户得点"保存"才真正提交。给个 toast 提示。
+  showToast('info', `${role} prompt 已清空 — 点保存才真正回默认`, { ttl: 2500 });
 }
 
 function _settingsProviderRow(p) {
