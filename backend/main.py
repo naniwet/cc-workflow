@@ -66,6 +66,7 @@ from . import approvals, auth, config, cron_state, db, im_feishu, llm, runner, s
 from .roundtable import io as roundtable_io
 from .roundtable import model as roundtable_model
 from .roundtable import roles as roundtable_roles
+from .roundtable import role_models_store
 from .roundtable import runner as roundtable_runner
 from .roundtable.synth import parse_synthesis
 from .roundtable.reviewer import parse_verdict
@@ -1608,34 +1609,32 @@ def list_roundtables() -> list[dict]:
 
 @app.get("/roundtables/models", dependencies=PROTECT)
 def list_roundtable_models() -> dict:
-    """Surface the model registry + role defaults so the PWA can render
-    a per-role model selector in the new-roundtable form.
-
-    Returns:
-      {
-        "models": [{"name": "deepseek-chat", "endpoint": "deepseek"}, ...],
-        "roles":  [{"name": "极简派", "default_model": "...", "kind": "persona"},
-                   ..., {"name": "整理员", "default_model": "...", "kind": "synthesizer"}]
-      }
+    """Surface model registry + role defaults so PWA can render per-role
+    model selector. `default_model` 字段已经是 effective default
+    (= persistent override > role.preferred_model)。
 
     Adding a new model = append to MODEL_ENDPOINTS in model.py (code-as-
     registry). Adding a new role = edit roles.py (no schema migration).
     """
+    def _role_entry(r, kind: str) -> dict:
+        return {
+            "name": r.name,
+            "default_model": role_models_store.effective_model_for(
+                r.name, r.preferred_model,
+            ),
+            "kind": kind,
+        }
+
     return {
         "models": [
             {"name": m, "endpoint": ep}
             for m, ep in sorted(roundtable_model.MODEL_ENDPOINTS.items())
         ],
-        "roles": [
-            {"name": r.name, "default_model": r.preferred_model, "kind": "persona"}
-            for r in roundtable_roles.ROLES
-        ] + [
-            {
-                "name": roundtable_roles.SYNTHESIZER.name,
-                "default_model": roundtable_roles.SYNTHESIZER.preferred_model,
-                "kind": "synthesizer",
-            }
-        ],
+        "roles": (
+            [_role_entry(r, "persona") for r in roundtable_roles.ROLES]
+            + [_role_entry(roundtable_roles.SYNTHESIZER, "synthesizer")]
+            + [_role_entry(roundtable_roles.REVIEWER, "reviewer")]
+        ),
     }
 
 
