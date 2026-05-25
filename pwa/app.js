@@ -5058,6 +5058,10 @@ function renderSettingsView() {
         <div class="settings-card-title"><strong>Providers</strong></div>
         <div class="muted">LLM 服务商配置:API key / base URL / model;加 / 改 / 删 / 测连通性</div>
       </a>
+      <a class="settings-card" href="#settings/agents">
+        <div class="settings-card-title"><strong>Subagents</strong></div>
+        <div class="muted">管理 <code>~/.claude/agents/</code> 下的 Claude Code 子代理(code-dev / code-review / 你自己加的)</div>
+      </a>
       <div class="settings-card is-disabled">
         <div class="settings-card-title"><strong>Secrets</strong> <span class="tag">soon</span></div>
         <div class="muted">登录用户名/密码 / 飞书 token。目前要 ssh 改 <code>~/.cc-workflow/secrets.toml</code></div>
@@ -5073,6 +5077,7 @@ function renderSettingsView() {
 function renderSettingsSectionView(section) {
   if (section === 'providers') return renderSettingsProvidersView();
   if (section === 'roles') return renderSettingsRolesView();   // 角色默认 model 配置
+  if (section === 'agents') return renderSettingsAgentsView();
   // 未知 section → 退回 hub(避免白屏)
   window.history.replaceState(null, '', '#settings');
   renderSettingsView();
@@ -5305,6 +5310,162 @@ function _onRolePromptReset(e) {
   if (ta) { ta.value = ''; ta.focus(); }
   // 不立即调 API — 用户得点"保存"才真正提交。给个 toast 提示。
   showToast('info', `${role} prompt 已清空 — 点保存才真正回默认`, { ttl: 2500 });
+}
+
+// ---- #settings/agents — Claude Code subagent CRUD ---- //
+
+async function renderSettingsAgentsView() {
+  const view = $('view');
+  view.innerHTML = `
+    <p style="margin:0 0 var(--space-2)"><a href="#settings" class="back-link">← Settings</a></p>
+    <h3 style="margin:0 0 var(--space-2)">Subagents</h3>
+    <p class="muted" style="margin:0 0 var(--space-3)">
+      管理 user-global subagents(<code>~/.claude/agents/*.md</code>)。改完 Claude Code 立刻生效,无需重启 backend。
+    </p>
+    <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-3);flex-wrap:wrap">
+      <button class="ws-new-btn" id="agent-new-btn" type="button">+ New agent</button>
+    </div>
+    <div id="agents-list" class="muted">加载中...</div>`;
+
+  let agents;
+  try {
+    agents = await api('/agents');
+  } catch (err) {
+    $('agents-list').innerHTML = `<p class="muted">加载失败: ${esc(err.message)}</p>`;
+    return;
+  }
+
+  if (agents.length === 0) {
+    $('agents-list').innerHTML = `<p class="muted">还没有 subagent。点 "+ New agent" 加一个,或 ssh 在 ~/.claude/agents/ 手编。</p>`;
+  } else {
+    $('agents-list').innerHTML = agents.map((a) => _renderAgentCard(a, false)).join('');
+  }
+
+  // Bind events
+  $('agent-new-btn').addEventListener('click', _onAgentNewClick);
+  for (const btn of document.querySelectorAll('.agent-save-btn')) {
+    btn.addEventListener('click', _onAgentSave);
+  }
+  for (const btn of document.querySelectorAll('.agent-delete-btn')) {
+    btn.addEventListener('click', _onAgentDelete);
+  }
+}
+
+function _renderAgentCard(agent, isNew) {
+  const nameHtml = isNew
+    ? `<input data-agent-field="name" placeholder="新 agent 名(小写字母/数字/-)" pattern="[a-z0-9][a-z0-9-]*" required style="font-weight:bold;font-size:14px;padding:4px 6px">`
+    : `<strong>${esc(agent.name)}</strong>`;
+  const summaryDesc = isNew
+    ? '<span class="muted">(新建)</span>'
+    : `<span class="muted" style="font-size:12px;margin-left:8px">${esc(agent.description || '(no description)')}</span>`;
+  const deleteBtn = isNew
+    ? ''
+    : `<button class="ws-new-btn agent-delete-btn" data-name="${esc(agent.name)}" type="button" style="background:transparent;color:var(--c-fg)">删除</button>`;
+  return `
+    <div class="agent-card" data-name="${esc(agent.name)}" data-is-new="${isNew ? '1' : '0'}"
+         style="margin-bottom:var(--space-3);padding:var(--space-2);border:1px solid var(--c-border, #333);border-radius:6px">
+      <details ${isNew ? 'open' : ''}>
+        <summary style="cursor:pointer;user-select:none;list-style:none">
+          ${nameHtml}
+          ${summaryDesc}
+        </summary>
+        <div style="margin-top:var(--space-2);display:flex;flex-direction:column;gap:var(--space-2)">
+          <label style="display:block">
+            <div class="muted" style="font-size:11px;margin-bottom:2px">description(main agent 看这个决定要不要 dispatch)</div>
+            <textarea data-agent-field="description" rows="3"
+                      style="width:100%;font-size:12px;box-sizing:border-box;resize:vertical">${esc(agent.description || '')}</textarea>
+          </label>
+          <label style="display:block">
+            <div class="muted" style="font-size:11px;margin-bottom:2px">tools(逗号分隔 — Read, Edit, Bash, Glob, Grep, WebFetch, Skill 等)</div>
+            <input data-agent-field="tools" type="text"
+                   style="width:100%;font-family:monospace;font-size:12px;box-sizing:border-box;padding:4px 6px"
+                   value="${esc((agent.tools || []).join(', '))}">
+          </label>
+          <label style="display:block">
+            <div class="muted" style="font-size:11px;margin-bottom:2px">system_prompt(markdown)</div>
+            <textarea data-agent-field="system_prompt" rows="20"
+                      style="width:100%;font-family:monospace;font-size:12px;box-sizing:border-box;resize:vertical">${esc(agent.system_prompt || '')}</textarea>
+          </label>
+          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
+            <button class="ws-new-btn agent-save-btn" data-name="${esc(agent.name)}" type="button">保存</button>
+            ${deleteBtn}
+          </div>
+        </div>
+      </details>
+    </div>`;
+}
+
+function _onAgentNewClick() {
+  const list = $('agents-list');
+  // 如果 list 当前显示的是"还没有 subagent..." 文案(没有 .agent-card),先清空
+  if (list.querySelector('.agent-card') === null) {
+    list.innerHTML = '';
+  }
+  const emptyAgent = { name: '', description: '', tools: [], system_prompt: '' };
+  list.insertAdjacentHTML('afterbegin', _renderAgentCard(emptyAgent, true));
+  const newCard = list.querySelector('.agent-card[data-is-new="1"]');
+  newCard.querySelector('input[data-agent-field="name"]')?.focus();
+  // 重新 bind 这张新卡的 save handler(新建卡没有 delete 按钮)
+  newCard.querySelector('.agent-save-btn')?.addEventListener('click', _onAgentSave);
+}
+
+async function _onAgentSave(e) {
+  const btn = e.currentTarget;
+  const card = btn.closest('.agent-card');
+  if (!card) return;
+  const isNew = card.dataset.isNew === '1';
+  let name;
+  if (isNew) {
+    const nameInput = card.querySelector('input[data-agent-field="name"]');
+    name = (nameInput?.value || '').trim();
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+      showError('agent name 必须匹配 [a-z0-9][a-z0-9-]* 且 ≤64 字');
+      nameInput?.focus();
+      return;
+    }
+  } else {
+    name = btn.dataset.name;
+  }
+
+  const desc = card.querySelector('textarea[data-agent-field="description"]').value;
+  const toolsRaw = card.querySelector('input[data-agent-field="tools"]').value;
+  const tools = toolsRaw.split(',').map((s) => s.trim()).filter(Boolean);
+  const promptText = card.querySelector('textarea[data-agent-field="system_prompt"]').value;
+
+  btn.disabled = true; btn.textContent = '保存中...';
+  try {
+    await api(`/agents/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description: desc, tools, system_prompt: promptText,
+      }),
+    });
+    showToast('success', `agent "${name}" 已保存`, { ttl: 2500 });
+    renderSettingsAgentsView();
+  } catch (err) {
+    showError(`保存失败: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = '保存';
+  }
+}
+
+async function _onAgentDelete(e) {
+  const btn = e.currentTarget;
+  const name = btn.dataset.name;
+  if (!confirm(`确定删除 subagent "${name}"?\n\n这会删 ~/.claude/agents/${name}.md 文件,Claude Code 之后不再认识这个 agent。`)) {
+    return;
+  }
+  btn.disabled = true; btn.textContent = '删除中...';
+  try {
+    await api(`/agents/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    showToast('success', `agent "${name}" 已删除`, { ttl: 2500 });
+    renderSettingsAgentsView();
+  } catch (err) {
+    showError(`删除失败: ${err.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = '删除';
+  }
 }
 
 function _settingsProviderRow(p) {
