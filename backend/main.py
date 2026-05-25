@@ -1544,6 +1544,16 @@ def resume_loop(name: str) -> dict:
 # progress. See backend/roundtable/__init__.py for the port story.
 
 
+def _all_role_names() -> set[str]:
+    """所有合法 role 名 — 4 个 persona + SYNTHESIZER + REVIEWER。
+    新增元角色时只需改这一处(spec §3.4 单一术语源)。"""
+    return (
+        {r.name for r in roundtable_roles.ROLES}
+        | {roundtable_roles.SYNTHESIZER.name}
+        | {roundtable_roles.REVIEWER.name}
+    )
+
+
 class NewRoundtableRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=4096)
     # Optional per-role model override. Map role name → model name.
@@ -1652,11 +1662,7 @@ def put_role_models(req: RoleModelsRequest) -> dict:
     校验:role 必须是已知 role(ROLES + SYNTHESIZER + REVIEWER),
     model 必须在 MODEL_ENDPOINTS 里。任一失败 → 400 不写入。
     """
-    valid_roles = (
-        {r.name for r in roundtable_roles.ROLES}
-        | {roundtable_roles.SYNTHESIZER.name}
-        | {roundtable_roles.REVIEWER.name}
-    )
+    valid_roles = _all_role_names()
     valid_models = set(roundtable_model.MODEL_ENDPOINTS)
 
     for role_name, model_name in req.role_models.items():
@@ -1685,13 +1691,14 @@ def create_roundtable(req: NewRoundtableRequest) -> dict:
     persistent = role_models_store.load()
     merged = {**persistent, **(req.role_models or {})}
 
-    if merged:
-        valid_roles = (
-            {r.name for r in roundtable_roles.ROLES}
-            | {roundtable_roles.SYNTHESIZER.name}
-            | {roundtable_roles.REVIEWER.name}
-        )
-        for role_name, model_name in merged.items():
+    # 只验证 per-session 传入的 role_models。persistent 部分已经在
+    # PUT /settings/role-models 时验证过 — 这里再验证会让 ghost key
+    # (手编 role_models.json 时留下的旧 role 名)把所有新建请求挡死。
+    # 运行时 run_session 按 role 名查不到 override 会自然落回 hardcode
+    # default,不影响行为。spec §4。
+    if req.role_models:
+        valid_roles = _all_role_names()
+        for role_name, model_name in req.role_models.items():
             if role_name not in valid_roles:
                 raise HTTPException(400, {"error": f"unknown role: {role_name!r}"})
             if model_name not in roundtable_model.MODEL_ENDPOINTS:

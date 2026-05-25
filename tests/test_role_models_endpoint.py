@@ -165,5 +165,27 @@ class CreateRoundtableMergesRoleModelsTests(unittest.TestCase):
         self.assertEqual(merged["悲观派"], "deepseek-reasoner")
 
 
+    def test_ghost_key_in_persistent_does_not_break_create(self):
+        """Spec §4: persistent role_models.json 里的 ghost key(已不存在
+        的 role 名)不应该让 create_roundtable 返回 400。"""
+        self.role_models_file.write_text(
+            json.dumps({"已删派": "kimi-k2.6", "极简派": "deepseek-chat"}),
+            encoding="utf-8",
+        )
+        from unittest.mock import patch as _patch
+        captured = {}
+        def _fake_submit(*args, **kwargs):
+            captured.update(kwargs)
+            return Path("/tmp/fake-session.jsonl")
+        with _patch("backend.main.roundtable_runner.submit", side_effect=_fake_submit):
+            r = self.client.post("/roundtables", json={"question": "Q?"})
+        # 关键:没传 per-session role_models,persistent 含 ghost key,应该 202 不 400
+        self.assertEqual(r.status_code, 202, r.text)
+        # merged 含 ghost(留给 run_session 自然忽略),不影响 endpoint
+        merged = captured["role_models"]
+        self.assertIn("已删派", merged)
+        self.assertEqual(merged["极简派"], "deepseek-chat")
+
+
 if __name__ == "__main__":
     unittest.main()
