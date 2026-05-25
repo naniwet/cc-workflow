@@ -214,7 +214,10 @@ ROLES: list[Role] = [MINIMALIST, SCENARIO, PRECEDENT, PESSIMIST]
 
 SYNTHESIZER = Role(
     name="整理员",
-    preferred_model="deepseek-v4-flash",
+    # 整理员是 round-table 输出质量瓶颈 — 要看穿 4 派"表面分歧 vs 本质
+    # 轴",抽错轴 = 全程白干。v4-pro 是 always-reasoning,比 v4-flash
+    # 强,值得多花 30-60s。其它 5 个角色仍 v4-flash(latency 优先)。
+    preferred_model="deepseek-v4-pro",
     temperature=0.3,  # 整理任务要稳定,不要 R1/R2 的 0.7
     system_prompt="""你是整理员。你不是一个有立场的角色,你不参与判断。
 
