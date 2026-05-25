@@ -268,6 +268,39 @@ class HttpChatTemperatureLockTests(unittest.TestCase):
         self.assertEqual(body["temperature"], 0.3)
 
 
+class ReasoningModelTimeoutTests(unittest.TestCase):
+    """`call_model` 对 _REASONING_MODELS 里的 model 自动用更长 timeout
+    (thinking phase 慢,120s 经常打临界;reasoning 走 300s,其它仍 120s
+    fast-fail)。"""
+
+    def _captured_timeout(self, model_name: str) -> int:
+        """通过 patch _http_chat,拿到 call_model 实际传过去的 timeout。"""
+        from unittest.mock import patch
+        from backend.roundtable import model as model_mod
+        captured = {}
+        def _fake_http_chat(**kwargs):
+            captured.update(kwargs)
+            return "ok"
+        # 同时 patch 掉 _load_endpoint 避免读真实 providers.json
+        with patch.object(model_mod, "_http_chat", side_effect=_fake_http_chat), \
+             patch.object(model_mod, "_load_endpoint",
+                          return_value={"base_url": "https://x.example", "api_key": "k"}):
+            model_mod.call_model(model_name, "s", "u", 0.5)
+        return captured["timeout"]
+
+    def test_kimi_k26_uses_300s_timeout(self):
+        """kimi-k2.6 是 reasoning model → 自动用 300s。"""
+        self.assertEqual(self._captured_timeout("kimi-k2.6"), 300)
+
+    def test_deepseek_reasoner_uses_300s_timeout(self):
+        self.assertEqual(self._captured_timeout("deepseek-reasoner"), 300)
+
+    def test_non_reasoning_model_uses_default_120s(self):
+        """deepseek-chat / moonshot-v1-32k 等非 reasoning model 走 caller 默认。"""
+        self.assertEqual(self._captured_timeout("deepseek-chat"), 120)
+        self.assertEqual(self._captured_timeout("moonshot-v1-32k"), 120)
+
+
 class ParseVerdictTests(unittest.TestCase):
     """审查员输出解析 — fallback 表见 spec §3.2。"""
 

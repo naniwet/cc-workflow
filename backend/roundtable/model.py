@@ -113,6 +113,21 @@ def _load_endpoint(name: str) -> dict:
 # 这里 hardcode 锁列表 — 真到 3 个以上 model 受影响再考虑抽 config。
 _TEMP_LOCKED_MODELS = frozenset({"kimi-k2.6"})
 
+# Reasoning model 的另一个 quirk:thinking phase 一轮就能 60-180s,默认 120s
+# timeout 经常打在临界。这些 model 进 API 时用 300s timeout(其它 model 仍
+# 120 — fast-fail 是优势,reasoning 才需要长)。spec:per-model quirk 在
+# egress 层处理,caller 不动。已知 reasoning:kimi K2.6 / K2.5 / thinking 系列
+# + DeepSeek reasoner。其它(kimi-k2-0905-preview / moonshot-v1-*)是非
+# reasoning model,继续用 120。
+_REASONING_MODELS = frozenset({
+    "kimi-k2.6",
+    "kimi-k2.5",
+    "kimi-k2-thinking",
+    "kimi-k2-thinking-turbo",
+    "deepseek-reasoner",
+})
+_REASONING_TIMEOUT_S = 300
+
 
 def _http_chat(
     *,
@@ -212,6 +227,9 @@ def call_model(
     endpoint_name = MODEL_ENDPOINTS[model]
     ep = _load_endpoint(endpoint_name)
 
+    # Reasoning model 自动延长 timeout — thinking phase 慢,caller 不用关心
+    effective_timeout = _REASONING_TIMEOUT_S if model in _REASONING_MODELS else timeout
+
     for attempt in range(len(_RETRY_BACKOFFS) + 1):
         try:
             out = _http_chat(
@@ -222,7 +240,7 @@ def call_model(
                 user=user,
                 temperature=temp,
                 max_tokens=max_tokens,
-                timeout=timeout,
+                timeout=effective_timeout,
             )
         except ModelTransientError:
             if attempt >= len(_RETRY_BACKOFFS):
