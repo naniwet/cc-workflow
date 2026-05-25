@@ -1703,6 +1703,9 @@ def list_roundtable_models() -> dict:
             "default_model": role_models_store.effective_model_for(
                 r.name, r.preferred_model,
             ),
+            "default_system_prompt": role_models_store.effective_system_prompt_for(
+                r.name, r.system_prompt,
+            ),
             "kind": kind,
         }
 
@@ -1719,39 +1722,54 @@ def list_roundtable_models() -> dict:
     }
 
 
+class RoleOverride(BaseModel):
+    model: Optional[str] = None
+    system_prompt: Optional[str] = Field(default=None, max_length=5000)
+
+
 class RoleModelsRequest(BaseModel):
-    role_models: dict[str, str] = Field(default_factory=dict)
+    # Schema 从 dict[str, str] 升 dict[str, RoleOverride]。空 dict = 清全部
+    # override;某个 role 的内层 dict 空 = 清该 role 的 override。spec §3.5。
+    role_models: dict[str, RoleOverride] = Field(default_factory=dict)
 
 
 @app.put("/settings/role-models", dependencies=PROTECT)
 def put_role_models(req: RoleModelsRequest) -> dict:
-    """更新 persistent per-role model overrides。
+    """更新 persistent per-role overrides(model + system_prompt)。
 
-    Body: {"role_models": {"<role>": "<model>", ...}}
-    空 dict = 清掉所有 override,所有 role 回 hardcode 默认。
+    Body: {"role_models": {"<role>": {"model"?: str, "system_prompt"?: str}}}
+    空内层 dict / 空白 system_prompt → 视为 reset(不存 override)。
+    空外层 dict → 清全部 override。
 
-    校验:role 必须是已知 role(ROLES + SYNTHESIZER + REVIEWER),
-    model 必须在 MODEL_ENDPOINTS 里。任一失败 → 400 不写入。
+    校验:role 必须已知;model 必须在 MODEL_ENDPOINTS;system_prompt
+    max_length=5000(Pydantic 自动 422)。任一失败 → 400 不写入。
+    spec §3.5。
     """
     valid_roles = _all_role_names()
     valid_models = set(roundtable_model.MODEL_ENDPOINTS)
 
-    for role_name, model_name in req.role_models.items():
+    cleaned: dict[str, dict] = {}
+    for role_name, override in req.role_models.items():
         if role_name not in valid_roles:
             raise HTTPException(400, {
-                "error": "unknown role",
-                "got": role_name,
-                "valid": sorted(valid_roles),
+                "error": "unknown role", "got": role_name, "valid": sorted(valid_roles),
             })
-        if model_name not in valid_models:
-            raise HTTPException(400, {
-                "error": "unknown model",
-                "got": model_name,
-                "valid": sorted(valid_models),
-            })
+        entry: dict[str, str] = {}
+        if override.model:
+            if override.model not in valid_models:
+                raise HTTPException(400, {
+                    "error": "unknown model", "got": override.model, "valid": sorted(valid_models),
+                })
+            entry["model"] = override.model
+        if override.system_prompt:
+            stripped = override.system_prompt.strip()
+            if stripped:    # 纯空白不存,等价 reset
+                entry["system_prompt"] = stripped
+        if entry:
+            cleaned[role_name] = entry
 
-    role_models_store.save(req.role_models)
-    return {"ok": True, "role_models": req.role_models}
+    role_models_store.save(cleaned)
+    return {"ok": True, "role_models": cleaned}
 
 
 @app.post("/roundtables", dependencies=PROTECT, status_code=202)
@@ -1760,8 +1778,16 @@ def create_roundtable(req: NewRoundtableRequest) -> dict:
     per-session (req.role_models) > persistent (role_models.json) > hardcode。
     attachments(文件路径)被读 UTF-8 + 校验 ≤ 100KB + 拼进 question(spec §3.2)。
     """
-    persistent = role_models_store.load()
-    merged = {**persistent, **(req.role_models or {})}
+    persistent = role_models_store.load()    # nested dict[str, dict]
+    # 从 persistent 抽 model 部分,跟 per-session(flat dict[str, str])merge。
+    # persistent 中只 prompt override 的 entry(没 model 字段)忽略。
+    merged_models: dict[str, str] = {}
+    for role_name, entry in persistent.items():
+        m = entry.get("model")
+        if m:
+            merged_models[role_name] = m
+    if req.role_models:
+        merged_models.update(req.role_models)
 
     # 只验证 per-session 传入的 role_models。persistent 部分已经在
     # PUT /settings/role-models 时验证过 — 这里再验证会让 ghost key
@@ -1832,7 +1858,7 @@ def create_roundtable(req: NewRoundtableRequest) -> dict:
 
     path = roundtable_runner.submit(
         enriched_question,
-        role_models=merged,
+        role_models=merged_models,
         critique_rounds=req.critique_rounds,
     )
     return {"id": path.stem, "status": "queued", "question": req.question}
