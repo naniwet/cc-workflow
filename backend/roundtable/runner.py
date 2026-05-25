@@ -14,6 +14,7 @@ The PWA polls GET /roundtables/{id} every ~2s to show progress.
 """
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 from collections.abc import Callable
@@ -22,10 +23,11 @@ from typing import Optional
 
 from .. import config
 from . import roles as roles_mod
+from . import role_models_store
+from .data import Role, Session
 from .debate import run_session, continue_session
 from .io import session_path_for, write_error_marker, write_meta
 from .model import ModelError, call_model
-from .data import Session
 
 
 OnCompleteFn = Callable[[Path], None]
@@ -34,6 +36,26 @@ per submit() call, regardless of success/failure — the caller is expected
 to re-read the jsonl to decide what happened (look for type='synth' = done,
 role='__error__' = failed). Kept narrow so we don't leak Session internals
 to subscribers (e.g. the Feishu adapter)."""
+
+
+def _customize_role(role: Role) -> Role:
+    """用 persistent override 替换 role.system_prompt;若无 override 返回
+    原 role(身份不变 — 性能 + 语义双优化)。model 不在这里 customize —
+    用现有的 role_models_overrides dict 路径解决。"""
+    override_prompt = role_models_store.load().get(role.name, {}).get("system_prompt")
+    if override_prompt:
+        return dataclasses.replace(role, system_prompt=override_prompt)
+    return role
+
+
+def _customized_role_list() -> tuple[list[Role], Role, Role]:
+    """构造一组 customized roles(ROLES + SYNTHESIZER + REVIEWER)。
+    返回 (roles, synthesizer, reviewer) 三元组,给 _execute / _execute_continue 用。"""
+    return (
+        [_customize_role(r) for r in roles_mod.ROLES],
+        _customize_role(roles_mod.SYNTHESIZER),
+        _customize_role(roles_mod.REVIEWER),
+    )
 
 
 def submit(
@@ -98,14 +120,16 @@ def _execute(
     swallow its exceptions: it's an opportunistic push, failures shouldn't
     cascade)."""
     try:
+        roles, synthesizer, reviewer = _customized_role_list()
         run_session(
             question=question,
-            roles=roles_mod.ROLES,
-            synthesizer=roles_mod.SYNTHESIZER,
+            roles=roles,
+            synthesizer=synthesizer,
             model_fn=call_model,
             session_path=session_path,
             role_model_overrides=role_models,
             critique_rounds=critique_rounds,
+            reviewer=reviewer,
         )
     except ModelError as e:
         # Expected failure mode (provider down, rate limit exhausted,
@@ -146,13 +170,15 @@ def _execute_continue(
 ) -> None:
     """在 background thread 里跑 continue_session。错误写入 jsonl 的 __error__ turn。"""
     try:
+        roles, synthesizer, reviewer = _customized_role_list()
         continue_session(
             session_path=session_path,
             follow_up_question=follow_up_question,
-            roles=roles_mod.ROLES,
-            synthesizer=roles_mod.SYNTHESIZER,
+            roles=roles,
+            synthesizer=synthesizer,
             model_fn=call_model,
             role_model_overrides=role_models,
+            reviewer=reviewer,
         )
     except ModelError as e:
         write_error_marker(session_path, f"model error during continue: {type(e).__name__}: {e}")

@@ -296,6 +296,7 @@ def _run_auto_drill_loop(
     question: str,
     roles: "list[Role]",
     synthesizer: "Role",
+    reviewer: "Role",
     model_fn: "ModelFn",
     overrides: dict[str, str],
     clock: Callable[[], float],
@@ -307,7 +308,9 @@ def _run_auto_drill_loop(
     最多 max_auto_drills 次。loop 结束后若仍未收敛,补一次 final review 供 PWA
     渲染 "已达上限" banner。
 
-    Module-level 版本(Task 6 重构),被 run_session 和 continue_session 共用。"""
+    Module-level 版本(Task 6 重构),被 run_session 和 continue_session 共用。
+    reviewer 参数显式注入(spec §3.3),让 customize 路径生效;module-level
+    REVIEWER 常量仅作为 caller 默认 fallback,不在 loop 内部直接读。"""
 
     # `_record` 跟 _run_follow_up_iteration 里那个同构 — 都是 3 行
     # append_turn + on_turn callback + session.turns.append。CLAUDE.md §3.3:
@@ -328,14 +331,14 @@ def _run_auto_drill_loop(
         assert last_synth is not None, "auto-drill loop 之前必有 initial synth"
 
         verdict_text = model_fn(
-            overrides.get(REVIEWER.name) or REVIEWER.preferred_model,
-            REVIEWER.system_prompt,
+            overrides.get(reviewer.name) or reviewer.preferred_model,
+            reviewer.system_prompt,
             _build_reviewer_prompt(question, last_synth, session),
-            REVIEWER.temperature,
+            reviewer.temperature,
         )
         verdict = reviewer_mod.parse_verdict(verdict_text)
         _record(AgentTurn(
-            round=last_synth.round, role=REVIEWER.name, type="review",
+            round=last_synth.round, role=reviewer.name, type="review",
             content=verdict_text, ts=clock(),
         ))
         if verdict.converged:
@@ -364,13 +367,13 @@ def _run_auto_drill_loop(
         last_synth = next((t for t in reversed(session.turns) if t.type == "synth"), None)
         assert last_synth is not None, "post-loop final review 之前必有 synth"
         verdict_text = model_fn(
-            overrides.get(REVIEWER.name) or REVIEWER.preferred_model,
-            REVIEWER.system_prompt,
+            overrides.get(reviewer.name) or reviewer.preferred_model,
+            reviewer.system_prompt,
             _build_reviewer_prompt(question, last_synth, session),
-            REVIEWER.temperature,
+            reviewer.temperature,
         )
         _record(AgentTurn(
-            round=last_synth.round, role=REVIEWER.name, type="review",
+            round=last_synth.round, role=reviewer.name, type="review",
             content=verdict_text, ts=clock(),
         ))
 
@@ -385,6 +388,7 @@ def run_session(
     role_model_overrides: Optional[dict[str, str]] = None,
     critique_rounds: int = 1,
     max_auto_drills: int = 3,
+    reviewer: Optional[Role] = None,
     on_turn: Optional[Callable[[AgentTurn], None]] = None,
     clock: Callable[[], float] = time.time,
 ) -> Session:
@@ -410,7 +414,13 @@ def run_session(
     Synthesizer prompt itself doesn't care about round numbers — it walks
     turns by `t.type`. See synth.build_r3_user_prompt for the transcript
     assembly that's now round-agnostic.
+
+    reviewer: 可选显式传入,缺省 fallback 到 module-level REVIEWER。
+    spec §3.3 — 让 runner._customized_role_list 能给 auto-drill loop 注入
+    customized reviewer(它的 system_prompt 可能被用户 override 了)。
     """
+    if reviewer is None:
+        reviewer = REVIEWER
     overrides = role_model_overrides or {}
 
     def model_for(role: Role) -> str:
@@ -509,6 +519,7 @@ def run_session(
         question=question,
         roles=roles,
         synthesizer=synthesizer,
+        reviewer=reviewer,
         model_fn=model_fn,
         overrides=overrides,
         clock=clock,
@@ -529,6 +540,7 @@ def continue_session(
     model_fn: ModelFn,
     role_model_overrides: Optional[dict[str, str]] = None,
     max_auto_drills: int = 3,
+    reviewer: Optional[Role] = None,
     on_turn: Optional[Callable[[AgentTurn], None]] = None,
     clock: Callable[[], float] = time.time,
 ) -> Session:
@@ -536,7 +548,12 @@ def continue_session(
     auto-drill loop(可能再 drill 0-N 次)。
 
     返回更新后的 Session(包括新 follow_up / synth / review turns)。
+
+    reviewer: 可选显式传入,缺省 fallback 到 module-level REVIEWER —
+    跟 run_session 同语义(spec §3.3)。
     """
+    if reviewer is None:
+        reviewer = REVIEWER
     session = read_session(session_path)
     question = session.question
     overrides = role_model_overrides or {}
@@ -568,6 +585,7 @@ def continue_session(
         question=question,
         roles=roles,
         synthesizer=synthesizer,
+        reviewer=reviewer,
         model_fn=model_fn,
         overrides=overrides,
         clock=clock,

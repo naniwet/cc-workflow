@@ -568,5 +568,31 @@ class ContinueEndpointTests(unittest.TestCase):
         self.assertFalse(body["reviewer"]["hit_max_drills"])
 
 
+class RoleCustomizationTests(unittest.TestCase):
+    """`runner._customize_role` 用 role_models_store 的 system_prompt override
+    把 Role.system_prompt 替换。"""
+
+    def test_customize_role_with_prompt_override_replaces_prompt(self):
+        from unittest.mock import patch
+        from backend.roundtable import runner, role_models_store
+        from backend.roundtable.data import Role
+        original = Role(name="极简派", system_prompt="default prompt", preferred_model="m")
+        with patch.object(role_models_store, "load",
+                          return_value={"极简派": {"system_prompt": "customized!"}}):
+            result = runner._customize_role(original)
+        self.assertEqual(result.system_prompt, "customized!")
+        self.assertEqual(result.name, "极简派")
+        self.assertEqual(result.preferred_model, "m")
+
+    def test_customize_role_without_override_returns_same_instance(self):
+        from unittest.mock import patch
+        from backend.roundtable import runner, role_models_store
+        from backend.roundtable.data import Role
+        original = Role(name="极简派", system_prompt="default prompt", preferred_model="m")
+        with patch.object(role_models_store, "load", return_value={"极简派": {"model": "kimi-k2.6"}}):
+            result = runner._customize_role(original)
+        self.assertIs(result, original)
+
+
 if __name__ == "__main__":
     unittest.main()
