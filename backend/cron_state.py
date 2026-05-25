@@ -323,10 +323,19 @@ def _write_cron_file(content: str) -> None:
     stage.parent.mkdir(parents=True, exist_ok=True)
     stage.write_text(content, encoding="utf-8")
     os.chmod(stage, 0o644)
-    result = subprocess.run(
-        ["sudo", "-n", INSTALL_HELPER, str(stage)],
-        capture_output=True, text=True, check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", INSTALL_HELPER, str(stage)],
+            capture_output=True, text=True, check=False,
+            timeout=10,    # defensive — 防 sudo PAM/NSS 慢或 helper 死锁让
+                           # FastAPI 线程永远 hang(参考 2026-05-25 排查记录)
+        )
+    except subprocess.TimeoutExpired as e:
+        raise OSError(
+            f"install-cc-loops wrapper timed out after {e.timeout}s — "
+            "check sudoers + helper script;stage 文件留在 "
+            f"{stage} 供调试"
+        ) from e
     # The wrapper deletes the staged file on success. If it failed, the
     # stage stays around — useful for debugging — and we surface the
     # wrapper's stderr.

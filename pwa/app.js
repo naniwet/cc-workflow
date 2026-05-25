@@ -254,7 +254,23 @@ if ('serviceWorker' in navigator) {
 let _redirectingToLogin = false;
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, { credentials: 'same-origin', ...opts });
+  // 30s 兜底 timeout — backend 任何路径 hang(2026-05-25 排查过一次 systemd
+  // 状态错配导致前端 button 永远 disabled 的情况),fetch 不 abort 的话 PWA
+  // 没 error 没 success 没 finally 重置,看起来就是"卡住"。30s 之后 abort
+  // 抛 AbortError,走下面的 catch / showError 路径,至少前端能恢复。
+  // 调 api 时如果想关掉(比如 SSE / long-poll),传 opts.signal = null 显式覆盖。
+  let timeoutId;
+  if (opts.signal === undefined) {
+    const ctrl = new AbortController();
+    timeoutId = setTimeout(() => ctrl.abort(), 30_000);
+    opts = { ...opts, signal: ctrl.signal };
+  }
+  let r;
+  try {
+    r = await fetch(path, { credentials: 'same-origin', ...opts });
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
   // Session expired or never logged in → jump to login. We preserve the
   // current location in ?next= so the form sends the user back here on
   // success.
