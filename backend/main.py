@@ -1711,11 +1711,10 @@ def get_roundtable(session_id: str) -> dict:
             "converged": verdict.converged,
             "reason": verdict.reason,
             "next_question": verdict.next_question,
-            # 默认 max_auto_drills=3 — hit_max_drills 用 review 数 >= 3 估算。
-            # 后续从 config.toml 读 max_auto_drills 时一起加(YAGNI 暂 hardcode)。
-            "hit_max_drills": (
-                not verdict.converged and len(review_turns) >= 3
-            ),
+            # last review 是 NEEDS_DRILL ↔ hit max — 因为若未到 max,loop 会
+            # 继续 drill 而不让 NEEDS_DRILL 成为 last review。max=0 时无
+            # review turn,reviewer_summary 自身就是 None,banner 不显示。
+            "hit_max_drills": not verdict.converged,
         }
     return {
         "id": session_id,

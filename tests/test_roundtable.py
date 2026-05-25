@@ -523,6 +523,50 @@ class ContinueEndpointTests(unittest.TestCase):
         self.assertEqual(r.status_code, 202, r.text)
         self.assertTrue(sub.called)
 
+    def test_reviewer_summary_hit_max_drills_when_last_review_needs_drill(self):
+        """GET /roundtables/{id} 返回 reviewer.hit_max_drills=True
+        当 last review 是 NEEDS_DRILL(说明 max 跑满未收敛)。"""
+        from backend import config
+        from backend.roundtable.data import Session, AgentTurn
+        from backend.roundtable.io import write_meta, append_turn
+        path = config.ROUNDTABLES_DIR / "drilled.jsonl"
+        write_meta(path, Session(question="Q", started_at=0.0))
+        append_turn(path, AgentTurn(round=3, role="整理员", type="synth", content="s", ts=0.0))
+        append_turn(path, AgentTurn(
+            round=3, role="审查员", type="review",
+            content="## 判断\nNEEDS_DRILL\n\n## 理由\nx\n\n## 追问问题\n继续追问 Y?",
+            ts=0.0,
+        ))
+
+        r = self.client.get("/roundtables/drilled")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertIsNotNone(body["reviewer"])
+        self.assertTrue(body["reviewer"]["hit_max_drills"])
+        self.assertFalse(body["reviewer"]["converged"])
+        self.assertEqual(body["reviewer"]["next_question"], "继续追问 Y?")
+
+    def test_reviewer_summary_no_banner_when_converged(self):
+        """GET /roundtables/{id} 返回 reviewer.hit_max_drills=False
+        当 last review 是 CONVERGED。"""
+        from backend import config
+        from backend.roundtable.data import Session, AgentTurn
+        from backend.roundtable.io import write_meta, append_turn
+        path = config.ROUNDTABLES_DIR / "converged.jsonl"
+        write_meta(path, Session(question="Q", started_at=0.0))
+        append_turn(path, AgentTurn(round=3, role="整理员", type="synth", content="s", ts=0.0))
+        append_turn(path, AgentTurn(
+            round=3, role="审查员", type="review",
+            content="## 判断\nCONVERGED\n\n## 理由\nOK",
+            ts=0.0,
+        ))
+
+        r = self.client.get("/roundtables/converged")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertTrue(body["reviewer"]["converged"])
+        self.assertFalse(body["reviewer"]["hit_max_drills"])
+
 
 if __name__ == "__main__":
     unittest.main()
