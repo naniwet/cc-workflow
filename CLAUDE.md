@@ -91,7 +91,7 @@ journalctl -t cc-workflow -f
 | 路径 | 内容 | 谁写 |
 |---|---|---|
 | `~/.cc-workflow/` | 配置:`config.toml` / `secrets.toml` / `providers.json` / `workspaces.json` / `.session-secret` | 人工编辑 + backend 增删 workspace |
-| `~/.cc-state/` | 运行时:`runs.db` (SQLite) / `jobs/*.json`(cron 计数器)/ `locks/*.lock` (flock) / `logs/*.jsonl`(每 run stream) / `uploads/<ws>/<turn>/*`(PWA 上传文件,每周 cron 清 7 天以上) | backend + agent-run.sh |
+| `~/.cc-state/` | 运行时:`runs.db` (SQLite) / `jobs/*.json`(cron 计数器)/ `locks/*.lock` (flock) / `logs/*.jsonl`(每 run stream) / `uploads/<ws>/<turn>/*`(workspace `Run` 上传的文件,每周 cron 清 7 天以上)/ **`roundtable-uploads/<upload_id>/*`**(roundtable 新建时上传的参考文本,**独立顶层目录**,跟 `uploads/<ws>/` 物理隔离 — 因为 `_WS_NAME_RE` 允许下划线 / `roundtable` 字符串作为合法 workspace 名,共用 `uploads/` 子目录 namespace 隔离会冲突;每周 cron 也覆盖这条路径) | backend + agent-run.sh |
 
 `config.py` 读 `~/.cc-workflow/`,`db.py` 读 `~/.cc-state/runs.db`,`runner.py` 写 `~/.cc-state/{logs,locks}`。**不要把这两个目录混用**。
 
