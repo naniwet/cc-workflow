@@ -23,27 +23,32 @@
 | **文件内容拼进 question 字符串**(不加 schema 字段) | 现有 `run_session(question, ...)` + 各派 prompt 构造器全部基于 question 单参数,拼进去自动传播到 R1/R2/R3/synth/续问/reviewer 所有路径。零 schema 改动。 |
 | **仅文本类型(.md/.txt/.py/.js/.json/.log + 任何 UTF-8 文件)** | 用 stdlib `path.read_text(encoding='utf-8')`;PDF / 图片走 vision 强烈不推荐起步(Q1=a) |
 | **硬截断 100KB 总字节** | 简单 + 用户能预料(Q2=α)。超限直接 413 + hint "拆小 / 截关键段" |
-| **`~/.cc-state/uploads/__roundtable__/<upload_id>/`** | 跟 workspace uploads 同根目录但用 `__roundtable__` 保留字 namespace 隔离(Q3=a)|
+| **`~/.cc-state/roundtable-uploads/<upload_id>/`** | **完全脱离 `uploads/` 子树**,跟 workspace `uploads/<ws>/` 物理隔离。原本想用 `uploads/__roundtable__/` 同根 + namespace 隔离,但 `_WS_NAME_RE` 允许下划线和 `__roundtable__` 作为合法 workspace 名,会有名字冲突,改成独立顶层目录(spec self-review 发现)|
 
 ### 2.2 数据流
 
 ```
 PWA 新建 roundtable form
-  + 📎 file input (复用 workspace 那套 _pendingUploads 模式)
+  + 📎 file input (新模式 — 见 §3.3 不复用 workspace _pendingUploads)
+  + client-side 合计字节预校验(超 100KB 不让提交)
   ↓
 [submit click]
   ↓
-POST /uploads/roundtable                          ← 新 endpoint(无 workspace 参数)
+POST /roundtable-uploads                          ← 新 endpoint(独立 path,
+                                                    避免跟 /uploads/{workspace}
+                                                    在 workspace 名 = "roundtable"
+                                                    时冲突)
   multipart files →
-  ~/.cc-state/uploads/__roundtable__/<upload_id>/
+  ~/.cc-state/roundtable-uploads/<upload_id>/    ← 完全独立顶层目录
   ↓
   返回 {upload_id, paths: [...]}
   ↓
 POST /roundtables 加 attachments: list[str]       ← 新字段
   ↓
-backend 校验路径在 __roundtable__/ 子树下
+backend 校验路径在 roundtable-uploads/ 子树下
   ↓
-读所有文件 UTF-8 + sum bytes < 100KB(否则 413)
+对每个 path:先 stat().st_size 累加预算(<= 100KB),通过才 read_text(避免一次性读 8MB 进 memory)
+若超 → 413 with hint 指明是加上当前文件后超的
   ↓
 构造 enriched question:
   原始问题:
@@ -64,8 +69,8 @@ roundtable_runner.submit(enriched_question, ...)  ← 现有签名,无改动
 
 | 决策 | 选择 | 理由 |
 |---|---|---|
-| 文件 namespace 命名 | `__roundtable__`(双下划线包裹的保留字)| `__` 前缀视觉上明显是保留字,不会和真实 workspace 名(`[A-Za-z0-9._-]{1,128}` 不允许 `__` 在中间这种 pattern... 实际上现有 regex 允许 `__roundtable__` 也匹配,但用户起名时大概率不会用)冲突。同时 PWA 现有 chip 显示该 namespace 也无歧义 |
-| Backend endpoint | `POST /uploads/roundtable` 而非 `POST /uploads/__roundtable__/<id>` | 用户看起来更自然;`__roundtable__` 留作存储层 namespace |
+| 文件存储顶层目录 | `~/.cc-state/roundtable-uploads/<upload_id>/` —— **不在 `uploads/` 下** | 跟 workspace `uploads/<ws>/` 物理隔离。`_WS_NAME_RE = [A-Za-z0-9._-]{1,128}` 允许下划线 / 包含 `roundtable` 字符串作为合法 workspace 名,只用 `uploads/` 下面的子目录 namespace 隔离会有冲突,直接顶层独立目录最干净 |
+| Backend endpoint | `POST /roundtable-uploads` —— **不在 `/uploads/*` 路由下** | 跟 `POST /uploads/{workspace}` 完全不同路径,FastAPI 路由不会因为 workspace 名 = "roundtable" 而误路由 |
 | Total 字节上限 | 100 KB(可在 `config.toml` 加 `[roundtable] max_attachment_bytes` 重载,缺省 100KB) | 32k 上下文 model 也能塞下并留出 prompt 头空间;超出告诉用户拆 |
 | 文件拼接结构 | 用 `--- {filename} ({n} bytes) ---` 分隔块 | 现有 workspace `(附件: {path})` 是给 claude CLI 用的,这里不同(LLM 直接读内容,所以要可读 markdown) |
 | Session.question 是否落"原始 vs enriched" | **落 enriched** | 简单 + jsonl 自带 context,可重读;代价是 meta line 会变大,但单用户单机可接受 |
@@ -76,7 +81,7 @@ roundtable_runner.submit(enriched_question, ...)  ← 现有签名,无改动
 |---|---|---|
 | attachments 语义 | "给 claude 这个路径,它自己 Read" | "**把文件内容嵌进 prompt**,LLM 走 /chat/completions 没有 Read tool" |
 | Prompt 拼接 | `f"{prompt}\n\n(附件: {paths})"` 只贴路径 | `f"{prompt}\n\n参考文件:\n--- {name} ---\n{content}..."` 贴内容 |
-| 总字节限制 | 10MB(单请求上传) | **100KB**(嵌进 prompt 的总和) |
+| 总字节限制 | 10MB(单请求 multipart 合计;非单文件) | **100KB**(嵌进 prompt 的总内容;现实部署用 deepseek-chat 64k / kimi-k2.6 256k 上下文都够,不考虑 moonshot-v1-32k 这种 32k 窄窗模型) |
 | 文件类型 | 任何(claude 自己处理 binary / image) | **仅 UTF-8 可解码的文本** |
 
 ---
@@ -88,32 +93,40 @@ roundtable_runner.submit(enriched_question, ...)  ← 现有签名,无改动
 **File:** `backend/main.py`(在现有 `post_uploads`(`@app.post("/uploads/{workspace}")`)之后新增)
 
 ```python
-_ROUNDTABLE_UPLOADS_NS = "__roundtable__"
-
-@app.post("/uploads/roundtable", dependencies=PROTECT)
+@app.post("/roundtable-uploads", dependencies=PROTECT)
 async def post_roundtable_uploads(files: list[UploadFile] = File(...)) -> dict:
     """接 PWA 新建 roundtable 时上传的文本文件,落到
-    ~/.cc-state/uploads/__roundtable__/<upload_id>/。
+    ~/.cc-state/roundtable-uploads/<upload_id>/。
 
     返回 {"upload_id": <12-hex>, "paths": [<abs path>, ...]}。前端塞
     进 POST /roundtables 的 attachments 字段,backend 读文件内容拼
     进 question 喂给所有 派。
 
-    单请求合计 10 MB 上限(同 nginx /uploads location)。比 100KB 大,
-    因为 multipart 上传不限内容是否能塞进 prompt — 那是 create_roundtable
-    阶段才 enforce(413 with hint "总内容超 100KB,拆")。
+    跟 POST /uploads/{workspace} 完全独立路径,避免在 workspace 名 =
+    "roundtable" 时 FastAPI 路由 shadow 掉它的真实路径。
+
+    单请求合计 10 MB 上限(同 nginx 默认 client_max_body_size)。比
+    100KB 大,因为 multipart 上传不限内容是否能塞进 prompt — 那是
+    create_roundtable 阶段才 enforce(413 with hint "总内容超 100KB
+    ,拆")。
     """
     if not files:
         raise HTTPException(status_code=400, detail={"error": "no_files"})
 
     upload_id = uuid.uuid4().hex[:12]
-    dest_dir = config.UPLOADS_DIR / _ROUNDTABLE_UPLOADS_NS / upload_id
+    dest_dir = config.ROUNDTABLE_UPLOADS_DIR / upload_id
     # ... 跟 post_uploads 一样的 streaming + safe filename + 10MB cap
 
     return {"upload_id": upload_id, "paths": [...]}
 ```
 
-**实现细节:** 复用 `_safe_filename`、`_UPLOAD_MAX_BYTES`、`_ROUNDTABLE_UPLOADS_NS` 常量;大部分逻辑 mirror `post_uploads`,只是没有 workspace 参数 + 落到 `_ROUNDTABLE_UPLOADS_NS` 子目录。
+**配置常量(`backend/config.py`):**
+
+```python
+ROUNDTABLE_UPLOADS_DIR = CCSTATE_DIR / "roundtable-uploads"
+```
+
+**实现细节:** 复用 `_safe_filename`、`_UPLOAD_MAX_BYTES`;大部分逻辑 mirror `post_uploads`,只是没有 workspace 参数 + 落到独立顶层目录。代码重复约 50 行 — CLAUDE.md §3.3 2 处重复 OK,等真有 3 个上传端再抽 helper(YAGNI)。
 
 ### 3.2 Backend:`NewRoundtableRequest` 加 attachments 字段 + create_roundtable 读取
 
@@ -134,7 +147,7 @@ _MAX_ATTACHMENT_BYTES = 100 * 1024   # 100KB
 
 enriched_question = req.question.strip()
 if req.attachments:
-    rt_uploads_root = (config.UPLOADS_DIR / _ROUNDTABLE_UPLOADS_NS).resolve()
+    rt_uploads_root = config.ROUNDTABLE_UPLOADS_DIR.resolve()
     blocks: list[str] = []
     total_bytes = 0
     for p in req.attachments:
@@ -151,6 +164,17 @@ if req.attachments:
             })
         if not path.is_file():
             raise HTTPException(400, {"error": "attachment_not_file", "msg": str(p)})
+
+        # 先看 size 再决定要不要读 — 避免一次性把 8MB 文件读进 memory
+        # 才发现超 100KB 预算。stat() 是 O(1) syscall。
+        file_size = path.stat().st_size
+        if total_bytes + file_size > _MAX_ATTACHMENT_BYTES:
+            raise HTTPException(413, {
+                "error": "attachments_too_large",
+                "msg": f"加上 {path.name}(约 {file_size} bytes)后超过 {_MAX_ATTACHMENT_BYTES} 字节上限",
+                "hint": "拆小文件或者只贴关键段。",
+            })
+
         try:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -158,12 +182,14 @@ if req.attachments:
                 "error": "attachment_not_utf8",
                 "msg": f"{path.name} 不是 UTF-8 文本,roundtable 不支持二进制 / 图片",
             })
+        # read_text 实际字节可能跟 st_size 略不等(BOM 等)— 重算
         total_bytes += len(content.encode("utf-8"))
         if total_bytes > _MAX_ATTACHMENT_BYTES:
+            # 极小概率走到(BOM / 多字节 char 让 stat 低估实际),保守再 check
             raise HTTPException(413, {
                 "error": "attachments_too_large",
-                "msg": f"文件总内容超过 {_MAX_ATTACHMENT_BYTES} 字节",
-                "hint": "拆小文件或者只贴关键段。当前已读到 " + path.name,
+                "msg": f"加上 {path.name} 后 UTF-8 编码总长超过 {_MAX_ATTACHMENT_BYTES} 字节",
+                "hint": "拆小文件或者只贴关键段。",
             })
         blocks.append(f"--- {path.name} ({len(content)} chars) ---\n{content}")
 
@@ -182,11 +208,13 @@ path = roundtable_runner.submit(enriched_question, ...)
 ```html
 <label class="rt-attach-row">
   <span>参考文件(可选,仅文本,合计 ≤ 100KB)</span>
-  <input type="file" multiple accept=".md,.txt,.py,.js,.json,.log,.html,.css,.yaml,.yml,.toml,.sql"
+  <input type="file" multiple accept="text/*"
          id="rt-attach-input">
 </label>
 <div id="rt-attach-list" class="muted" style="font-size:11px"></div>
 ```
+
+`accept="text/*"` 比白名单具体扩展名(`.md,.txt,...`)更宽容 —— `.csv` / `.xml` / `.sh` / `.env` 等都是真实文本但容易遗漏;backend `read_text(encoding='utf-8')` 仍是 ground truth(非 UTF-8 直接 400)。
 
 `onCreateRoundtable` 改造(`pwa/app.js:4361`):
 
@@ -195,12 +223,22 @@ path = roundtable_runner.submit(enriched_question, ...)
 const attachInput = form.querySelector('#rt-attach-input');
 const fileList = attachInput?.files || [];
 
-// 2. 上传(如果有文件)
+// 2. Client-side 总字节预校验 — 避免用户选 50MB 文件后等到 backend 413
+//    (100KB 是 backend hard limit;client-side 同步报错 + showError 比往返
+//    一次更顺)
+const totalBytes = Array.from(fileList).reduce((sum, f) => sum + f.size, 0);
+if (totalBytes > 100 * 1024) {
+    showError(`参考文件合计 ${(totalBytes/1024).toFixed(1)}KB,超过 100KB 上限。拆小或只贴关键段。`);
+    btn.disabled = false; btn.textContent = '开始辩论';
+    return;
+}
+
+// 3. 上传(如果有文件)
 let attachments = [];
 if (fileList.length > 0) {
     const formData = new FormData();
     for (const f of fileList) formData.append('files', f);
-    const upResp = await fetch('/uploads/roundtable', {
+    const upResp = await fetch('/roundtable-uploads', {
         method: 'POST', body: formData, credentials: 'same-origin',
     });
     if (!upResp.ok) throw new Error(`upload 失败: ${await upResp.text()}`);
@@ -208,7 +246,7 @@ if (fileList.length > 0) {
     attachments = upData.paths;
 }
 
-// 3. body 里加 attachments
+// 4. body 里加 attachments
 const body = { question: fd.question };
 if (Object.keys(overrides).length > 0) body.role_models = overrides;
 if (rounds === 2) body.critique_rounds = 2;
@@ -224,10 +262,11 @@ if (attachments.length > 0) body.attachments = attachments;
 ```markdown
 ### 2.5 roundtable 文件上传 namespace
 
-`~/.cc-state/uploads/__roundtable__/<upload_id>/` 是 roundtable 文件
-上传的专属 namespace,跟 workspace `Run` 的 `~/.cc-state/uploads/<ws>/<turn>/`
-共用同一 UPLOADS_DIR 根目录但路径不交叉。每周 cron 清理脚本应当
-覆盖两条路径(实现细节)。
+`~/.cc-state/roundtable-uploads/<upload_id>/` 是 roundtable 文件
+上传的专属顶层目录,**跟 workspace `Run` 的 `~/.cc-state/uploads/<ws>/<turn>/`
+完全物理隔离**(不是子目录 namespace,因为 _WS_NAME_RE 允许含
+`roundtable` 字符串的 workspace 名)。每周 cron 清理脚本应当覆盖
+这两条独立路径(实现细节)。
 ```
 
 ---
@@ -236,12 +275,13 @@ if (attachments.length > 0) body.attachments = attachments;
 
 | 场景 | 处理 |
 |---|---|
-| `POST /uploads/roundtable` 上传 binary 文件 | endpoint 不校验内容(单纯落盘),100KB UTF-8 校验在 create_roundtable 阶段做 |
-| `POST /uploads/roundtable` 超 10MB | 跟现有 post_uploads 相同:413 with hint(单请求上限) |
-| `POST /roundtables` 带 attachments 但路径不在 `__roundtable__/` 子树 | 400 "attachment_outside_uploads" |
+| `POST /roundtable-uploads` 上传 binary 文件 | endpoint 不校验内容(单纯落盘),100KB / UTF-8 校验在 create_roundtable 阶段做 |
+| `POST /roundtable-uploads` 超 10MB | 跟现有 post_uploads 相同:413 with hint(单请求上限) |
+| `POST /roundtables` 带 attachments 但路径不在 `roundtable-uploads/` 子树 | 400 "attachment_outside_uploads" |
 | `POST /roundtables` 文件读出来不是 UTF-8 | 400 "attachment_not_utf8" with filename |
-| `POST /roundtables` 总内容 > 100KB | 413 "attachments_too_large" with hint(指出当前累加到哪个文件超的) |
-| 文件被并发删了 | `path.resolve(strict=True)` 抛 FileNotFoundError → 400 |
+| `POST /roundtables` 总内容 > 100KB(stat 阶段超限) | 413 "attachments_too_large" with hint "加上 {filename} 后超过 N 字节" |
+| `POST /roundtables` UTF-8 实际字节比 stat 大(BOM 等)致超限 | 同上 413(防御性 re-check after read_text) |
+| 文件被并发删了 | `path.resolve(strict=True)` 或 `path.stat()` 抛 → 400 |
 | `attachments=[]`(空 list) | 走"无 attachments" 路径,question 不被修改 |
 
 ---
@@ -250,16 +290,15 @@ if (attachments.length > 0) body.attachments = attachments;
 
 ### 5.1 Integration(`tests/test_roundtable_attachments.py` 新文件)
 
-- `POST /uploads/roundtable` 接 1 个文件 → 返回路径 + 文件落到 `__roundtable__/<id>/`
-- `POST /uploads/roundtable` 空 files → 400
-- `POST /uploads/roundtable` 超 10MB → 413
-- `POST /roundtables` with attachments 在 `__roundtable__/` 下 → 202 + question 被 enriched(用 mock submit 验证)
-- `POST /roundtables` with attachments 路径在 `__roundtable__/` 外 → 400
+- `POST /roundtable-uploads` 接 1 个文件 → 返回路径 + 文件落到 `roundtable-uploads/<id>/`
+- `POST /roundtable-uploads` 空 files → 400
+- `POST /roundtables` with attachments 在 `roundtable-uploads/` 下 → 202 + question 被 enriched(用 mock submit 验证)
+- `POST /roundtables` with attachments 路径在 `roundtable-uploads/` 外 → 400
 - `POST /roundtables` with binary attachment → 400 "not_utf8"
-- `POST /roundtables` 总字节超 100KB → 413
+- `POST /roundtables` 总字节超 100KB(用 stat() 触发的 fast-fail 路径) → 413
 - `POST /roundtables` with attachments=[] → 走无 attachments 路径(question 不被改)
 
-8 个 integration 测试。
+7 个 integration 测试。10MB upload cap 不单独测(直接复用 post_uploads 的同款逻辑,信赖现有测试覆盖)。
 
 ### 5.2 不测
 
