@@ -230,5 +230,41 @@ class HttpChatReasoningContentFallback(unittest.TestCase):
         self.assertEqual(out, "")
 
 
+class ParseVerdictTests(unittest.TestCase):
+    """审查员输出解析 — fallback 表见 spec §3.2。"""
+
+    def _parse(self, text: str):
+        from backend.roundtable.reviewer import parse_verdict
+        return parse_verdict(text)
+
+    def test_converged_with_reason(self):
+        v = self._parse("## 判断\nCONVERGED\n\n## 理由\n4 派分歧已经摊清楚。")
+        self.assertTrue(v.converged)
+        self.assertEqual(v.reason, "4 派分歧已经摊清楚。")
+        self.assertIsNone(v.next_question)
+
+    def test_needs_drill_with_next_question(self):
+        v = self._parse(
+            "## 判断\nNEEDS_DRILL\n\n## 理由\n关于 X 还没明确。\n\n"
+            "## 追问问题\n那么如果 X 是 Y 的话,各派立场会变吗?"
+        )
+        self.assertFalse(v.converged)
+        self.assertIn("X 是 Y", v.next_question)
+
+    def test_missing_verdict_section_falls_back_to_converged(self):
+        # spec §3.2 fallback 表第 1 行
+        v = self._parse("没有 ## 判断 段")
+        self.assertTrue(v.converged)
+
+    def test_garbage_verdict_value_falls_back_to_converged(self):
+        v = self._parse("## 判断\nMAYBE\n\n## 理由\n模型 hallucinate 了")
+        self.assertTrue(v.converged)
+
+    def test_needs_drill_but_no_next_question_falls_back_to_converged(self):
+        # spec §3.2 fallback 表第 3 行 — 没问题可问 = 别死磕
+        v = self._parse("## 判断\nNEEDS_DRILL\n\n## 理由\n好像还差点意思\n\n## 追问问题\n")
+        self.assertTrue(v.converged)
+
+
 if __name__ == "__main__":
     unittest.main()
