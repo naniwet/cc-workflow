@@ -4471,7 +4471,12 @@ function paintRoundtableDetail(id, row) {
   const turnsDone = row.turns?.length || 0;
   const hasR3 = !!row.r3;
   const errorKey = row.error || '';
-  const sig = `${status}:${turnsDone}:${hasR3 ? '1' : '0'}:${errorKey}`;
+  // reviewer 状态也纳入 sig:hit_max_drills 或 next_question 变化时强制重绘
+  const reviewer = row.reviewer || null;
+  const reviewerKey = reviewer
+    ? `${reviewer.hit_max_drills ? '1' : '0'}:${reviewer.converged ? '1' : '0'}`
+    : 'null';
+  const sig = `${status}:${turnsDone}:${hasR3 ? '1' : '0'}:${errorKey}:${reviewerKey}`;
 
   const view = $('view');
   const alreadyPainted = view.querySelector(`.rt-detail[data-rt-id="${esc(id)}"]`);
@@ -4533,6 +4538,25 @@ function paintRoundtableDetail(id, row) {
     roundBlocks.push(_rtRoundBlock(label, cells));
   }
 
+  // 审查员 banner:仅当 hit_max_drills 且有 next_question 时显示,提示用户
+  // 继续追问(自动追问已到上限,需人工续问)。
+  const bannerHtml = (reviewer && reviewer.hit_max_drills && reviewer.next_question) ? `
+    <div class="rt-reviewer-banner">
+      <p>⚠ 审查员认为还没收敛(已达自动追问上限)</p>
+      <p><strong>建议继续追问:</strong> ${esc(reviewer.next_question)}</p>
+      <button class="rt-continue-prefill" data-question="${esc(reviewer.next_question)}">
+        一键续问
+      </button>
+    </div>` : '';
+
+  // 续问输入框:session 已有至少一个 synth turn 时才显示(status=done 或
+  // r3 存在)。进行中的 session 还没 synth,不显示。
+  const continueInputHtml = (r3 || status === 'done') ? `
+    <div class="rt-continue-input">
+      <textarea data-rt-followup placeholder="继续问..." rows="3"></textarea>
+      <button class="rt-continue-submit" data-session-id="${esc(id)}">继续问</button>
+    </div>` : '';
+
   $('view').innerHTML = `
     <p><a href="#roundtables" class="back-link">← Roundtable</a></p>
     <h1 class="rt-question">${esc(row.question || '(无题)')}</h1>
@@ -4545,8 +4569,48 @@ function paintRoundtableDetail(id, row) {
     <div class="rt-detail" data-rt-id="${esc(id)}">
       ${synthBlock}
       ${roundBlocks.join('')}
+      ${bannerHtml}
+      ${continueInputHtml}
     </div>
   `;
+
+  // 事件绑定:每次 innerHTML 重建后重新绑(polling 触发重绘时也会执行)。
+
+  // 一键续问:把 banner 里的 next_question 填进 textarea
+  view.querySelectorAll('.rt-continue-prefill').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const q = e.currentTarget.dataset.question;
+      const ta = view.querySelector('textarea[data-rt-followup]');
+      if (ta) { ta.value = q; ta.focus(); }
+    });
+  });
+
+  // 续问提交:POST /roundtables/{id}/continue { question }
+  view.querySelectorAll('.rt-continue-submit').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      const sessionId = e.currentTarget.dataset.sessionId;
+      const ta = view.querySelector('textarea[data-rt-followup]');
+      const question = (ta?.value || '').trim();
+      if (!question) return;
+      btn.disabled = true;
+      btn.textContent = '提交中...';
+      try {
+        await api(`/roundtables/${encodeURIComponent(sessionId)}/continue`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question }),
+        });
+        if (ta) ta.value = '';
+        // 后端返回 202 并启动新一轮圆桌;下一次 refreshAll poll 会拉到新
+        // turns 并自动触发重绘,无需手动 refresh。
+      } catch (err) {
+        showError(`续问失败: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '继续问';
+      }
+    });
+  });
 }
 
 // R1/R2 sections — R3 is the product value (consensus / disagreement
