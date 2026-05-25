@@ -119,6 +119,9 @@ const ICONS = {
   // Distinct from rewind: rewind = "wipe history, keep ws"; trash =
   // "everything goes". Red on hover (see style.css).
   trash:   `<svg ${_S}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>`,
+  // Git branch — 给 worktree 隔离 toggle 用(2026-05-25 加)。
+  // Lucide 风格:两个节点 + 一条线 + 弧线表示 branch off。
+  branch:  `<svg ${_S}><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
   // Three-dot "more" — opens the mobile actions dropdown (trust /
   // sync / reset / delete + provider switch, all collapsed because
   // 6 icons inline are too cramped on phone screens).
@@ -2644,6 +2647,7 @@ function workspaceColHtml(name, data, opts = {}) {
             </button>
             <button class="ws-worktree-mode-toggle ws-menu-item" type="button"
                     data-ws="${esc(name)}" data-mode="${worktreeOffPC ? 'off' : 'auto'}">
+              ${ICONS.branch}
               <span>Worktree 隔离 <strong>${worktreeOffPC ? 'OFF' : 'ON'}</strong></span>
             </button>
             <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}">
@@ -3021,6 +3025,7 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
               </button>
               <button class="ws-worktree-mode-toggle ws-menu-item" type="button"
                       data-ws="${esc(name)}" data-mode="${worktreeOff ? 'off' : 'auto'}">
+                ${ICONS.branch}
                 <span>Worktree 隔离 <strong>${worktreeOff ? 'OFF' : 'ON'}</strong></span>
               </button>
               <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
