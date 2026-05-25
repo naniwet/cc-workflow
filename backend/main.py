@@ -68,6 +68,7 @@ from .roundtable import model as roundtable_model
 from .roundtable import roles as roundtable_roles
 from .roundtable import runner as roundtable_runner
 from .roundtable.synth import parse_synthesis
+from .roundtable.reviewer import parse_verdict
 
 PROTECT = [Depends(auth.require_user)]
 
@@ -1672,6 +1673,7 @@ def get_roundtable(session_id: str) -> dict:
         id, question, started_at, status,
         turns: [{round, role, type, content, ts}, ...],
         r3:    {raw: str, parsed: {共识点, 分歧轴, 关键判断, 条件性结论, 下一步行动}} | null,
+        reviewer: {converged: bool, reason: str, next_question: str | null, hit_max_drills: bool} | null,
         error: str | null,
       }
     """
@@ -1704,7 +1706,6 @@ def get_roundtable(session_id: str) -> dict:
     reviewer_summary = None
     if review_turns:
         last_review = review_turns[-1]
-        from .roundtable.reviewer import parse_verdict
         verdict = parse_verdict(last_review.content)
         reviewer_summary = {
             "converged": verdict.converged,
