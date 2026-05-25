@@ -5053,10 +5053,6 @@ function renderSettingsView() {
         <div class="settings-card-title"><strong>Providers</strong></div>
         <div class="muted">LLM 服务商配置:API key / base URL / model;加 / 改 / 删 / 测连通性</div>
       </a>
-      <a class="settings-card" href="#settings/roles">
-        <div class="settings-card-title"><strong>Roundtable Roles</strong></div>
-        <div class="muted">每个角色(极简派 / 场景派 / 借鉴派 / 悲观派 / 整理员 / 审查员)默认用哪个 model</div>
-      </a>
       <div class="settings-card is-disabled">
         <div class="settings-card-title"><strong>Secrets</strong> <span class="tag">soon</span></div>
         <div class="muted">登录用户名/密码 / 飞书 token。目前要 ssh 改 <code>~/.cc-workflow/secrets.toml</code></div>
@@ -5138,21 +5134,19 @@ async function renderSettingsRolesView() {
   const allModels = data.models || [];
   const allRoles = data.roles || [];
 
-  // Vertical stacked cards(不再用 <table>)— 解决:
-  // 1. 展开 <details> 不会让左列角色名跟右列错位
-  // 2. 手机端窄屏不被横向 layout 挤压,每个角色一张紧凑卡片
-  // 3. textarea rows 减到 8(可拖大),手机不被它撑满屏
+  // Vertical stacked cards;model picker 复用 .rt-role-picker /
+  // .ws-menu-radio / .ws-radio-dot 风格(跟新建 roundtable 表单一致)。
+  // 仅样式复用 — state 模型不同(rt 那边用 localStorage,这里用 DOM
+  // is-selected 状态收集到 save 时统一提交)。
   const rows = allRoles.map(role => {
-    const opts = allModels.map(m =>
-      `<option value="${esc(m.name)}" ${m.name === role.default_model ? 'selected' : ''}>${esc(m.name)}</option>`
-    ).join('');
     return `
-      <div class="role-config-row" style="margin-bottom:var(--space-3);padding:var(--space-2);border:1px solid var(--c-border, #333);border-radius:6px">
+      <div class="role-config-row" data-role="${esc(role.name)}" data-default-model="${esc(role.default_model)}"
+           style="margin-bottom:var(--space-3);padding:var(--space-2);border:1px solid var(--c-border, #333);border-radius:6px">
         <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:6px">
           <strong>${esc(role.name)}</strong>
           <span class="muted" style="font-size:11px">(${esc(role.kind)})</span>
         </div>
-        <select data-role="${esc(role.name)}" class="role-model-select" style="width:100%;max-width:320px">${opts}</select>
+        ${_renderSettingsRoleModelPicker(role, allModels)}
         <details class="role-prompt-toggle" style="margin-top:8px">
           <summary class="muted" style="font-size:11px;cursor:pointer;user-select:none">
             自定义 system_prompt(可选,清空 = 用默认)
@@ -5174,6 +5168,11 @@ async function renderSettingsRolesView() {
       <button class="ws-new-btn" id="roles-reset-btn" type="button" style="background:transparent;color:var(--c-fg)">全部重置(回 hardcode)</button>
     </div>`;
 
+  // Bind radio click(picker 内部 model 选择,仅更新 DOM 状态,save 时收集)
+  for (const btn of document.querySelectorAll('.settings-role-radio')) {
+    btn.addEventListener('click', _onSettingsRoleRadioClick);
+  }
+
   $('roles-save-btn').addEventListener('click', _onRolesSave);
   $('roles-reset-btn').addEventListener('click', _onRolesReset);
   for (const btn of document.querySelectorAll('.role-prompt-reset')) {
@@ -5181,23 +5180,80 @@ async function renderSettingsRolesView() {
   }
 }
 
+// Settings 页的 model picker — 复用 .rt-role-picker / .ws-menu-radio
+// 跟新建 roundtable 表单同一视觉语言。state 走 DOM is-selected,
+// 不写 localStorage(那是 rt form 的本地草稿);save 时统一从 DOM 收集
+// 提交给 backend。radio list 上限 50vh 避免 model 列表过长撑页面。
+function _renderSettingsRoleModelPicker(role, models) {
+  const current = role.default_model;
+  const currentEndpoint = (models.find((m) => m.name === current) || {}).endpoint || '';
+  const kindHint = role.kind === 'synthesizer' ? '<span class="muted rt-role-kind">(整理员)</span>'
+                  : role.kind === 'reviewer' ? '<span class="muted rt-role-kind">(审查员)</span>'
+                  : '';
+  const radios = models.map((m) => {
+    const selected = m.name === current;
+    const rowClass = selected ? 'ws-menu-radio settings-role-radio is-selected' : 'ws-menu-radio settings-role-radio';
+    const dotClass = selected ? 'ws-radio-dot is-selected' : 'ws-radio-dot';
+    return `
+      <button type="button" class="${rowClass}"
+              data-settings-role="${esc(role.name)}"
+              data-value="${esc(m.name)}"
+              data-endpoint="${esc(m.endpoint)}">
+        <span class="${dotClass}"></span>
+        <span class="ws-radio-label">${esc(m.name)}  ·  ${esc(m.endpoint)}</span>
+      </button>`;
+  }).join('');
+  return `
+    <details class="rt-role-picker">
+      <summary class="rt-role-summary">
+        <span class="rt-role-name">${esc(role.name)} ${kindHint}</span>
+        <span class="rt-role-current">${esc(current)} · ${esc(currentEndpoint)}</span>
+      </summary>
+      <div class="rt-role-radio-list" style="max-height:50vh;overflow-y:auto">${radios}</div>
+    </details>`;
+}
+
+function _onSettingsRoleRadioClick(e) {
+  const btn = e.currentTarget;
+  const val = btn.dataset.value;
+  const endpoint = btn.dataset.endpoint || '';
+  const picker = btn.closest('.rt-role-picker');
+  if (!picker) return;
+  // 仅在该 picker 内换 is-selected — 不影响别的 role 的 picker。
+  for (const b of picker.querySelectorAll('.settings-role-radio.is-selected')) {
+    b.classList.remove('is-selected');
+    b.querySelector('.ws-radio-dot')?.classList.remove('is-selected');
+  }
+  btn.classList.add('is-selected');
+  btn.querySelector('.ws-radio-dot')?.classList.add('is-selected');
+  // 更新 summary 显示
+  const summary = picker.querySelector('.rt-role-current');
+  if (summary) summary.textContent = `${val} · ${endpoint}`;
+  // 收起 details(跟 rt form 同行为)
+  picker.open = false;
+}
+
 async function _onRolesSave(e) {
   const btn = e.currentTarget;
   btn.disabled = true; btn.textContent = '保存中...';
 
-  // 收集 nested {role: {model?, system_prompt?}}
+  // 收集 nested {role: {model?, system_prompt?}} — model 从每行 picker
+  // 的 .settings-role-radio.is-selected 拿;prompt 从该行 textarea 拿。
   const role_models = {};
-  for (const s of document.querySelectorAll('select.role-model-select')) {
-    const role = s.dataset.role;
-    if (!role_models[role]) role_models[role] = {};
-    role_models[role].model = s.value;
-  }
-  for (const ta of document.querySelectorAll('textarea[data-role-prompt]')) {
-    const role = ta.dataset.rolePrompt;
-    const prompt = ta.value.trim();
-    if (!role_models[role]) role_models[role] = {};
-    if (prompt) {
-      role_models[role].system_prompt = prompt;
+  for (const row of document.querySelectorAll('.role-config-row')) {
+    const role = row.dataset.role;
+    if (!role) continue;
+    const selected = row.querySelector('.settings-role-radio.is-selected');
+    if (selected) {
+      role_models[role] = { model: selected.dataset.value };
+    }
+    const ta = row.querySelector('textarea[data-role-prompt]');
+    if (ta) {
+      const prompt = ta.value.trim();
+      if (prompt) {
+        if (!role_models[role]) role_models[role] = {};
+        role_models[role].system_prompt = prompt;
+      }
     }
     // 空 prompt 不加字段 → backend 看到只有 model 没 prompt → 清掉 prompt override
   }
