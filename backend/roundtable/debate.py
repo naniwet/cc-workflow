@@ -35,6 +35,8 @@ from .data import AgentTurn, Role, Session
 from .io import append_turn, write_meta
 from .model import ModelFn
 from .synth import synthesize
+from . import reviewer as reviewer_mod
+from .roles import REVIEWER
 
 
 _PESSIMIST_FAILURE_RE = re.compile(r"因.+?而崩\*\*\s*\([^)]*\)")
@@ -188,6 +190,7 @@ def run_session(
     *,
     role_model_overrides: Optional[dict[str, str]] = None,
     critique_rounds: int = 1,
+    max_auto_drills: int = 3,
     on_turn: Optional[Callable[[AgentTurn], None]] = None,
     clock: Callable[[], float] = time.time,
 ) -> Session:
@@ -346,5 +349,89 @@ def run_session(
         model_override=overrides.get(synthesizer.name),
     )
     _record(AgentTurn(round=synth_round, role=synthesizer.name, type="synth", content=synth_text, ts=clock()))
+
+    # --- Auto-Drill Loop --------------------------------------------------- #
+    # 结构:每次 iteration = review + 若 NEEDS_DRILL 则 drill。
+    # max_auto_drills 限制 drill 次数。跑满 drills 后再做最后一次 review。
+    # max_auto_drills=0 → 整个 loop 跳过(不做 review,不做 drill)。
+    #
+    # review 轮次 = drill 轮次 + 1,例:max=2, 全 NEEDS_DRILL:
+    #   iter1: review1 → drill1
+    #   iter2: review2 → drill2
+    #   after-loop: review3   → 共 3 reviews, 2 drills
+    next_round = synth_round + 1
+    early_converged = False
+    for drill_idx in range(max_auto_drills):
+        last_synth = next((t for t in reversed(session.turns) if t.type == "synth"), None)
+        if last_synth is None:
+            early_converged = True
+            break   # 不该发生,防御性
+
+        prior_reviews = "\n\n".join(
+            f"--- 上次 review (round {t.round}) ---\n{t.content}"
+            for t in session.turns if t.type == "review"
+        ) or "(无)"
+
+        reviewer_prompt = f"""原始问题:
+{question}
+
+最新 synth:
+{last_synth.content}
+
+历史 review:
+{prior_reviews}
+
+按你的 system_prompt 输出判断。"""
+
+        verdict_text = model_fn(
+            overrides.get(REVIEWER.name) or REVIEWER.preferred_model,
+            REVIEWER.system_prompt,
+            reviewer_prompt,
+            REVIEWER.temperature,
+        )
+        verdict = reviewer_mod.parse_verdict(verdict_text)
+        _record(AgentTurn(
+            round=last_synth.round, role=REVIEWER.name, type="review",
+            content=verdict_text, ts=clock(),
+        ))
+        if verdict.converged:
+            early_converged = True
+            break
+        _run_follow_up_iteration(
+            round_no=next_round,
+            follow_up_question=verdict.next_question,
+            prior_synth=last_synth.content,
+            source="auto",
+        )
+        next_round += 1
+
+    # 跑满 drill 上限后补一次 review(early break 时已有 review,跳过)
+    if max_auto_drills > 0 and not early_converged:
+        last_synth = next((t for t in reversed(session.turns) if t.type == "synth"), None)
+        if last_synth is not None:
+            prior_reviews = "\n\n".join(
+                f"--- 上次 review (round {t.round}) ---\n{t.content}"
+                for t in session.turns if t.type == "review"
+            ) or "(无)"
+            reviewer_prompt = f"""原始问题:
+{question}
+
+最新 synth:
+{last_synth.content}
+
+历史 review:
+{prior_reviews}
+
+按你的 system_prompt 输出判断。"""
+            verdict_text = model_fn(
+                overrides.get(REVIEWER.name) or REVIEWER.preferred_model,
+                REVIEWER.system_prompt,
+                reviewer_prompt,
+                REVIEWER.temperature,
+            )
+            _record(AgentTurn(
+                round=last_synth.round, role=REVIEWER.name, type="review",
+                content=verdict_text, ts=clock(),
+            ))
 
     return session

@@ -127,6 +127,7 @@ class RoundtableTests(unittest.TestCase):
                 synth,
                 model_fn,
                 Path(d) / "session.jsonl",
+                max_auto_drills=0,   # 关闭 auto-drill,只测 R1/R2/synth 的并行性
                 clock=time.time,
             )
             elapsed = time.perf_counter() - started
@@ -292,6 +293,116 @@ class FollowUpSynthPromptTests(unittest.TestCase):
         self.assertIn("如果是笔记仓库呢?", prompt)
         # 必须显式要求 LLM "接着前一次 synth 更新",而不是从零开始
         self.assertIn("接着上一次", prompt)
+
+
+class AutoDrillLoopTests(unittest.TestCase):
+    """run_session 跑完 R1+R2+synth 后,进 auto-drill loop:审查员判断
+    收敛了就停,没收敛就跑一轮 follow-up + 新 synth + 再让审查员判断,
+    上限 max_auto_drills。"""
+
+    def _stub_roles(self):
+        from backend.roundtable.data import Role
+        return [
+            Role(name=f"派{i}", system_prompt=f"system {i}", preferred_model="m")
+            for i in range(4)
+        ]
+
+    def _synth_role(self):
+        from backend.roundtable.data import Role
+        return Role(name="整理员", system_prompt="synth", preferred_model="m")
+
+    def _verdict_text(self, converged: bool, next_q: str = "") -> str:
+        if converged:
+            return "## 判断\nCONVERGED\n\n## 理由\nOK"
+        return f"## 判断\nNEEDS_DRILL\n\n## 理由\n再深一点\n\n## 追问问题\n{next_q}"
+
+    def test_converged_immediately_no_extra_rounds(self):
+        from backend.roundtable.debate import run_session
+
+        calls = {"count": 0}
+        verdict_text = self._verdict_text(converged=True)
+        def model_fn(model, system, user, temp):
+            calls["count"] += 1
+            if "审查员" in (system or ""):
+                return verdict_text
+            return f"call {calls['count']}"
+
+        with tempfile.TemporaryDirectory() as d:
+            session = run_session(
+                "Q?",
+                self._stub_roles(),
+                self._synth_role(),
+                model_fn,
+                Path(d) / "s.jsonl",
+                max_auto_drills=3,
+            )
+
+        types = [t.type for t in session.turns]
+        self.assertEqual(types.count("answer"), 4)
+        self.assertEqual(types.count("critique"), 4)
+        self.assertEqual(types.count("synth"), 1)
+        self.assertEqual(types.count("review"), 1)
+        self.assertEqual(types.count("follow_up"), 0)
+
+    def test_two_drills_then_converged(self):
+        from backend.roundtable.debate import run_session
+
+        verdicts = iter([
+            self._verdict_text(False, "drill 1?"),
+            self._verdict_text(False, "drill 2?"),
+            self._verdict_text(True),
+        ])
+        def model_fn(model, system, user, temp):
+            if "审查员" in (system or ""):
+                return next(verdicts)
+            return "stub"
+
+        with tempfile.TemporaryDirectory() as d:
+            session = run_session(
+                "Q?", self._stub_roles(), self._synth_role(), model_fn,
+                Path(d) / "s.jsonl", max_auto_drills=3,
+            )
+
+        types = [t.type for t in session.turns]
+        self.assertEqual(types.count("follow_up"), 8)        # 2 × 4 派
+        self.assertEqual(types.count("synth"), 3)            # initial + 2 drills
+        self.assertEqual(types.count("review"), 3)
+
+    def test_hits_max_auto_drills_cap(self):
+        from backend.roundtable.debate import run_session
+
+        def model_fn(model, system, user, temp):
+            if "审查员" in (system or ""):
+                return "## 判断\nNEEDS_DRILL\n\n## 理由\n还差点\n\n## 追问问题\n更多?"
+            return "stub"
+
+        with tempfile.TemporaryDirectory() as d:
+            session = run_session(
+                "Q?", self._stub_roles(), self._synth_role(), model_fn,
+                Path(d) / "s.jsonl", max_auto_drills=2,
+            )
+
+        types = [t.type for t in session.turns]
+        self.assertEqual(types.count("follow_up"), 8)
+        self.assertEqual(types.count("synth"), 3)
+        self.assertEqual(types.count("review"), 3)
+
+    def test_max_auto_drills_zero_disables_loop(self):
+        from backend.roundtable.debate import run_session
+
+        def model_fn(model, system, user, temp):
+            return "stub"
+
+        with tempfile.TemporaryDirectory() as d:
+            session = run_session(
+                "Q?", self._stub_roles(), self._synth_role(), model_fn,
+                Path(d) / "s.jsonl", max_auto_drills=0,
+            )
+
+        types = [t.type for t in session.turns]
+        self.assertEqual(types.count("review"), 0)
+        self.assertEqual(types.count("follow_up"), 0)
+        self.assertEqual(types.count("synth"), 1)
 
 
 if __name__ == "__main__":
