@@ -321,6 +321,7 @@ _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._一-鿿-]")
 # workspace 名校验:跟 RunRequest.workspace 同款约束(避免 ../ 之类直接走进 ws 目录)
 _WS_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _UPLOAD_MAX_BYTES = 10 * 1024 * 1024   # 10 MB 单请求合计上限,跟 nginx location 对齐
+_ROUNDTABLE_ATTACHMENT_MAX_BYTES = 100 * 1024   # 100 KB,spec §2.3
 
 
 def _safe_filename(name: str) -> str:
@@ -1631,6 +1632,10 @@ class NewRoundtableRequest(BaseModel):
     #     adds ~45s wall clock per session). Higher values rejected —
     #     N≥3 hasn't been validated and is likely to produce padded output.
     critique_rounds: int = Field(default=1, ge=1, le=2)
+    # 文件路径列表(从 POST /roundtable-uploads 拿到)。Backend 校验
+    # 必须在 ROUNDTABLE_UPLOADS_DIR 子树下,读 UTF-8 内容,合计 ≤ 100KB,
+    # 拼进 question 喂给所有 派。spec §3.2。
+    attachments: Optional[list[str]] = Field(default=None, max_length=20)
 
 
 def _roundtable_session_summary(path: Path) -> dict:
@@ -1753,6 +1758,7 @@ def put_role_models(req: RoleModelsRequest) -> dict:
 def create_roundtable(req: NewRoundtableRequest) -> dict:
     """Kick off a new roundtable session. role_models 解析三层:
     per-session (req.role_models) > persistent (role_models.json) > hardcode。
+    attachments(文件路径)被读 UTF-8 + 校验 ≤ 100KB + 拼进 question(spec §3.2)。
     """
     persistent = role_models_store.load()
     merged = {**persistent, **(req.role_models or {})}
@@ -1772,8 +1778,60 @@ def create_roundtable(req: NewRoundtableRequest) -> dict:
                     "error": f"unknown model: {model_name!r}",
                     "known": sorted(roundtable_model.MODEL_ENDPOINTS),
                 })
+
+    # === enrich question 拼文件内容(spec §3.2) ===
+    enriched_question = req.question.strip()
+    if req.attachments:
+        rt_uploads_root = config.ROUNDTABLE_UPLOADS_DIR.resolve()
+        blocks: list[str] = []
+        total_bytes = 0
+        for p in req.attachments:
+            try:
+                path = Path(p).resolve(strict=True)
+            except (OSError, RuntimeError) as e:
+                raise HTTPException(400, {"error": "attachment_invalid", "msg": str(e)})
+            try:
+                path.relative_to(rt_uploads_root)
+            except ValueError:
+                raise HTTPException(400, {
+                    "error": "attachment_outside_uploads",
+                    "msg": f"attachment 必须在 {rt_uploads_root}/ 下",
+                })
+            if not path.is_file():
+                raise HTTPException(400, {"error": "attachment_not_file", "msg": str(p)})
+
+            # 先 stat 累加预算 — 避免一次性读 8MB 文件入 memory 才发现超(spec §3.2)
+            file_size = path.stat().st_size
+            if total_bytes + file_size > _ROUNDTABLE_ATTACHMENT_MAX_BYTES:
+                raise HTTPException(413, {
+                    "error": "attachments_too_large",
+                    "msg": f"加上 {path.name}(约 {file_size} bytes)后超过 {_ROUNDTABLE_ATTACHMENT_MAX_BYTES} 字节上限",
+                    "hint": "拆小文件或者只贴关键段。",
+                })
+
+            try:
+                content = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                raise HTTPException(400, {
+                    "error": "attachment_not_utf8",
+                    "msg": f"{path.name} 不是 UTF-8 文本,roundtable 不支持二进制 / 图片",
+                })
+            # 防御性 re-check:UTF-8 编码后字节数可能跟 st_size 略不等(BOM 等)
+            total_bytes += len(content.encode("utf-8"))
+            if total_bytes > _ROUNDTABLE_ATTACHMENT_MAX_BYTES:
+                raise HTTPException(413, {
+                    "error": "attachments_too_large",
+                    "msg": f"加上 {path.name} 后 UTF-8 编码总长超过 {_ROUNDTABLE_ATTACHMENT_MAX_BYTES} 字节",
+                    "hint": "拆小文件或者只贴关键段。",
+                })
+            blocks.append(f"--- {path.name} ({len(content)} chars) ---\n{content}")
+
+        enriched_question = (
+            f"{enriched_question}\n\n参考文件:\n\n" + "\n\n".join(blocks)
+        )
+
     path = roundtable_runner.submit(
-        req.question.strip(),
+        enriched_question,
         role_models=merged,
         critique_rounds=req.critique_rounds,
     )
