@@ -1698,6 +1698,24 @@ def get_roundtable(session_id: str) -> dict:
     status = "done" if r3_turns else ("error" if error_turns else
               ("running" if normal_turns else "queued"))
     turns_expected = 4 + 4 * session.critique_rounds + 1
+    # 审查员段:取 last review turn 的 verdict,供 PWA banner 决定是否
+    # 显示"已达上限"提示 + prefill 续问 textarea。
+    review_turns = [t for t in session.turns if t.type == "review"]
+    reviewer_summary = None
+    if review_turns:
+        last_review = review_turns[-1]
+        from .roundtable.reviewer import parse_verdict
+        verdict = parse_verdict(last_review.content)
+        reviewer_summary = {
+            "converged": verdict.converged,
+            "reason": verdict.reason,
+            "next_question": verdict.next_question,
+            # 默认 max_auto_drills=3 — hit_max_drills 用 review 数 >= 3 估算。
+            # 后续从 config.toml 读 max_auto_drills 时一起加(YAGNI 暂 hardcode)。
+            "hit_max_drills": (
+                not verdict.converged and len(review_turns) >= 3
+            ),
+        }
     return {
         "id": session_id,
         "question": session.question,
@@ -1710,8 +1728,26 @@ def get_roundtable(session_id: str) -> dict:
             for t in normal_turns
         ],
         "r3": r3,
+        "reviewer": reviewer_summary,
         "error": error_turns[-1].content if error_turns else None,
     }
+
+
+class ContinueRoundtableRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+
+
+@app.post("/roundtables/{session_id}/continue", dependencies=PROTECT, status_code=202)
+def continue_roundtable(session_id: str, body: ContinueRoundtableRequest) -> dict:
+    """用户续问:在已有 session 上 append user follow-up round + 新 synth
+    + 审查员判断(可能再触发 auto-drill)。"""
+    if "/" in session_id or ".." in session_id or session_id.startswith("."):
+        raise HTTPException(400, {"error": "bad session id"})
+    path = config.ROUNDTABLES_DIR / f"{session_id}.jsonl"
+    if not path.is_file():
+        raise HTTPException(404, {"error": "session not found", "id": session_id})
+    roundtable_runner.submit_continue(path, body.question.strip())
+    return {"id": session_id, "status": "queued", "question": body.question}
 
 
 @app.delete("/roundtables/{session_id}", dependencies=PROTECT)

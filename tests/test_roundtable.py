@@ -469,5 +469,60 @@ class ContinueSessionTests(unittest.TestCase):
             self.assertIn("synth", str(ctx.exception))
 
 
+class ContinueEndpointTests(unittest.TestCase):
+    """POST /roundtables/{id}/continue end-to-end through TestClient."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+        from unittest.mock import patch
+        from backend import config
+        self.patches = [
+            patch.object(config, "ROUNDTABLES_DIR", self.tmp_path),
+        ]
+        for p in self.patches:
+            p.start()
+        from backend import main, auth
+        main.app.dependency_overrides[auth.require_user] = lambda: "test-user"
+        from fastapi.testclient import TestClient
+        self.client = TestClient(main.app)
+
+    def tearDown(self):
+        from backend import main
+        main.app.dependency_overrides.clear()
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def _seed_completed_session(self, name="abc"):
+        """Write a minimal jsonl: meta + 1 synth turn,足以让 continue 接受。"""
+        from backend import config
+        from backend.roundtable.data import Session, AgentTurn
+        from backend.roundtable.io import write_meta, append_turn
+        path = config.ROUNDTABLES_DIR / f"{name}.jsonl"
+        write_meta(path, Session(question="Q", started_at=0.0))
+        append_turn(path, AgentTurn(round=3, role="整理员", type="synth", content="hi", ts=0.0))
+        return path
+
+    def test_continue_rejects_when_session_missing(self):
+        r = self.client.post(
+            "/roundtables/nope/continue", json={"question": "再问 X"},
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_continue_rejects_empty_question(self):
+        self._seed_completed_session()
+        r = self.client.post("/roundtables/abc/continue", json={"question": ""})
+        self.assertEqual(r.status_code, 422)
+
+    def test_continue_returns_202(self):
+        self._seed_completed_session()
+        from unittest.mock import patch
+        with patch("backend.main.roundtable_runner.submit_continue") as sub:
+            r = self.client.post("/roundtables/abc/continue", json={"question": "再问 X"})
+        self.assertEqual(r.status_code, 202, r.text)
+        self.assertTrue(sub.called)
+
+
 if __name__ == "__main__":
     unittest.main()
