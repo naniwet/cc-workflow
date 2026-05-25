@@ -24,8 +24,13 @@ providers.json
 
 # Local Claude Code workspace state (settings.local.json captures the
 # user's machine-specific allowlist with absolute paths; skills under
-# .claude/skills/ are project-private experiments).
-.claude/
+# .claude/skills/ are project-private experiments)。
+# Exception: .claude/agents/ — project-shared subagent definitions
+# (code-dev / code-review),要进 git 跟人走。
+# 注意:gitignore 不允许在被忽略的"目录"下 re-include 文件,所以这里
+# 列具体子项忽略而不是整个 .claude/。
+.claude/*
+!.claude/agents/
 
 # Misc local scratch dirs — never project artifacts.
 packages/
