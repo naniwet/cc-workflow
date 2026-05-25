@@ -5207,6 +5207,9 @@ async function _onRolesSave(e) {
       body: JSON.stringify({ role_models }),
     });
     showToast('success', 'role overrides 已保存', { ttl: 2500 });
+    // 保存成功后重新 fetch — backend 可能 normalize 值(strip 空白等),
+    // 不刷新页面值会跟存盘值不一致。跟 _onRolesReset 对称(I-1 修)。
+    renderSettingsRolesView();
   } catch (err) {
     showError(`保存失败: ${err.message}`);
   } finally {
