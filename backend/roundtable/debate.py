@@ -29,10 +29,10 @@ import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from .data import AgentTurn, Role, Session
-from .io import append_turn, write_meta
+from .io import append_turn, write_meta, read_session
 from .model import ModelFn
 from .synth import synthesize, build_follow_up_synth_prompt
 from . import reviewer as reviewer_mod
@@ -181,7 +181,7 @@ R2 其他三人对 R1 的评论:
 - **第 3 轮的存在意义就是逼你说新东西**,重复 R2 内容会被判废"""
 
 
-def _run_follow_up_iteration_v2(
+def _run_follow_up_iteration(
     *,
     session: "Session",
     session_path: Path,
@@ -194,7 +194,7 @@ def _run_follow_up_iteration_v2(
     round_no: int,
     follow_up_question: str,
     prior_synth: str,
-    source: str,
+    source: Literal["auto", "user"],
     on_turn: Optional[Callable[["AgentTurn"], None]],
 ) -> None:
     """跑一轮 follow-up:user_question(若 source=user)→ 4 派 follow_up × N → 新 synth。
@@ -309,6 +309,9 @@ def _run_auto_drill_loop(
 
     Module-level 版本(Task 6 重构),被 run_session 和 continue_session 共用。"""
 
+    # `_record` 跟 _run_follow_up_iteration 里那个同构 — 都是 3 行
+    # append_turn + on_turn callback + session.turns.append。CLAUDE.md §3.3:
+    # 2 处重复不开抽象;真到 3 处再考虑抽 _make_recorder 工厂。
     def _record(turn: AgentTurn) -> None:
         append_turn(session_path, turn)
         if on_turn is not None:
@@ -338,7 +341,7 @@ def _run_auto_drill_loop(
         if verdict.converged:
             converged = True
             break
-        _run_follow_up_iteration_v2(
+        _run_follow_up_iteration(
             session=session,
             session_path=session_path,
             question=question,
@@ -534,7 +537,6 @@ def continue_session(
 
     返回更新后的 Session(包括新 follow_up / synth / review turns)。
     """
-    from .io import read_session
     session = read_session(session_path)
     question = session.question
     overrides = role_model_overrides or {}
@@ -544,7 +546,7 @@ def continue_session(
     if last_synth is None:
         raise ValueError("session 没有 synth turn,不能续问")
 
-    _run_follow_up_iteration_v2(
+    _run_follow_up_iteration(
         session=session,
         session_path=session_path,
         question=question,

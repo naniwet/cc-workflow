@@ -441,6 +441,33 @@ class ContinueSessionTests(unittest.TestCase):
             self.assertEqual(len(follow_ups_post), 4)
             self.assertGreaterEqual(len([t for t in session.turns if t.type == "synth"]), 2)
 
+    def test_continue_raises_when_no_synth_turn(self):
+        """续问空 session(没有 initial synth)→ ValueError。"""
+        from backend.roundtable.debate import continue_session
+        from backend.roundtable.data import Role, Session
+        from backend.roundtable.io import write_meta
+
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "empty.jsonl"
+            write_meta(path, Session(question="Q", started_at=0.0))
+            # 只写 meta line,没有任何 turn(尤其没有 synth)
+
+            roles = [Role(name=f"派{i}", system_prompt="s", preferred_model="m") for i in range(4)]
+            synth = Role(name="整理员", system_prompt="synth", preferred_model="m")
+            def model_fn(*args, **kwargs):
+                return "stub"
+
+            with self.assertRaises(ValueError) as ctx:
+                continue_session(
+                    session_path=path,
+                    follow_up_question="继续",
+                    roles=roles,
+                    synthesizer=synth,
+                    model_fn=model_fn,
+                    max_auto_drills=3,
+                )
+            self.assertIn("synth", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
