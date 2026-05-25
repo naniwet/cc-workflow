@@ -213,7 +213,7 @@ ROLES: list[Role] = [MINIMALIST, SCENARIO, PRECEDENT, PESSIMIST]
 
 SYNTHESIZER = Role(
     name="整理员",
-    preferred_model="deepseek-v4-pro",
+    preferred_model="deepseek-v4-flash",
     temperature=0.3,  # 整理任务要稳定,不要 R1/R2 的 0.7
     system_prompt="""你是整理员。你不是一个有立场的角色,你不参与判断。
 
