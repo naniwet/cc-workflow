@@ -145,6 +145,85 @@ def _execute(
                 pass
 
 
+def submit_oneonone(
+    question: str,
+    *,
+    stance_a: str,
+    stance_b: str,
+    role_models: dict[str, str] | None = None,
+    on_complete: Optional[OnCompleteFn] = None,
+) -> Path:
+    """跟 submit() 同形,但跑 1v1 对抗 mode:
+
+    - ROLES = [正方, 反方](由 oneonone.make_proponent_roles 构造,立场字符串
+      注入同一 PROPONENT_PROMPT_TEMPLATE)
+    - critique_rounds=2(R1 陈述 + R2 反驳)
+    - max_auto_drills=0(spec Q6:1v1 不接 reviewer drill)
+    - Session.mode="oneonone" 标识
+
+    user 在 #settings/roles 给"正方"/"反方"override 的 system_prompt 也会
+    被 _customize_role 应用(跟 4 派同款路径)。
+    """
+    started_at = time.time()
+    sessions_dir = config.ROUNDTABLES_DIR
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    path = session_path_for(question, started_at, sessions_dir)
+    write_meta(path, Session(
+        question=question,
+        started_at=started_at,
+        critique_rounds=2,
+        mode="oneonone",
+    ))
+
+    t = threading.Thread(
+        target=_execute_oneonone,
+        args=(question, stance_a, stance_b, path,
+              dict(role_models or {}), on_complete),
+        name=f"oneonone-{path.stem}",
+        daemon=True,
+    )
+    t.start()
+    return path
+
+
+def _execute_oneonone(
+    question: str,
+    stance_a: str,
+    stance_b: str,
+    session_path: Path,
+    role_models: dict[str, str],
+    on_complete: Optional[OnCompleteFn],
+) -> None:
+    """1v1 调试 worker。跟 _execute 同款错误处理 — ModelError → __error__ 行,
+    其它 exception 兜底,on_complete 在 finally 中始终触发。"""
+    try:
+        from . import oneonone        # 局部 import 避免 module-level 循环
+        proponents = oneonone.make_proponent_roles(stance_a, stance_b)
+        customized_roles = [_customize_role(r) for r in proponents]
+        synthesizer = _customize_role(roles_mod.SYNTHESIZER)
+        run_session(
+            question=question,
+            roles=customized_roles,
+            synthesizer=synthesizer,
+            model_fn=call_model,
+            session_path=session_path,
+            role_model_overrides=role_models,
+            critique_rounds=2,
+            max_auto_drills=0,    # 1v1 不接 reviewer drill(spec Q6)
+            reviewer=None,         # max_auto_drills=0 → reviewer 不会被 invoke
+        )
+    except ModelError as e:
+        write_error_marker(session_path, f"model error: {type(e).__name__}: {e}")
+    except Exception as e:  # noqa: BLE001
+        write_error_marker(session_path, f"unexpected: {type(e).__name__}: {e}")
+    finally:
+        if on_complete is not None:
+            try:
+                on_complete(session_path)
+            except Exception:    # noqa: BLE001
+                pass
+
+
 def submit_continue(
     session_path: Path,
     follow_up_question: str,

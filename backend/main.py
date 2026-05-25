@@ -65,6 +65,7 @@ from pydantic import BaseModel, Field
 from . import agents_store, approvals, auth, config, cron_state, db, im_feishu, llm, runner, skills, ws_settings
 from .roundtable import io as roundtable_io
 from .roundtable import model as roundtable_model
+from .roundtable import oneonone as roundtable_oneonone
 from .roundtable import roles as roundtable_roles
 from .roundtable import role_models_store
 from .roundtable import runner as roundtable_runner
@@ -322,6 +323,70 @@ _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._一-鿿-]")
 _WS_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _UPLOAD_MAX_BYTES = 10 * 1024 * 1024   # 10 MB 单请求合计上限,跟 nginx location 对齐
 _ROUNDTABLE_ATTACHMENT_MAX_BYTES = 100 * 1024   # 100 KB,spec §2.3
+
+
+def _enrich_question_with_attachments(
+    question: str, attachments: Optional[list[str]],
+) -> str:
+    """读 attachments 列表里的文本文件,拼到 question 后面(spec §3.2)。
+
+    safety checks(顺序很重要):
+    1. resolve(strict=True) — 解析符号链接 + 必须存在
+    2. 路径必须在 ROUNDTABLE_UPLOADS_DIR/ 下(防 traversal)
+    3. is_file() — 不能是目录
+    4. stat 累加预算 ≤ 100KB(避免一次性读 8MB 进 memory)
+    5. UTF-8 解码 — 二进制 / 图片直接拒
+    6. encode 后再 check 一次(BOM 等让字节数 ≠ st_size)
+
+    任何一步失败抛 HTTPException — caller(POST /roundtables /oneonone)
+    直接 raise 传递给 FastAPI。
+    返回 enriched question;无 attachments 时返原 question。
+    """
+    if not attachments:
+        return question
+    rt_uploads_root = config.ROUNDTABLE_UPLOADS_DIR.resolve()
+    blocks: list[str] = []
+    total_bytes = 0
+    for p in attachments:
+        try:
+            path = Path(p).resolve(strict=True)
+        except (OSError, RuntimeError) as e:
+            raise HTTPException(400, {"error": "attachment_invalid", "msg": str(e)})
+        try:
+            path.relative_to(rt_uploads_root)
+        except ValueError:
+            raise HTTPException(400, {
+                "error": "attachment_outside_uploads",
+                "msg": f"attachment 必须在 {rt_uploads_root}/ 下",
+            })
+        if not path.is_file():
+            raise HTTPException(400, {"error": "attachment_not_file", "msg": str(p)})
+
+        file_size = path.stat().st_size
+        if total_bytes + file_size > _ROUNDTABLE_ATTACHMENT_MAX_BYTES:
+            raise HTTPException(413, {
+                "error": "attachments_too_large",
+                "msg": f"加上 {path.name}(约 {file_size} bytes)后超过 {_ROUNDTABLE_ATTACHMENT_MAX_BYTES} 字节上限",
+                "hint": "拆小文件或者只贴关键段。",
+            })
+
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(400, {
+                "error": "attachment_not_utf8",
+                "msg": f"{path.name} 不是 UTF-8 文本,roundtable 不支持二进制 / 图片",
+            })
+        total_bytes += len(content.encode("utf-8"))
+        if total_bytes > _ROUNDTABLE_ATTACHMENT_MAX_BYTES:
+            raise HTTPException(413, {
+                "error": "attachments_too_large",
+                "msg": f"加上 {path.name} 后 UTF-8 编码总长超过 {_ROUNDTABLE_ATTACHMENT_MAX_BYTES} 字节",
+                "hint": "拆小文件或者只贴关键段。",
+            })
+        blocks.append(f"--- {path.name} ({len(content)} chars) ---\n{content}")
+
+    return f"{question}\n\n参考文件:\n\n" + "\n\n".join(blocks)
 
 
 def _safe_filename(name: str) -> str:
@@ -1612,13 +1677,24 @@ def resume_loop(name: str) -> dict:
 
 
 def _all_role_names() -> set[str]:
-    """所有合法 role 名 — 4 个 persona + SYNTHESIZER + REVIEWER。
-    新增元角色时只需改这一处(spec §3.4 单一术语源)。"""
+    """所有合法 role 名 — 4 个 persona + SYNTHESIZER + REVIEWER + 1v1 正方 / 反方。
+    新增元角色时只需改这一处(spec §3.4 单一术语源)。
+    PUT /settings/role-models 用这个 set 校验 override 的 role name,
+    所以 1v1 正方 / 反方 也得在内才能让用户在 #settings/roles 改它们。"""
     return (
         {r.name for r in roundtable_roles.ROLES}
         | {roundtable_roles.SYNTHESIZER.name}
         | {roundtable_roles.REVIEWER.name}
+        | {"正方", "反方"}
     )
+
+
+class NewOneOnOneRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=4096)
+    # 跟 round-table 同款 — 正方 / 反方 / 整理员 三个角色可 override model
+    role_models: Optional[dict[str, str]] = None
+    # 跟 round-table 同款 attachments(文件路径列表,文本 + 100KB 上限)
+    attachments: Optional[list[str]] = None
 
 
 class NewRoundtableRequest(BaseModel):
@@ -1718,6 +1794,8 @@ def list_roundtable_models() -> dict:
             [_role_entry(r, "persona") for r in roundtable_roles.ROLES]
             + [_role_entry(roundtable_roles.SYNTHESIZER, "synthesizer")]
             + [_role_entry(roundtable_roles.REVIEWER, "reviewer")]
+            + [_role_entry(r, "proponent")
+               for r in roundtable_oneonone.proponent_role_placeholders()]
         ),
     }
 
@@ -1865,55 +1943,9 @@ def create_roundtable(req: NewRoundtableRequest) -> dict:
                 })
 
     # === enrich question 拼文件内容(spec §3.2) ===
-    enriched_question = req.question.strip()
-    if req.attachments:
-        rt_uploads_root = config.ROUNDTABLE_UPLOADS_DIR.resolve()
-        blocks: list[str] = []
-        total_bytes = 0
-        for p in req.attachments:
-            try:
-                path = Path(p).resolve(strict=True)
-            except (OSError, RuntimeError) as e:
-                raise HTTPException(400, {"error": "attachment_invalid", "msg": str(e)})
-            try:
-                path.relative_to(rt_uploads_root)
-            except ValueError:
-                raise HTTPException(400, {
-                    "error": "attachment_outside_uploads",
-                    "msg": f"attachment 必须在 {rt_uploads_root}/ 下",
-                })
-            if not path.is_file():
-                raise HTTPException(400, {"error": "attachment_not_file", "msg": str(p)})
-
-            # 先 stat 累加预算 — 避免一次性读 8MB 文件入 memory 才发现超(spec §3.2)
-            file_size = path.stat().st_size
-            if total_bytes + file_size > _ROUNDTABLE_ATTACHMENT_MAX_BYTES:
-                raise HTTPException(413, {
-                    "error": "attachments_too_large",
-                    "msg": f"加上 {path.name}(约 {file_size} bytes)后超过 {_ROUNDTABLE_ATTACHMENT_MAX_BYTES} 字节上限",
-                    "hint": "拆小文件或者只贴关键段。",
-                })
-
-            try:
-                content = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                raise HTTPException(400, {
-                    "error": "attachment_not_utf8",
-                    "msg": f"{path.name} 不是 UTF-8 文本,roundtable 不支持二进制 / 图片",
-                })
-            # 防御性 re-check:UTF-8 编码后字节数可能跟 st_size 略不等(BOM 等)
-            total_bytes += len(content.encode("utf-8"))
-            if total_bytes > _ROUNDTABLE_ATTACHMENT_MAX_BYTES:
-                raise HTTPException(413, {
-                    "error": "attachments_too_large",
-                    "msg": f"加上 {path.name} 后 UTF-8 编码总长超过 {_ROUNDTABLE_ATTACHMENT_MAX_BYTES} 字节",
-                    "hint": "拆小文件或者只贴关键段。",
-                })
-            blocks.append(f"--- {path.name} ({len(content)} chars) ---\n{content}")
-
-        enriched_question = (
-            f"{enriched_question}\n\n参考文件:\n\n" + "\n\n".join(blocks)
-        )
+    enriched_question = _enrich_question_with_attachments(
+        req.question.strip(), req.attachments,
+    )
 
     path = roundtable_runner.submit(
         enriched_question,
@@ -1921,6 +1953,87 @@ def create_roundtable(req: NewRoundtableRequest) -> dict:
         critique_rounds=req.critique_rounds,
     )
     return {"id": path.stem, "status": "queued", "question": req.question}
+
+
+@app.post("/oneonone", dependencies=PROTECT, status_code=202)
+def create_oneonone(req: NewOneOnOneRequest) -> dict:
+    """启动 1v1 对抗 session(spec: 2026-05-26-roundtable-1v1-mode-design.md)。
+
+    流程:
+      1. enrich question(attachments,跟 round-table 同款 helper)
+      2. 校验 role_models 范围:仅"正方"/"反方"/"整理员",值在 MODEL_ENDPOINTS
+      3. framing call:`oneonone.frame_stances(question, call_model)`
+         - NonBinaryQuestionError → 400 + hint(用户问题不是二值)
+         - 其它 ValueError / ModelError → 500(framing 抽风,不是用户错)
+      4. merge persistent + per-session role_models(同 create_roundtable)
+      5. 调 `roundtable_runner.submit_oneonone(...)`
+
+    response: 202 + {id, status, question, stance_a, stance_b}
+    """
+    # 1. enrich
+    enriched_question = _enrich_question_with_attachments(
+        req.question.strip(), req.attachments,
+    )
+
+    # 2. validate role_models early(early fail 比 framing 完才发现 typo 好)
+    valid_roles = {"正方", "反方", "整理员"}
+    if req.role_models:
+        for role_name, model_name in req.role_models.items():
+            if role_name not in valid_roles:
+                raise HTTPException(400, {
+                    "error": f"unknown role: {role_name!r}",
+                    "known": sorted(valid_roles),
+                })
+            if model_name not in roundtable_model.MODEL_ENDPOINTS:
+                raise HTTPException(400, {
+                    "error": f"unknown model: {model_name!r}",
+                    "known": sorted(roundtable_model.MODEL_ENDPOINTS),
+                })
+
+    # 3. framing — 一次 LLM 调用拆立场
+    try:
+        stance_a, stance_b = roundtable_oneonone.frame_stances(
+            enriched_question, roundtable_model.call_model,
+        )
+    except roundtable_oneonone.NonBinaryQuestionError as e:
+        raise HTTPException(400, {
+            "error": "non_binary_question",
+            "msg": "1v1 模式只接二值决策问题(做 / 不做、用 / 不用、走 A / 走 B 这种)",
+            "hint": e.hint or "改写成二值表达,或者切回 4 派评议",
+        })
+    except (ValueError, roundtable_model.ModelError) as e:
+        raise HTTPException(500, {
+            "error": "framing_failed",
+            "msg": str(e),
+            "hint": "framing LLM 输出无法解析或调用失败。重试一次或换 framing model。",
+        })
+
+    # 4. merge persistent + per-session(同 create_roundtable 的逻辑,只是
+    #    persistent 校验范围仍然是 1v1 域的 3 个角色)
+    persistent = role_models_store.load()
+    merged_models: dict[str, str] = {}
+    for role_name, entry in persistent.items():
+        if role_name in valid_roles:
+            m = entry.get("model")
+            if m:
+                merged_models[role_name] = m
+    if req.role_models:
+        merged_models.update(req.role_models)
+
+    # 5. submit
+    path = roundtable_runner.submit_oneonone(
+        enriched_question,
+        stance_a=stance_a,
+        stance_b=stance_b,
+        role_models=merged_models,
+    )
+    return {
+        "id": path.stem,
+        "status": "queued",
+        "question": req.question,
+        "stance_a": stance_a,
+        "stance_b": stance_b,
+    }
 
 
 @app.get("/roundtables/{session_id}", dependencies=PROTECT)
@@ -1981,6 +2094,7 @@ def get_roundtable(session_id: str) -> dict:
         "started_at": session.started_at,
         "status": status,
         "critique_rounds": session.critique_rounds,
+        "mode": session.mode,             # "roundtable" / "oneonone"(1v1 detail rendering)
         "turns_expected": turns_expected,
         "turns": [
             {"round": t.round, "role": t.role, "type": t.type, "content": t.content, "ts": t.ts}

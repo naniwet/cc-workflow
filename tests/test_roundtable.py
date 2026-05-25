@@ -707,5 +707,98 @@ class RoleModelsStoreAliasMigrationTests(unittest.TestCase):
         self.assertEqual(result["悲观派"]["system_prompt"], "be paranoid")
 
 
+class SessionModeFieldTests(unittest.TestCase):
+    """Session.meta 加 mode 字段(roundtable / oneonone),向前兼容老 jsonl。"""
+
+    def test_session_dataclass_defaults_mode_to_roundtable(self):
+        from backend.roundtable.data import Session
+        s = Session(question="Q?", started_at=0.0)
+        self.assertEqual(s.mode, "roundtable")
+
+    def test_write_meta_persists_mode_field(self):
+        import json
+        from backend.roundtable.data import Session
+        from backend.roundtable.io import write_meta
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            s = Session(question="Q?", started_at=1.0, mode="oneonone")
+            write_meta(p, s)
+            head = json.loads(p.read_text().splitlines()[0])
+            self.assertEqual(head["mode"], "oneonone")
+
+    def test_read_session_back_compat_defaults_legacy_jsonl_to_roundtable(self):
+        """老 jsonl 没 mode 字段 → 默认 "roundtable"。"""
+        import json
+        from backend.roundtable.io import read_session
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            # 老 meta line:无 mode 字段
+            p.write_text(json.dumps({
+                "_meta": True, "question": "Q?", "started_at": 1.0,
+                "critique_rounds": 1, "version": 1,
+            }) + "\n")
+            s = read_session(p)
+            self.assertEqual(s.mode, "roundtable")
+
+
+class OneOnOneRolesTests(unittest.TestCase):
+    """1v1 对抗 mode 的 PROPONENT roles 构造 + framing。"""
+
+    def test_make_proponent_roles_returns_two_roles_named_正方_反方(self):
+        from backend.roundtable.oneonone import make_proponent_roles
+        roles = make_proponent_roles("做 X", "不做 X")
+        self.assertEqual(len(roles), 2)
+        self.assertEqual(roles[0].name, "正方")
+        self.assertEqual(roles[1].name, "反方")
+
+    def test_make_proponent_roles_injects_stances_into_prompts(self):
+        """各自 system_prompt 含自己的 stance 和对方的 stance。"""
+        from backend.roundtable.oneonone import make_proponent_roles
+        roles = make_proponent_roles("做 X", "不做 X")
+        self.assertIn("做 X", roles[0].system_prompt)
+        self.assertIn("不做 X", roles[0].system_prompt)  # 对方立场也要出现
+        self.assertIn("不做 X", roles[1].system_prompt)
+        self.assertIn("做 X", roles[1].system_prompt)
+
+    def test_proponent_prompt_template_carries_four_core_anchors(self):
+        """Spec §3.1:4 条核心约束的关键 anchor 必须在 prompt 里。"""
+        from backend.roundtable.oneonone import PROPONENT_PROMPT_TEMPLATE
+        for anchor in ("立场不可摇摆", "steel-man", "中立语", "反例边界"):
+            self.assertIn(anchor, PROPONENT_PROMPT_TEMPLATE)
+
+    def test_frame_stances_parses_binary_question(self):
+        """LLM 返合法 JSON → 返 (stance_a, stance_b) tuple。"""
+        from backend.roundtable.oneonone import frame_stances
+        def fake_llm(model, system, user, temp):
+            return '{"a": "做 X", "b": "不做 X"}'
+        a, b = frame_stances("应该做 X 吗?", fake_llm)
+        self.assertEqual(a, "做 X")
+        self.assertEqual(b, "不做 X")
+
+    def test_frame_stances_raises_on_non_binary_question(self):
+        """LLM 判定非二值(返 error JSON)→ ValueError(caller 转 400)。"""
+        from backend.roundtable.oneonone import frame_stances, NonBinaryQuestionError
+        def fake_llm(model, system, user, temp):
+            return '{"error": "non_binary_question", "hint": "改成 用/不用 X"}'
+        with self.assertRaises(NonBinaryQuestionError):
+            frame_stances("怎么设计 X?", fake_llm)
+
+    def test_frame_stances_raises_on_garbage_llm_output(self):
+        """LLM 返非 JSON / 缺 a/b key → ValueError。"""
+        from backend.roundtable.oneonone import frame_stances
+        def fake_llm(model, system, user, temp):
+            return "not json at all"
+        with self.assertRaises(ValueError):
+            frame_stances("Q?", fake_llm)
+
+    def test_frame_stances_strips_code_fence(self):
+        """LLM 常把 JSON 包在 ```json``` 里,framing 要能拆。"""
+        from backend.roundtable.oneonone import frame_stances
+        def fake_llm(model, system, user, temp):
+            return '```json\n{"a": "上线", "b": "不上线"}\n```'
+        a, b = frame_stances("Q?", fake_llm)
+        self.assertEqual((a, b), ("上线", "不上线"))
+
+
 if __name__ == "__main__":
     unittest.main()

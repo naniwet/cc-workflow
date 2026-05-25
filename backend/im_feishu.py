@@ -274,14 +274,14 @@ cc-workflow 飞书命令清单:
   /loops pause <name>                暂停该 loop(cron 不再触发)
   /loops resume <name>               恢复
 
-▸ 圆桌(多 agent 辩论)
-  /rt                                列最近 5 场圆桌(状态 + 问题)
+▸ 评议(多 agent 辩论)
+  /rt                                列最近 5 场评议(状态 + 问题)
   /rt <问题>                          新开一场,~1-2min 后我把 R3 整理员结果发回这里
 
 ▸ 帮助
   /help                              再次看这条清单
 
-提示:命令不区分大小写。圆桌完成 / run 完成的结果都会主动回到原聊天。
+提示:命令不区分大小写。评议完成 / run 完成的结果都会主动回到原聊天。
 """
 
 # Pending /loops new plans, in-memory only.
@@ -705,10 +705,10 @@ def _rt_list(chat_id: str) -> dict:
     paths = sorted(config.ROUNDTABLES_DIR.glob("*.jsonl"), reverse=True)[:5] \
         if config.ROUNDTABLES_DIR.is_dir() else []
     if not paths:
-        reply_to_chat(chat_id, "暂无圆桌历史。\n开一场: /rt <问题>")
+        reply_to_chat(chat_id, "暂无评议历史。\n开一场: /rt <问题>")
         return {"ok": True, "slash": "rt", "count": 0}
     from .roundtable.io import read_session
-    lines = [f"最近 {len(paths)} 场圆桌:"]
+    lines = [f"最近 {len(paths)} 场评议:"]
     for p in paths:
         try:
             sess = read_session(p)
@@ -742,12 +742,12 @@ def _rt_new(question: str, chat_id: str) -> dict:
     try:
         path = rt_runner.submit(question, on_complete=_on_done)
     except Exception as e:    # noqa: BLE001 — submit() shouldn't raise but be defensive
-        reply_to_chat(chat_id, f"圆桌启动失败: {type(e).__name__}: {e}")
+        reply_to_chat(chat_id, f"评议启动失败: {type(e).__name__}: {e}")
         return {"ok": False, "slash": "rt", "error": str(e)}
 
     reply_to_chat(
         chat_id,
-        f"✓ 圆桌已开 · ID {path.stem}\n"
+        f"✓ 评议已开 · ID {path.stem}\n"
         f"4 角色 × R1+R2 + 整理员 R3,约 1-2 分钟。\n"
         f"完成后我把 R3 整理员结果发回这里;失败也会通知你。",
     )
@@ -764,7 +764,7 @@ def _push_rt_result(session_path, chat_id: str) -> None:
         session = read_session(session_path)
     except Exception as e:    # noqa: BLE001
         try:
-            reply_to_chat(chat_id, f"⚠ 圆桌 {session_path.stem} 完成但 jsonl 读不出: {e}")
+            reply_to_chat(chat_id, f"⚠ 评议 {session_path.stem} 完成但 jsonl 读不出: {e}")
         except Exception:    # noqa: BLE001
             pass
         return
@@ -780,24 +780,24 @@ def _push_rt_result(session_path, chat_id: str) -> None:
         link_line = f"\n\n[在 PWA 看完整 R1/R2 transcript]({pwa_link})" if pwa_link else ""
         body = f"**问题**\n{q}\n\n---\n\n{synth_turns[-1].content}{link_line}"
         card = ui_cards.Card(
-            title=f"🎙 圆桌 R3 · {session_path.stem}",
+            title=f"🎙 评议 R3 · {session_path.stem}",
             sections=(ui_cards.Section(kind="text", content=body),),
         )
         try:
             reply_card(chat_id, card)
         except Exception as e:    # noqa: BLE001
             # Fallback to plain text if card rendering / send fails.
-            reply_to_chat(chat_id, f"圆桌 R3 ({session_path.stem}):\n\n{synth_turns[-1].content}")
+            reply_to_chat(chat_id, f"评议 R3 ({session_path.stem}):\n\n{synth_turns[-1].content}")
     elif error_turns:
         try:
-            reply_to_chat(chat_id, f"✗ 圆桌 {session_path.stem} 失败:\n{error_turns[-1].content}")
+            reply_to_chat(chat_id, f"✗ 评议 {session_path.stem} 失败:\n{error_turns[-1].content}")
         except Exception:    # noqa: BLE001
             pass
     else:
         try:
             reply_to_chat(
                 chat_id,
-                f"⚠ 圆桌 {session_path.stem} 状态异常(没 R3 也没 error)\n/rt 查列表。",
+                f"⚠ 评议 {session_path.stem} 状态异常(没 R3 也没 error)\n/rt 查列表。",
             )
         except Exception:    # noqa: BLE001
             pass

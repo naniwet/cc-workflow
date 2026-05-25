@@ -1,6 +1,6 @@
 # 飞书端使用说明
 
-cc-workflow 的飞书集成:**在群里 @机器人发 prompt → 服务器跑 Claude Code → 结果以飞书卡片回到群里**。也支持 cron loop 远程操作、圆桌会议远程发起。
+cc-workflow 的飞书集成:**在群里 @机器人发 prompt → 服务器跑 Claude Code → 结果以飞书卡片回到群里**。也支持 cron loop 远程操作、4 派评议远程发起。
 
 部署 / 飞书后台怎么填,看 [deploy/INSTALL.md §2.5 + §8](../deploy/INSTALL.md)。本文档讲**配好之后日常怎么用**。
 
@@ -94,11 +94,11 @@ cc-workflow 的飞书集成:**在群里 @机器人发 prompt → 服务器跑 Cl
 
 **删除 loop 走 PWA**(避免误删风险)。
 
-### 圆桌会议(多 agent 辩论)
+### 4 派评议(多 agent 辩论)
 
 | 命令 | 行为 |
 |---|---|
-| `/rt` | 列最近 5 场圆桌(状态 + 问题摘要) |
+| `/rt` | 列最近 5 场评议(状态 + 问题摘要) |
 | `/rt <问题>` | 新开一场。约 1-2 分钟后,**R3 整理员的结果会主动推回原聊天**(共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动) |
 
 例:
@@ -112,7 +112,7 @@ cc-workflow 的飞书集成:**在群里 @机器人发 prompt → 服务器跑 Cl
 回执形如:
 
 ```
-✓ 圆桌已开 · ID 2026-05-14_xxxxx
+✓ 评议已开 · ID 2026-05-14_xxxxx
 4 角色 × R1+R2 + 整理员 R3,约 1-2 分钟。
 完成后我把 R3 整理员结果发回这里;失败也会通知你。
 ```
@@ -120,7 +120,7 @@ cc-workflow 的飞书集成:**在群里 @机器人发 prompt → 服务器跑 Cl
 完成时会自动收到一张卡片,包含:
 
 ```
-🎙 圆桌 R3 · 2026-05-14_xxxxx
+🎙 评议 R3 · 2026-05-14_xxxxx
 
 **问题** ...
 
@@ -142,7 +142,7 @@ cc-workflow 的飞书集成:**在群里 @机器人发 prompt → 服务器跑 Cl
 [在 PWA 看完整 R1/R2 transcript](https://your-domain/pwa/#roundtables/...)
 ```
 
-> **限制:** 圆桌跑到一半 backend 重启 → on_complete 回调丢失,这次不会主动推送。但 jsonl 还在,你 `/rt` 重列或去 PWA 都能看到。
+> **限制:** 评议跑到一半 backend 重启 → on_complete 回调丢失,这次不会主动推送。但 jsonl 还在,你 `/rt` 重列或去 PWA 都能看到。
 
 ### 未识别命令
 
@@ -170,7 +170,7 @@ app_secret        = "xxx"
 encrypt_key       = "xxx"                # 飞书 → 事件订阅 → 加密策略
 verification_token = "xxx"               # 同上(用于初次 url_verification)
 default_workspace = "test-repo"          # 不打 [prefix] 时落到哪
-pwa_base_url      = "https://your-domain.com"   # 截断时拼完整 link,圆桌 R3 也用
+pwa_base_url      = "https://your-domain.com"   # 截断时拼完整 link,评议 R3 也用
 ```
 
 **飞书后台两个 URL:**
@@ -201,5 +201,5 @@ pwa_base_url      = "https://your-domain.com"   # 截断时拼完整 link,圆桌
 - **单一进入点:** 所有飞书消息走 `POST /im/feishu/webhook` → `_handle_message` → 要么 dispatch slash,要么 build `run_intent` 交给 runner
 - **认证模型:** Feishu 自己的签名(`X-Lark-Signature` = sha256(ts + nonce + encrypt_key + body));不是 cc-workflow 的 HMAC session cookie
 - **加密体:** 启用 Encrypt Key 后 body 是 AES-256-CBC,key = sha256(encrypt_key),IV = blob 前 16 字节
-- **回调 push 推送:** 圆桌主动推 R3 用的是 `runner.submit(..., on_complete=...)` 的 callback hook。callback 闭包了 `chat_id`,完成时读 jsonl 决定推什么。**不**维持 `chat_id ↔ roundtable_id` 的持久化映射表(YAGNI)
+- **回调 push 推送:** 评议主动推 R3 用的是 `runner.submit(..., on_complete=...)` 的 callback hook。callback 闭包了 `chat_id`,完成时读 jsonl 决定推什么。**不**维持 `chat_id ↔ roundtable_id` 的持久化映射表(YAGNI)
 - **未识别 slash:** 不 fall-through 到 LLM —— 防止拼错命令浪费 token。代价:用户偶尔想发 `/X` 当 prompt 的时候不行(可以用 `\/X` 或加 @bot 前缀绕开,但目前没实测)

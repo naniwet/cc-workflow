@@ -62,6 +62,7 @@ def write_meta(session_path: Path, session: Session) -> None:
         "question": session.question,
         "started_at": session.started_at,
         "critique_rounds": session.critique_rounds,
+        "mode": session.mode,
         "version": SCHEMA_VERSION,
     }
     with session_path.open("w", encoding="utf-8") as f:
@@ -90,6 +91,7 @@ def read_session(session_path: Path) -> Session:
         question=head["question"],
         started_at=head["started_at"],
         critique_rounds=head.get("critique_rounds", 1),    # legacy jsonl default
+        mode=head.get("mode", "roundtable"),               # legacy jsonl default
     )
     for line in lines[1:]:
         rec = json.loads(line)

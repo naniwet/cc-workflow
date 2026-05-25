@@ -51,6 +51,22 @@ class RoundtableModelsEndpointTests(unittest.TestCase):
         minimalist = next(role for role in body["roles"] if role["name"] == "极简派")
         self.assertEqual(minimalist["default_model"], "kimi-k2.6")
 
+    def test_models_endpoint_includes_oneonone_proponent_roles(self):
+        """GET /roundtables/models 也列 1v1 正方 / 反方,kind="proponent"。
+        让 #settings/roles 能 override 它们的 model / system_prompt。"""
+        r = self.client.get("/roundtables/models")
+        body = r.json()
+        names = [role["name"] for role in body["roles"]]
+        self.assertIn("正方", names)
+        self.assertIn("反方", names)
+        for n in ("正方", "反方"):
+            role = next(r for r in body["roles"] if r["name"] == n)
+            self.assertEqual(role["kind"], "proponent")
+            # default_model 走 Role.preferred_model default = v4-flash
+            self.assertEqual(role["default_model"], "deepseek-v4-flash")
+            # system_prompt 是 template(含 {stance} 变量,这里只校验 anchor)
+            self.assertIn("立场不可摇摆", role["default_system_prompt"])
+
     def test_models_endpoint_includes_default_system_prompt(self):
         """GET /roundtables/models 响应每个 role 含 default_system_prompt 字段。"""
         r = self.client.get("/roundtables/models")

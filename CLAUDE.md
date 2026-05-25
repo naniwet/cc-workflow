@@ -174,7 +174,7 @@ PWA 打成 Android APK 有两个脚本,共享 keystore / SDK / gradle wrapper:
 - **`backend/runner.py:submit()`** 是所有 run 的唯一入口。第一次读代码先从这里追,会看到它怎么:加 flock → 启 subprocess → tail stdout → 写 `runs.db` → 触发 `on_finish` 回调。
 - **`backend/im_feishu.py:_handle_slash()`** 是飞书 slash 命令的 dispatch。新增命令必须同时改 `_HELP_TEXT`(在同一文件里)。
 - **`backend/ws_settings.py:permission_mode_for()`** 是 trust 模型的真相源——给定 workspace + 当前 uid,返回 4 个合法 mode 之一。改逻辑前读 docstring(包含 dontAsk 幻觉的教训)。
-- **`backend/roundtable/`** 是 in-process 移植的圆桌会议子系统,与主链路完全独立(不走 agent-run.sh,不进 runs.db,自己持久化到 `~/.cc-state/roundtables/*.jsonl`)。改这部分不影响主链路。
+- **`backend/roundtable/`** 是 in-process 移植的评议子系统(原"圆桌会议",2026-05-26 改名为"评议"两种 mode:`4 派评议` + `1v1 对抗`),与主链路完全独立(不走 agent-run.sh,不进 runs.db,自己持久化到 `~/.cc-state/roundtables/*.jsonl`)。**目录名 + URL `/roundtables/*` + Python 模块名 `backend.roundtable` 等 identifier 故意保留不改**(§3.4 几乎不可逆的改名代价高;通用语言只在用户感知层 = UI / 文档 统一为"评议")。1v1 mode 走 `oneonone.py` + `runner.submit_oneonone`,跟 4 派同 jsonl + 整理员。改这部分不影响主链路。
 
 ---
 

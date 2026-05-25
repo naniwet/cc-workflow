@@ -4137,7 +4137,7 @@ async function ensureRoundtableModels() {
 // Each role is wrapped in its own <details> so we don't dump 25 radios
 // (5 roles × 5 models) into the form at once — collapsed-by-default, the
 // summary row shows the current pick, click to expand for the radio list.
-function _populateRtModelConfig() {
+function _populateRtModelConfig(mode = 'roundtable') {
   const slot = document.getElementById('rt-model-config-slot');
   if (!slot) return;
   if (!_rtModelsCache) {
@@ -4145,8 +4145,16 @@ function _populateRtModelConfig() {
     return;
   }
   const { models, roles } = _rtModelsCache;
+  // 按 mode 过滤显示的角色:
+  //  - roundtable: 4 派 persona + synthesizer + reviewer(不含 1v1 的 proponent)
+  //  - oneonone: proponent(正方 / 反方)+ synthesizer(共用整理员)
+  // 后端 /oneonone /roundtables 都各自只接受 mode 域的 role_models,
+  // 这里 UI 提前过滤避免用户改了不被读的字段心智混乱。
+  const visibleRoles = (mode === 'oneonone')
+    ? roles.filter((r) => r.kind === 'proponent' || r.kind === 'synthesizer')
+    : roles.filter((r) => r.kind !== 'proponent');
   const saved = _loadRtRoleModels();
-  slot.innerHTML = roles.map((r) => _renderRoleModelPicker(r, models, saved)).join('') + `
+  slot.innerHTML = visibleRoles.map((r) => _renderRoleModelPicker(r, models, saved)).join('') + `
     <button type="button" class="rt-model-reset-all">↩ 全部恢复默认</button>
   `;
   for (const btn of slot.querySelectorAll('.rt-role-radio')) {
@@ -4158,9 +4166,10 @@ function _populateRtModelConfig() {
 function _renderRoleModelPicker(role, models, savedOverrides) {
   const current = savedOverrides[role.name] || role.default_model;
   const currentEndpoint = (models.find((m) => m.name === current) || {}).endpoint || '';
-  const kindHint = role.kind === 'synthesizer'
-    ? '<span class="muted rt-role-kind">(整理员)</span>'
-    : '';
+  const kindHint = role.kind === 'synthesizer' ? '<span class="muted rt-role-kind">(整理员)</span>'
+                  : role.kind === 'reviewer' ? '<span class="muted rt-role-kind">(审查员)</span>'
+                  : role.kind === 'proponent' ? '<span class="muted rt-role-kind">(1v1 对抗)</span>'
+                  : '';
   const isOverride = current !== role.default_model;
   const radios = models.map((m) => {
     const selected = m.name === current;
@@ -4266,19 +4275,18 @@ function renderRoundtablesView() {
         _rtRowCache.set(r.id, html);
         return html;
       }).join('')
-    : '<p class="muted">还没有圆桌会议。先写一个问题,4 个角色 + 1 个整理员会替你辩论 3 轮。</p>';
-  // Empty-state blurb 留在 list 区域(替代 "还没有圆桌" 文案):第一次
-  // 用还是要个解释,有 session 了就不显示。h1 砍掉(topbar tab 已标明)。
+    : '<p class="muted">还没有评议。先写一个问题,4 派评议(广)或 1v1 对抗(深)替你辩论。</p>';
+  // Empty-state blurb:第一次用解释两种 mode,有 session 了就不显示。
   const blurb = rows.length === 0 ? `
     <p class="muted" style="margin-top:-8px">
-      4 个固定角色(<strong>极简派 / 场景派 / 借鉴派 / 悲观派</strong>)对一个决策问题各抒己见,
-      <strong>整理员</strong>把分歧整理成 <em>共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动</em>。
-      不替你拍板,但给出条件化决策路径。
+      <strong>4 派评议</strong>:4 个角色(极简派 / 场景派 / 借鉴派 / 悲观派)对决策问题各抒己见,
+      整理员综合 → <em>共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动</em>。
+      <strong>1v1 对抗</strong>:把二值问题拆成正反两个立场死磕同一分歧轴(做 / 不做 / 用 / 不用)。
     </p>` : '';
   // toolbar + dialog 模式,跟 Workspaces / Tasks tab 一致。
   view.innerHTML = `
     <div class="ws-toolbar">
-      <button class="ws-new-btn" type="button" id="rt-new-btn">+ 新开一场</button>
+      <button class="ws-new-btn" type="button" id="rt-new-btn">+ 新建</button>
       <a href="#settings/roles" class="ws-toolbar-link"
          style="margin-left:12px;font-size:13px;text-decoration:none;color:var(--accent)">
         ⚙ 角色配置
@@ -4288,9 +4296,24 @@ function renderRoundtablesView() {
     <div class="rt-list">${list}</div>
     <dialog class="ws-new-dialog" id="rt-new-dialog">
       <form data-form-id="new-roundtable" class="ws-new-form">
-        <h3>新开一场圆桌</h3>
+        <h3>新建评议</h3>
+        <div class="rt-mode-row" id="rt-mode-row">
+          <label class="rt-mode-label">模式</label>
+          ${_renderFormPicker({
+            name: 'mode',
+            options: [
+              { value: 'roundtable', label: '4 派评议(广 · 9-13 调用)' },
+              { value: 'oneonone', label: '1v1 对抗(深 · 5 调用)' },
+            ],
+            value: 'roundtable',
+          })}
+        </div>
+        <p class="muted" id="rt-mode-blurb" style="font-size:11px;margin:0">
+          4 个角色对决策各抒己见,整理员综合给条件性结论。
+        </p>
         <label>问题(决策级,不是事实问题)
           <textarea name="question" required rows="3" autofocus
+            id="rt-question-input"
             placeholder="例:个人 side project 一开始就上严格 TDD,还是先 spike?"></textarea>
         </label>
         <label class="rt-attach-row">
@@ -4298,7 +4321,7 @@ function renderRoundtablesView() {
           <input type="file" multiple accept="text/*"
                  id="rt-attach-input">
         </label>
-        <div class="rt-rounds-row">
+        <div class="rt-rounds-row" id="rt-rounds-row">
           <label class="rt-rounds-label">辩论轮数</label>
           ${_renderFormPicker({
             name: 'critique_rounds',
@@ -4336,14 +4359,37 @@ function renderRoundtablesView() {
     openBtn.addEventListener('click', () => { if (!dlg.open) dlg.showModal(); });
     dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
   }
+  // mode picker change → 切换 form 显示(隐藏轮数 / 改 blurb / 切换 model 列表)
+  $('rt-mode-row')?.addEventListener('click', _onRtModeChange);
   // Populate the model config block. Cache-hot path is synchronous; cold
   // path fetches once, then patches the slot only (textarea / open state
   // stay intact thanks to the existing snapshot/restore + draft system).
+  const currentMode = $('view').querySelector('input[name="mode"]')?.value || 'roundtable';
   if (_rtModelsCache) {
-    _populateRtModelConfig();
+    _populateRtModelConfig(currentMode);
   } else {
-    ensureRoundtableModels().then(_populateRtModelConfig);
+    ensureRoundtableModels().then(() => _populateRtModelConfig(currentMode));
   }
+}
+
+// Mode picker 切换时 触发 form 重排:隐藏 / 显示轮数;改 blurb;切换 placeholder;
+// 重新 populate model config(过滤 1v1 / roundtable 各自的角色)。
+// 用 click delegation 而不是 change event,跟 _onFormPickerClick 同样的事件
+// 序列 — 它会先把 hidden input 改完,再冒泡到这里。
+function _onRtModeChange(e) {
+  if (!e.target.closest('.form-picker-radio')) return;
+  const mode = document.querySelector('input[name="mode"]')?.value || 'roundtable';
+  const roundsRow = document.getElementById('rt-rounds-row');
+  if (roundsRow) roundsRow.style.display = mode === 'oneonone' ? 'none' : '';
+  const blurb = document.getElementById('rt-mode-blurb');
+  if (blurb) blurb.textContent = mode === 'oneonone'
+    ? '把二值问题拆成正反两个立场死磕同一分歧轴(做 / 不做 / 用 / 不用)。'
+    : '4 个角色对决策各抒己见,整理员综合给条件性结论。';
+  const ta = document.getElementById('rt-question-input');
+  if (ta) ta.placeholder = mode === 'oneonone'
+    ? '例:是否应该上严格 TDD?(必须是二值决策)'
+    : '例:个人 side project 一开始就上严格 TDD,还是先 spike?';
+  _populateRtModelConfig(mode);
 }
 
 function _roundtableListRow(r) {
@@ -4435,21 +4481,42 @@ async function onCreateRoundtable(e) {
     }
     // === 附件处理结束 ===
 
+    const mode = fd.mode || 'roundtable';
+    // role_models 按 mode 过滤 — 4 派 不能误把 1v1 正方/反方 的 override 发给
+    // /roundtables(后端会 400);1v1 同理。_populateRtModelConfig 已经只显示
+    // 当前 mode 的角色,但 localStorage 里的老 override 可能还在,这里再过一遍。
+    const roundtableRoles = new Set(['极简派', '场景派', '借鉴派', '悲观派', '整理员', '审查员']);
+    const oneononeRoles = new Set(['正方', '反方', '整理员']);
+    const allowedRoles = mode === 'oneonone' ? oneononeRoles : roundtableRoles;
+    const filteredOverrides = {};
+    for (const [k, v] of Object.entries(overrides)) {
+      if (allowedRoles.has(k)) filteredOverrides[k] = v;
+    }
+
     const body = { question: fd.question };
-    if (Object.keys(overrides).length > 0) body.role_models = overrides;
-    if (rounds === 2) body.critique_rounds = 2;
+    if (Object.keys(filteredOverrides).length > 0) body.role_models = filteredOverrides;
     if (attachments.length > 0) body.attachments = attachments;
-    const r = await api('/roundtables', {
+
+    let endpoint;
+    if (mode === 'oneonone') {
+      endpoint = '/oneonone';
+      // 1v1 不用 critique_rounds(backend 锁定 R1+R2 / max_auto_drills=0)
+    } else {
+      endpoint = '/roundtables';
+      if (rounds === 2) body.critique_rounds = 2;
+    }
+
+    const r = await api(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     form.reset();
-    // 新版 PC 把 new-roundtable 装进 dialog,创建成功后关掉。location.hash
-    // 切到 detail 会立刻触发 render(),dialog 没有手动关也会被 view.innerHTML
-    // 重写覆盖,但显式 close() 更干净。
     form.closest('dialog')?.close();
-    showToast('success', `圆桌已开:${r.id}`, { ttl: 2000 });
+    const toastMsg = mode === 'oneonone'
+      ? `1v1 已开:${r.stance_a} vs ${r.stance_b}`
+      : `4 派评议已开:${r.id}`;
+    showToast('success', toastMsg, { ttl: 3000 });
     // Jump into detail view so user sees turns appear live.
     location.hash = `#roundtables/${encodeURIComponent(r.id)}`;
   } catch (err) {
@@ -4463,7 +4530,7 @@ async function onDeleteRoundtable(e) {
   const btn = e.currentTarget;
   const id = btn.dataset.id;
   if (!id) return;
-  if (!confirm(`删除圆桌 "${id}"?\n.jsonl 文件会被删,无法恢复。`)) return;
+  if (!confirm(`删除评议 "${id}"?\n.jsonl 文件会被删,无法恢复。`)) return;
   btn.disabled = true;
   try {
     await api(`/roundtables/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -4504,7 +4571,13 @@ async function renderRoundtableDetailView(id, opts = {}) {
   paintRoundtableDetail(id, row);
 }
 
-const _ROLE_ORDER = ['极简派', '场景派', '借鉴派', '悲观派'];
+// Role 渲染顺序按 mode 分。4 派评议 = 4 个 persona 固定顺序;1v1 对抗 = 正反 2 个。
+// `_getRoleOrder(mode)` 是 detail view 唯一入口,不直接 import 常量。
+const _ROLE_ORDER_ROUNDTABLE = ['极简派', '场景派', '借鉴派', '悲观派'];
+const _ROLE_ORDER_ONEONONE = ['正方', '反方'];
+function _getRoleOrder(mode) {
+  return mode === 'oneonone' ? _ROLE_ORDER_ONEONONE : _ROLE_ORDER_ROUNDTABLE;
+}
 
 // Round labels — kept in sync with synth.py's _ROUND_LABELS by convention.
 // Adding a 4th critique round here is purely cosmetic; the orchestration
@@ -4596,7 +4669,7 @@ function paintRoundtableDetail(id, row) {
   const roundBlocks = [];
   for (const rKey of Object.keys(turnsByRound).sort((a, b) => +a - +b)) {
     const r = +rKey;
-    const cells = _ROLE_ORDER.map((name) => _rtCell(name, turnsByRound[r][name])).join('');
+    const cells = _getRoleOrder(row.mode).map((name) => _rtCell(name, turnsByRound[r][name])).join('');
     const label = _RT_ROUND_LABELS[r] || `续问 Round ${r}`;
     roundBlocks.push(_rtRoundBlock(label, cells));
   }
@@ -4625,6 +4698,7 @@ function paintRoundtableDetail(id, row) {
     <h1 class="rt-question">${esc(row.question || '(无题)')}</h1>
     <div class="rt-meta">
       ${statusTag(status === 'done' ? 'done' : status === 'error' ? 'failed' : 'running')}
+      <span class="rt-mode-chip">${row.mode === 'oneonone' ? '1v1 对抗' : '4 派评议'}</span>
       ${when ? `<span class="muted">· ${esc(when)}</span>` : ''}
       <span class="muted">· ${esc(turnsDone)} / ${esc(expected)} 轮</span>
     </div>
@@ -4664,7 +4738,7 @@ function paintRoundtableDetail(id, row) {
           body: JSON.stringify({ question }),
         });
         if (ta) ta.value = '';
-        // 后端返回 202 并启动新一轮圆桌;下一次 refreshAll poll 会拉到新
+        // 后端返回 202 并启动新一轮评议;下一次 refreshAll poll 会拉到新
         // turns 并自动触发重绘,无需手动 refresh。
       } catch (err) {
         showError(`续问失败: ${err.message}`);
@@ -5199,6 +5273,7 @@ function _renderSettingsRoleModelPicker(role, models) {
   const currentEndpoint = (models.find((m) => m.name === current) || {}).endpoint || '';
   const kindHint = role.kind === 'synthesizer' ? '<span class="muted rt-role-kind">(整理员)</span>'
                   : role.kind === 'reviewer' ? '<span class="muted rt-role-kind">(审查员)</span>'
+                  : role.kind === 'proponent' ? '<span class="muted rt-role-kind">(1v1 对抗)</span>'
                   : '';
   const radios = models.map((m) => {
     const selected = m.name === current;

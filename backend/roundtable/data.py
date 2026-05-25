@@ -50,3 +50,7 @@ class Session:
     # compute the right "x/N turns" progress fraction. Old jsonl files
     # don't carry this; read_session defaults to 1 for back-compat.
     critique_rounds: int = 1
+    # 区分 4 派评议 vs 1v1 对抗。"roundtable" = 4 派(legacy),"oneonone" = 1v1。
+    # 老 jsonl 没这字段,read_session 缺省回 "roundtable" 向前兼容。
+    # PWA 拿到后渲染 session header chip 区分两种 mode。
+    mode: str = "roundtable"

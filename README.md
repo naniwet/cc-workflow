@@ -45,7 +45,10 @@
 - **完整对话 Transcript**:**不再有单独的 Transcript 面板** —— 直接是 turn 的 expanded event timeline(`💭 thinking / 🔧 tool_use / ↳ tool_result / 🤖 reply / ✓ done`),长 `tool_result` 自动折叠为前 5 行 + `↓ Expand N lines` 按钮。默认只显示 `reply + result`,在 ⚙ menu → Display 切 "Show all events" 看 thinking / tool 细节
 - **Slash 命令自动补全**(PWA):在输入框打 `/` 弹出当前 workspace 所有 skill(project + user + plugin 三层来源),Tab 补全
 - **DIY 自动 compact**:长对话接近 context 上限时,agent-run 自动调用 9 段式 summary prompt(基于 Claude Code `/compact` 反向工程),清旧 session,新 session 以 summary 续——transparent,你不会感知。撞坏了也有 ⚙ menu → **New chat** 按钮兜底(同时**真删** runs.db + log 文件,不再有"刷新一下旧 turn 又冒出来");`--resume` 撞到孤儿 sid 时自动 fallback 到新会话
-- **圆桌会议**(从 [AgentRoundtable](https://github.com/wet-/AgentRoundtable) 移植):4 角色(极简派 / 场景派 / 借鉴派 / 悲观派)+ 1 个整理员,对一个决策级问题辩论 1-2 轮(可配置),输出 **共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动**。不替你拍板,但把不同价值取向下的行动路径说清楚。
+- **评议**(从 [AgentRoundtable](https://github.com/wet-/AgentRoundtable) 移植):两种 mode 共享同一 jsonl / 整理员 / 续问基础设施。
+  - **4 派评议**(广):4 角色(极简派 / 场景派 / 借鉴派 / 悲观派)+ 1 个整理员,对决策问题各抒己见辩论 1-2 轮,输出 **共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动**。审查员判收敛自动追问。
+  - **1v1 对抗**(深):二值决策问题 → backend framing 自动拆成正反两个立场 → 2 派 R1 陈述 + R2 反驳 + 整理员综合。适合"做 / 不做"二值场景。
+  - 不替你拍板,但把不同价值取向 / 分歧轴两端的行动路径说清楚。
 
 ---
 
@@ -221,7 +224,7 @@ cc-workflow/
 │   ├── ui_cards.py               #   Card 抽象(渲染中间层)
 │   ├── skills.py                 #   slash command 扫描 (.claude/commands)
 │   ├── llm.py                    #   后端直调 LLM(parse-nl 用)
-│   └── roundtable/               #   圆桌会议(第三 tab)— 移植自 AgentRoundtable
+│   └── roundtable/               #   评议(第三 tab)— 移植自 AgentRoundtable;dir 名保留 roundtable
 │       ├── roles.py              #     4 个 persona prompt + 整理员(产品 IP)
 │       ├── debate.py             #     R1/R2/R3 三轮 orchestrator
 │       ├── synth.py              #     R3 整理员 prompt + 解析
@@ -295,7 +298,7 @@ cc-workflow/
 | **README.md(本文)** | 当前架构 + 怎么用 | 首次接触 / 日常 reference |
 | [deploy/INSTALL.md](deploy/INSTALL.md) | 完整部署 step-by-step | 第一次装,或装新机器 |
 | [deploy/MIGRATE-TO-NONROOT.md](deploy/MIGRATE-TO-NONROOT.md) | Plan B:切非 root 跑(为 claude-code#20449 兜底) | trust=on 频繁被 file-modifying Bash 命令挡住时 |
-| [docs/feishu-usage.md](docs/feishu-usage.md) | 飞书端完整使用说明(slash 命令清单 / 触发 / 圆桌推送 / 排错) | 配好飞书集成后,日常使用查询 |
+| [docs/feishu-usage.md](docs/feishu-usage.md) | 飞书端完整使用说明(slash 命令清单 / 触发 / 评议推送 / 排错) | 配好飞书集成后,日常使用查询 |
 | [docs/archive/](docs/archive/) | 历史设计文档(PRD / dev-plan / test-plan / handoff / future) | 想理解某个决策**为什么**当时那样定 / 想看 P1 未实现的设计 |
 
 注:`docs/archive/` 是**历史快照**,实施期间有偏离(见 archive 内每个文件顶部的"历史文档警示")。系统当前如何工作以本 README 为准。
@@ -304,7 +307,7 @@ cc-workflow/
 
 ## 状态 & 范围
 
-- 当前**单用户、单机**已稳定运行;接口、PWA、cron loop、工具审批、圆桌、auto-compact 都在用
+- 当前**单用户、单机**已稳定运行;接口、PWA、cron loop、工具审批、评议(4 派 / 1v1)、auto-compact 都在用
 - Ubuntu 22.04 / 24.04 上验证过;4C8G VPS 跑得轻松
 - **不打算做的事**:多租户、SSO、kubernetes 化、SaaS 化、Cloud Routines 集成。这是一份给"想自己 host 一套类似工作流"的人的参考实现,不是 SaaS 产品
 
