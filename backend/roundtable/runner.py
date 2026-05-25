@@ -22,7 +22,7 @@ from typing import Optional
 
 from .. import config
 from . import roles as roles_mod
-from .debate import run_session
+from .debate import run_session, continue_session
 from .io import session_path_for, write_error_marker, write_meta
 from .model import ModelError, call_model
 from .data import Session
@@ -118,4 +118,49 @@ def _execute(
             try:
                 on_complete(session_path)
             except Exception:    # noqa: BLE001 — broken callback must not poison the thread
+                pass
+
+
+def submit_continue(
+    session_path: Path,
+    follow_up_question: str,
+    *,
+    role_models: dict[str, str] | None = None,
+    on_complete: Optional[OnCompleteFn] = None,
+) -> None:
+    """跟 submit 同模式 — 在 background thread 里跑 continue_session。"""
+    t = threading.Thread(
+        target=_execute_continue,
+        args=(session_path, follow_up_question, dict(role_models or {}), on_complete),
+        name=f"roundtable-continue-{session_path.stem}",
+        daemon=True,
+    )
+    t.start()
+
+
+def _execute_continue(
+    session_path: Path,
+    follow_up_question: str,
+    role_models: dict[str, str],
+    on_complete: Optional[OnCompleteFn],
+) -> None:
+    """在 background thread 里跑 continue_session。错误写入 jsonl 的 __error__ turn。"""
+    try:
+        continue_session(
+            session_path=session_path,
+            follow_up_question=follow_up_question,
+            roles=roles_mod.ROLES,
+            synthesizer=roles_mod.SYNTHESIZER,
+            model_fn=call_model,
+            role_model_overrides=role_models,
+        )
+    except ModelError as e:
+        write_error_marker(session_path, f"model error during continue: {type(e).__name__}: {e}")
+    except Exception as e:    # noqa: BLE001
+        write_error_marker(session_path, f"unexpected during continue: {type(e).__name__}: {e}")
+    finally:
+        if on_complete is not None:
+            try:
+                on_complete(session_path)
+            except Exception:  # noqa: BLE001
                 pass

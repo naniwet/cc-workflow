@@ -403,5 +403,44 @@ class AutoDrillLoopTests(unittest.TestCase):
         self.assertEqual(types.count("synth"), 1)
 
 
+class ContinueSessionTests(unittest.TestCase):
+    def _seed_session(self, tmp_path):
+        """跑一个基础 session(立即 CONVERGED 不 drill),返回 path。"""
+        from backend.roundtable.debate import run_session
+        from backend.roundtable.data import Role
+        roles = [Role(name=f"派{i}", system_prompt="s", preferred_model="m") for i in range(4)]
+        synth = Role(name="整理员", system_prompt="synth", preferred_model="m")
+        def model_fn(model, system, user, temp):
+            if "审查员" in (system or ""):
+                return "## 判断\nCONVERGED\n\n## 理由\nOK"
+            return "stub"
+        path = tmp_path / "s.jsonl"
+        run_session("Q?", roles, synth, model_fn, path, max_auto_drills=3)
+        return path, roles, synth, model_fn
+
+    def test_continue_appends_user_question_and_runs_follow_up(self):
+        from backend.roundtable.debate import continue_session
+        with tempfile.TemporaryDirectory() as d:
+            path, roles, synth, model_fn = self._seed_session(Path(d))
+            continue_session(
+                session_path=path,
+                follow_up_question="再深入问 X?",
+                roles=roles,
+                synthesizer=synth,
+                model_fn=model_fn,
+                max_auto_drills=3,
+            )
+
+            from backend.roundtable.io import read_session
+            session = read_session(path)
+            user_questions = [t for t in session.turns if t.type == "user_question"]
+            self.assertEqual(len(user_questions), 1)
+            self.assertEqual(user_questions[0].content, "再深入问 X?")
+            # 续问后应该有 4 个 follow_up(4 派回应)+ 新 synth + 新 review
+            follow_ups_post = [t for t in session.turns if t.type == "follow_up"]
+            self.assertEqual(len(follow_ups_post), 4)
+            self.assertGreaterEqual(len([t for t in session.turns if t.type == "synth"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

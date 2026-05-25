@@ -181,6 +181,197 @@ R2 其他三人对 R1 的评论:
 - **第 3 轮的存在意义就是逼你说新东西**,重复 R2 内容会被判废"""
 
 
+def _run_follow_up_iteration_v2(
+    *,
+    session: "Session",
+    session_path: Path,
+    question: str,
+    roles: "list[Role]",
+    synthesizer: "Role",
+    model_fn: "ModelFn",
+    overrides: dict[str, str],
+    clock: Callable[[], float],
+    round_no: int,
+    follow_up_question: str,
+    prior_synth: str,
+    source: str,
+    on_turn: Optional[Callable[["AgentTurn"], None]],
+) -> None:
+    """跑一轮 follow-up:user_question(若 source=user)→ 4 派 follow_up × N → 新 synth。
+
+    Module-level 版本(Task 6 重构),所有依赖显式传入,无 closure。
+    被 _run_auto_drill_loop 和 continue_session 共用。"""
+
+    def _record(turn: AgentTurn) -> None:
+        append_turn(session_path, turn)
+        if on_turn is not None:
+            try:
+                on_turn(turn)
+            except Exception:  # noqa: BLE001
+                pass
+        session.turns.append(turn)
+
+    def _model_for(role: Role) -> str:
+        return overrides.get(role.name) or role.preferred_model
+
+    if source == "user":
+        _record(AgentTurn(
+            round=round_no, role="__user__", type="user_question",
+            content=follow_up_question, ts=clock(),
+        ))
+
+    def _follow_up_prompt_for(role: Role) -> str:
+        return f"""原问题:{question}
+
+上一次 synth(territory map):
+
+{prior_synth}
+
+新追问(来源 {"用户" if source == "user" else "自动追问"}):
+{follow_up_question}
+
+---
+
+请用 **≤ 200 字** 针对这次追问回应,延续你的人设立场。
+不要重复你在前面 round 已经说过的内容。"""
+
+    with ThreadPoolExecutor(max_workers=max(1, len(roles))) as pool:
+        futures = [
+            pool.submit(
+                _call_role_with_quality_retry,
+                role, model_name=_model_for(role),
+                user_prompt=_follow_up_prompt_for(role),
+                model_fn=model_fn,
+            )
+            for role in roles
+        ]
+        for role, fut in zip(roles, futures):
+            _record(AgentTurn(
+                round=round_no, role=role.name, type="follow_up",
+                content=fut.result(), ts=clock(),
+            ))
+
+    follow_up_turns = [
+        t for t in session.turns if t.round == round_no and t.type == "follow_up"
+    ]
+    synth_text = model_fn(
+        overrides.get(synthesizer.name) or synthesizer.preferred_model,
+        synthesizer.system_prompt,
+        build_follow_up_synth_prompt(
+            original_question=question,
+            prior_synth=prior_synth,
+            follow_up_question=follow_up_question,
+            follow_up_turns=follow_up_turns,
+        ),
+        synthesizer.temperature,
+    )
+    _record(AgentTurn(
+        round=round_no, role=synthesizer.name, type="synth",
+        content=synth_text, ts=clock(),
+    ))
+
+
+def _build_reviewer_prompt(question: str, last_synth: "AgentTurn", session: "Session") -> str:
+    """构造审查员 prompt,loop body 和 post-loop final review 共用。"""
+    prior_reviews = "\n\n".join(
+        f"--- 上次 review (round {t.round}) ---\n{t.content}"
+        for t in session.turns if t.type == "review"
+    ) or "(无)"
+    return f"""原始问题:
+{question}
+
+最新 synth:
+{last_synth.content}
+
+历史 review:
+{prior_reviews}
+
+按你的 system_prompt 输出判断。"""
+
+
+def _run_auto_drill_loop(
+    *,
+    session: "Session",
+    session_path: Path,
+    question: str,
+    roles: "list[Role]",
+    synthesizer: "Role",
+    model_fn: "ModelFn",
+    overrides: dict[str, str],
+    clock: Callable[[], float],
+    start_round: int,
+    max_auto_drills: int,
+    on_turn: Optional[Callable[["AgentTurn"], None]],
+) -> None:
+    """Auto-drill loop:审查员判断是否收敛,未收敛则跑 follow-up round + 新 synth,
+    最多 max_auto_drills 次。loop 结束后若仍未收敛,补一次 final review 供 PWA
+    渲染 "已达上限" banner。
+
+    Module-level 版本(Task 6 重构),被 run_session 和 continue_session 共用。"""
+
+    def _record(turn: AgentTurn) -> None:
+        append_turn(session_path, turn)
+        if on_turn is not None:
+            try:
+                on_turn(turn)
+            except Exception:  # noqa: BLE001
+                pass
+        session.turns.append(turn)
+
+    next_round = start_round
+    converged = False
+    for _ in range(max_auto_drills):
+        last_synth = next((t for t in reversed(session.turns) if t.type == "synth"), None)
+        assert last_synth is not None, "auto-drill loop 之前必有 initial synth"
+
+        verdict_text = model_fn(
+            overrides.get(REVIEWER.name) or REVIEWER.preferred_model,
+            REVIEWER.system_prompt,
+            _build_reviewer_prompt(question, last_synth, session),
+            REVIEWER.temperature,
+        )
+        verdict = reviewer_mod.parse_verdict(verdict_text)
+        _record(AgentTurn(
+            round=last_synth.round, role=REVIEWER.name, type="review",
+            content=verdict_text, ts=clock(),
+        ))
+        if verdict.converged:
+            converged = True
+            break
+        _run_follow_up_iteration_v2(
+            session=session,
+            session_path=session_path,
+            question=question,
+            roles=roles,
+            synthesizer=synthesizer,
+            model_fn=model_fn,
+            overrides=overrides,
+            clock=clock,
+            round_no=next_round,
+            follow_up_question=verdict.next_question,
+            prior_synth=last_synth.content,
+            source="auto",
+            on_turn=on_turn,
+        )
+        next_round += 1
+
+    # 跑满 drill 上限但未收敛:补一次 final review,供 PWA 读取最后判断结果
+    # (last review turn 是 NEEDS_DRILL → 前端可展示 "已达上限" banner + prefill next_q)
+    if max_auto_drills > 0 and not converged:
+        last_synth = next((t for t in reversed(session.turns) if t.type == "synth"), None)
+        assert last_synth is not None, "post-loop final review 之前必有 synth"
+        verdict_text = model_fn(
+            overrides.get(REVIEWER.name) or REVIEWER.preferred_model,
+            REVIEWER.system_prompt,
+            _build_reviewer_prompt(question, last_synth, session),
+            REVIEWER.temperature,
+        )
+        _record(AgentTurn(
+            round=last_synth.round, role=REVIEWER.name, type="review",
+            content=verdict_text, ts=clock(),
+        ))
+
+
 def run_session(
     question: str,
     roles: list[Role],
@@ -262,54 +453,6 @@ def run_session(
                     ts=clock(),
                 ))
 
-    def _run_follow_up_iteration(
-        round_no: int,
-        follow_up_question: str,
-        prior_synth: str,
-        source: str,                     # "auto" | "user"
-    ) -> None:
-        """跑一轮 follow-up:user_question(若 source=user)→ 4 派 follow_up
-        × N → 新 synth。auto-drill loop 和 /continue 都调这个。"""
-        if source == "user":
-            _record(AgentTurn(
-                round=round_no, role="__user__", type="user_question",
-                content=follow_up_question, ts=clock(),
-            ))
-
-        def _follow_up_prompt(role: Role) -> str:
-            return f"""原问题:{question}
-
-上一次 synth(territory map):
-
-{prior_synth}
-
-新追问(来源 {"用户" if source == "user" else "自动追问"}):
-{follow_up_question}
-
----
-
-请用 **≤ 200 字** 针对这次追问回应,延续你的人设立场。
-不要重复你在前面 round 已经说过的内容。"""
-
-        _run_role_round(round_no, "follow_up", _follow_up_prompt)
-
-        # 新 synth
-        follow_up_turns = [
-            t for t in session.turns if t.round == round_no and t.type == "follow_up"
-        ]
-        synth_text = model_fn(
-            overrides.get(synthesizer.name) or synthesizer.preferred_model,
-            synthesizer.system_prompt,
-            build_follow_up_synth_prompt(
-                original_question=question,
-                prior_synth=prior_synth,
-                follow_up_question=follow_up_question,
-                follow_up_turns=follow_up_turns,
-            ),
-            synthesizer.temperature,
-        )
-        _record(AgentTurn(round=round_no, role=synthesizer.name, type="synth", content=synth_text, ts=clock()))
-
     # --- Round 1: initial answers (every persona, no context but the question) #
     _run_role_round(
         1,
@@ -357,80 +500,77 @@ def run_session(
     #   iter1: review1 → drill1
     #   iter2: review2 → drill2
     #   after-loop: review3   → 共 3 reviews, 2 drills
-    next_round = synth_round + 1
-    converged = False
-    for _ in range(max_auto_drills):
-        last_synth = next((t for t in reversed(session.turns) if t.type == "synth"), None)
-        assert last_synth is not None, "auto-drill loop 之前必有 initial synth"
+    _run_auto_drill_loop(
+        session=session,
+        session_path=session_path,
+        question=question,
+        roles=roles,
+        synthesizer=synthesizer,
+        model_fn=model_fn,
+        overrides=overrides,
+        clock=clock,
+        start_round=synth_round + 1,
+        max_auto_drills=max_auto_drills,
+        on_turn=on_turn,
+    )
 
-        prior_reviews = "\n\n".join(
-            f"--- 上次 review (round {t.round}) ---\n{t.content}"
-            for t in session.turns if t.type == "review"
-        ) or "(无)"
+    return session
 
-        reviewer_prompt = f"""原始问题:
-{question}
 
-最新 synth:
-{last_synth.content}
+def continue_session(
+    session_path: Path,
+    follow_up_question: str,
+    *,
+    roles: list[Role],
+    synthesizer: Role,
+    model_fn: ModelFn,
+    role_model_overrides: Optional[dict[str, str]] = None,
+    max_auto_drills: int = 3,
+    on_turn: Optional[Callable[[AgentTurn], None]] = None,
+    clock: Callable[[], float] = time.time,
+) -> Session:
+    """用户续问:load 现有 session → 跑 user follow-up round + 新 synth +
+    auto-drill loop(可能再 drill 0-N 次)。
 
-历史 review:
-{prior_reviews}
+    返回更新后的 Session(包括新 follow_up / synth / review turns)。
+    """
+    from .io import read_session
+    session = read_session(session_path)
+    question = session.question
+    overrides = role_model_overrides or {}
 
-按你的 system_prompt 输出判断。"""
+    next_round = max((t.round for t in session.turns), default=0) + 1
+    last_synth = next((t for t in reversed(session.turns) if t.type == "synth"), None)
+    if last_synth is None:
+        raise ValueError("session 没有 synth turn,不能续问")
 
-        verdict_text = model_fn(
-            overrides.get(REVIEWER.name) or REVIEWER.preferred_model,
-            REVIEWER.system_prompt,
-            reviewer_prompt,
-            REVIEWER.temperature,
-        )
-        verdict = reviewer_mod.parse_verdict(verdict_text)
-        _record(AgentTurn(
-            round=last_synth.round, role=REVIEWER.name, type="review",
-            content=verdict_text, ts=clock(),
-        ))
-        if verdict.converged:
-            converged = True
-            break
-        _run_follow_up_iteration(
-            round_no=next_round,
-            follow_up_question=verdict.next_question,
-            prior_synth=last_synth.content,
-            source="auto",
-        )
-        next_round += 1
+    _run_follow_up_iteration_v2(
+        session=session,
+        session_path=session_path,
+        question=question,
+        roles=roles,
+        synthesizer=synthesizer,
+        model_fn=model_fn,
+        overrides=overrides,
+        clock=clock,
+        round_no=next_round,
+        follow_up_question=follow_up_question,
+        prior_synth=last_synth.content,
+        source="user",
+        on_turn=on_turn,
+    )
 
-    # 跑满 drill 上限但未收敛:补一次 final review,供 PWA 读取最后判断结果
-    # (last review turn 是 NEEDS_DRILL → 前端可展示 "已达上限" banner + prefill next_q)
-    # TODO Task 6: 这段跟 loop body 重复 — 等 _run_auto_drill_loop 提到 module-level
-    # 后用统一 helper 调一次,避免改 reviewer_prompt 格式时漏改这一处。
-    if max_auto_drills > 0 and not converged:
-        last_synth = next((t for t in reversed(session.turns) if t.type == "synth"), None)
-        assert last_synth is not None, "post-loop final review 之前必有 synth"
-        prior_reviews = "\n\n".join(
-            f"--- 上次 review (round {t.round}) ---\n{t.content}"
-            for t in session.turns if t.type == "review"
-        ) or "(无)"
-        reviewer_prompt = f"""原始问题:
-{question}
-
-最新 synth:
-{last_synth.content}
-
-历史 review:
-{prior_reviews}
-
-按你的 system_prompt 输出判断。"""
-        verdict_text = model_fn(
-            overrides.get(REVIEWER.name) or REVIEWER.preferred_model,
-            REVIEWER.system_prompt,
-            reviewer_prompt,
-            REVIEWER.temperature,
-        )
-        _record(AgentTurn(
-            round=last_synth.round, role=REVIEWER.name, type="review",
-            content=verdict_text, ts=clock(),
-        ))
-
+    _run_auto_drill_loop(
+        session=session,
+        session_path=session_path,
+        question=question,
+        roles=roles,
+        synthesizer=synthesizer,
+        model_fn=model_fn,
+        overrides=overrides,
+        clock=clock,
+        start_round=next_round + 1,
+        max_auto_drills=max_auto_drills,
+        on_turn=on_turn,
+    )
     return session
