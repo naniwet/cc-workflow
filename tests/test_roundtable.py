@@ -593,6 +593,47 @@ class ContinueEndpointTests(unittest.TestCase):
         self.assertEqual(r.status_code, 202, r.text)
         self.assertTrue(sub.called)
 
+    def test_continue_enriches_question_with_attachments(self):
+        """POST /continue 带 attachments 时,question 被附件内容拼接后传给
+        submit_continue(跟 POST /roundtables 用同一 _enrich_question_with_attachments 路径)。"""
+        from unittest.mock import patch
+        from backend import config
+        # 准备:在 ROUNDTABLE_UPLOADS_DIR 下放一个 .txt
+        uploads_dir = self.tmp_path / "rt-uploads" / "upload1"
+        uploads_dir.mkdir(parents=True)
+        fixture = uploads_dir / "ref.txt"
+        fixture.write_text("REFERENCE CONTENT", encoding="utf-8")
+
+        self._seed_completed_session()
+        captured = {}
+        def _fake_continue(*args, **kwargs):
+            # submit_continue(session_path, follow_up_question, ...)
+            captured["question"] = args[1] if len(args) > 1 else kwargs.get("follow_up_question")
+        with patch.object(config, "ROUNDTABLE_UPLOADS_DIR", self.tmp_path / "rt-uploads"), \
+             patch("backend.main.roundtable_runner.submit_continue", side_effect=_fake_continue):
+            r = self.client.post(
+                "/roundtables/abc/continue",
+                json={"question": "再问 X", "attachments": [str(fixture)]},
+            )
+        self.assertEqual(r.status_code, 202, r.text)
+        self.assertIn("再问 X", captured["question"])
+        self.assertIn("REFERENCE CONTENT", captured["question"])  # enriched
+
+    def test_continue_rejects_attachment_outside_uploads(self):
+        """attachments 路径在 ROUNDTABLE_UPLOADS_DIR 之外 → 400(防 traversal)。"""
+        from unittest.mock import patch
+        from backend import config
+        outside = self.tmp_path / "outside.txt"
+        outside.write_text("nope", encoding="utf-8")
+        self._seed_completed_session()
+        with patch.object(config, "ROUNDTABLE_UPLOADS_DIR", self.tmp_path / "rt-uploads"):
+            (self.tmp_path / "rt-uploads").mkdir(exist_ok=True)
+            r = self.client.post(
+                "/roundtables/abc/continue",
+                json={"question": "再问", "attachments": [str(outside)]},
+            )
+        self.assertEqual(r.status_code, 400)
+
     def test_reviewer_summary_hit_max_drills_when_last_review_needs_drill(self):
         """GET /roundtables/{id} 返回 reviewer.hit_max_drills=True
         当 last review 是 NEEDS_DRILL(说明 max 跑满未收敛)。"""

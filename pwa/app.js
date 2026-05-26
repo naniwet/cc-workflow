@@ -4687,10 +4687,18 @@ function paintRoundtableDetail(id, row) {
 
   // 续问输入框:session 已有至少一个 synth turn 时才显示(status=done 或
   // r3 存在)。进行中的 session 还没 synth,不显示。
+  // 跟新建 form 同款 UX:textarea + 附件 + 右下提交按钮。Cmd/Ctrl+Enter
+  // 提交,Enter 保持换行(textarea 标准行为)。
   const continueInputHtml = (r3 || status === 'done') ? `
     <div class="rt-continue-input">
-      <textarea data-rt-followup placeholder="继续问..." rows="3"></textarea>
-      <button class="rt-continue-submit" data-session-id="${esc(id)}">继续问</button>
+      <textarea data-rt-followup placeholder="继续问...(Cmd/Ctrl+Enter 提交)" rows="3"></textarea>
+      <div class="rt-continue-row">
+        <label class="rt-continue-attach">
+          <span>📎 附件(可选,文本 ≤ 100KB)</span>
+          <input type="file" multiple accept="text/*" data-rt-continue-attach>
+        </label>
+        <button class="rt-continue-submit" data-session-id="${esc(id)}">继续问</button>
+      </div>
     </div>` : '';
 
   $('view').innerHTML = `
@@ -4722,29 +4730,67 @@ function paintRoundtableDetail(id, row) {
     });
   });
 
-  // 续问提交:POST /roundtables/{id}/continue { question }
-  view.querySelectorAll('.rt-continue-submit').forEach((btn) => {
-    btn.addEventListener('click', async (e) => {
-      const sessionId = e.currentTarget.dataset.sessionId;
-      const ta = view.querySelector('textarea[data-rt-followup]');
-      const question = (ta?.value || '').trim();
-      if (!question) return;
-      btn.disabled = true;
-      btn.textContent = '提交中...';
-      try {
-        await api(`/roundtables/${encodeURIComponent(sessionId)}/continue`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question }),
+  // 续问提交:POST /roundtables/{id}/continue { question, attachments? }
+  // 附件 upload 跟 onCreateRoundtable 同款 flow:先 POST /roundtable-uploads
+  // 拿 paths,再随 question 一起 POST /continue。
+  const submitContinue = async (btn) => {
+    const sessionId = btn.dataset.sessionId;
+    const ta = view.querySelector('textarea[data-rt-followup]');
+    const question = (ta?.value || '').trim();
+    if (!question) return;
+    const attachInput = view.querySelector('input[data-rt-continue-attach]');
+    const fileList = attachInput?.files || [];
+    const totalBytes = Array.from(fileList).reduce((s, f) => s + f.size, 0);
+    if (totalBytes > 100 * 1024) {
+      showError(`参考文件合计 ${(totalBytes / 1024).toFixed(1)}KB,超过 100KB 上限。拆小或只贴关键段。`);
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = '提交中...';
+    try {
+      let attachments = [];
+      if (fileList.length > 0) {
+        const formData = new FormData();
+        for (const f of fileList) formData.append('files', f);
+        const upResp = await fetch('/roundtable-uploads', {
+          method: 'POST', body: formData, credentials: 'same-origin',
         });
-        if (ta) ta.value = '';
-        // 后端返回 202 并启动新一轮评议;下一次 refreshAll poll 会拉到新
-        // turns 并自动触发重绘,无需手动 refresh。
-      } catch (err) {
-        showError(`续问失败: ${err.message}`);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = '继续问';
+        if (!upResp.ok) {
+          throw new Error(`upload 失败 (HTTP ${upResp.status}): ${await upResp.text()}`);
+        }
+        const upData = await upResp.json();
+        attachments = upData.paths || [];
+      }
+      const body = { question };
+      if (attachments.length > 0) body.attachments = attachments;
+      await api(`/roundtables/${encodeURIComponent(sessionId)}/continue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (ta) ta.value = '';
+      if (attachInput) attachInput.value = '';    // 清空已选文件
+      // 后端返回 202 并启动新一轮评议;下一次 refreshAll poll 会拉到新
+      // turns 并自动触发重绘,无需手动 refresh。
+    } catch (err) {
+      showError(`续问失败: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '继续问';
+    }
+  };
+
+  view.querySelectorAll('.rt-continue-submit').forEach((btn) => {
+    btn.addEventListener('click', () => submitContinue(btn));
+  });
+  // Cmd/Ctrl+Enter 提交(主流 chat 工具惯例)。Enter 单独按保持换行
+  // (textarea 默认行为,不绑 preventDefault 即可)。
+  view.querySelectorAll('textarea[data-rt-followup]').forEach((ta) => {
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        const btn = view.querySelector('.rt-continue-submit');
+        if (btn && !btn.disabled) submitContinue(btn);
       }
     });
   });

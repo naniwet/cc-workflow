@@ -2108,18 +2108,25 @@ def get_roundtable(session_id: str) -> dict:
 
 class ContinueRoundtableRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
+    # 续问也支持附件,跟 POST /roundtables 一致(UX 统一)。
+    # 校验 / 拼接走 _enrich_question_with_attachments 同款 path。
+    attachments: Optional[list[str]] = None
 
 
 @app.post("/roundtables/{session_id}/continue", dependencies=PROTECT, status_code=202)
 def continue_roundtable(session_id: str, body: ContinueRoundtableRequest) -> dict:
     """用户续问:在已有 session 上 append user follow-up round + 新 synth
-    + 审查员判断(可能再触发 auto-drill)。"""
+    + 审查员判断(可能再触发 auto-drill)。
+    支持 attachments — 跟 POST /roundtables 同款 enrich 路径,合计 100KB 上限。"""
     if "/" in session_id or ".." in session_id or session_id.startswith("."):
         raise HTTPException(400, {"error": "bad session id"})
     path = config.ROUNDTABLES_DIR / f"{session_id}.jsonl"
     if not path.is_file():
         raise HTTPException(404, {"error": "session not found", "id": session_id})
-    roundtable_runner.submit_continue(path, body.question.strip())
+    enriched_question = _enrich_question_with_attachments(
+        body.question.strip(), body.attachments,
+    )
+    roundtable_runner.submit_continue(path, enriched_question)
     return {"id": session_id, "status": "queued", "question": body.question}
 
 

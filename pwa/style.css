@@ -2525,6 +2525,49 @@ pre {
   font-size: var(--text-sm);
   flex-wrap: wrap;
 }
+/* 续问 input 容器 — textarea 上,行动行(attach + 提交)下;行动行
+   space-between 左 attach 右按钮,跟 new-form .ws-new-actions 视觉对齐。 */
+.rt-continue-input {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.rt-continue-input textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  padding: var(--space-2);
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+.rt-continue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.rt-continue-attach {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.rt-continue-attach input[type="file"] {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  max-width: 280px;
+}
+.rt-continue-submit {
+  /* 不复用 .ws-new-btn 的 + 前缀样式 — 这是个独立按钮,放右侧 */
+  margin-left: auto;
+}
+
 /* 1v1 / 4 派 mode chip — 在 statusTag 旁边显示。颜色跟 statusTag 同视觉
    层级,小一点的字号 + 圆角让它跟 status 区分开。 */
 .rt-mode-chip {
