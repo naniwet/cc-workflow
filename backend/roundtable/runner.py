@@ -273,9 +273,18 @@ def _execute_continue(
     role_models: dict[str, str],
     on_complete: Optional[OnCompleteFn],
 ) -> None:
-    """在 background thread 里跑 continue_session。错误写入 jsonl 的 __error__ turn。"""
+    """在 background thread 里跑 continue_session。错误写入 jsonl 的 __error__ turn。
+    decider 走 session.decider_enabled meta(读自 jsonl)— 原 session opt-in 过,
+    续问也跑决断员;没 opt-in,decider=None continue_session 跳过。"""
     try:
+        from . import decider as decider_mod
+        from .io import read_session
         roles, synthesizer, reviewer = _customized_role_list()
+        # 用 read_session 拿 decider_enabled meta(防御性:原 session opt-in 状态
+        # 决定续问是否跑决断员;不让前端 client 在续问时反向覆盖 opt-in)
+        existing = read_session(session_path)
+        decider = (_customize_role(decider_mod.DECIDER)
+                   if existing.decider_enabled else None)
         continue_session(
             session_path=session_path,
             follow_up_question=follow_up_question,
@@ -284,6 +293,7 @@ def _execute_continue(
             model_fn=call_model,
             role_model_overrides=role_models,
             reviewer=reviewer,
+            decider=decider,
         )
     except ModelError as e:
         write_error_marker(session_path, f"model error during continue: {type(e).__name__}: {e}")

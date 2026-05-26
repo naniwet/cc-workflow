@@ -137,8 +137,12 @@ def decide(
 
 
 # --------------------------------------------------------------------------- #
-# parse_verdict — 复用 synth 风格的 ## 段切                                   #
+# parse_recommendation — 复用 synth 风格的 ## 段切                            #
 # --------------------------------------------------------------------------- #
+# NB: 不叫 parse_verdict — 跟 reviewer.parse_verdict 同名会 shadow,且语义不
+# 同(reviewer 的 verdict 是"判收敛 / 追问",decider 的 verdict 是"推荐方案")。
+# 通用语言 §3.4:同一个名字不允许两个语义。本 module 内部 / 对外用
+# parse_recommendation。
 
 _HEADER_RE = re.compile(r"^##\s+(.+?)\s*$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
@@ -148,7 +152,7 @@ _BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
 _KNOWN_SECTIONS = ("推荐方案", "理由", "代价", "备选", "胜方判定")
 
 
-def parse_verdict(text: str) -> dict[str, object]:
+def parse_recommendation(text: str) -> dict[str, object]:
     """按 ## 段切。推荐方案 / 胜方判定 是 free-text(取 section 内所有非空非
     bullet 行 join);理由 / 代价 / 备选 是 bullet list(只取 bullet,扔无关行)。
 

@@ -546,6 +546,10 @@ def run_session(
                 model_override=overrides.get(decider.name),
             )
         except Exception as e:    # noqa: BLE001 — verdict 失败不能拖死 session
+            # 后端日志记录 traceback,journalctl -t cc-workflow 才能排查
+            # (verdict 段 inline 给用户看的是文字摘要,不含 traceback)。
+            import logging
+            logging.getLogger(__name__).exception("decider failed on run_session")
             verdict_text = (
                 f"## 推荐方案\n(决断员调用失败,无法生成推荐)\n\n"
                 f"## 理由\n- 失败原因: {type(e).__name__}: {e}\n"
@@ -572,6 +576,7 @@ def continue_session(
     role_model_overrides: Optional[dict[str, str]] = None,
     max_auto_drills: int = 3,
     reviewer: Optional[Role] = None,
+    decider: Optional[Role] = None,        # opt-in,跟 run_session 同款语义
     on_turn: Optional[Callable[[AgentTurn], None]] = None,
     clock: Callable[[], float] = time.time,
 ) -> Session:
@@ -624,4 +629,41 @@ def continue_session(
         max_auto_drills=max_auto_drills,
         on_turn=on_turn,
     )
+
+    # 续问也跑决断员 — session.decider_enabled 是 source of truth(POST /continue
+    # 不再传 enable_decider),只要原 session opt-in 过,续问就会基于新 synth
+    # 重新出推荐。verdict 落 max(round)+1,PWA verdict_turns[-1] 自动取新的。
+    # spec §2.1:续问触发新一轮 synth + 新一轮决断员(若 session opt-in 过)。
+    if decider is not None and session.decider_enabled:
+        from .decider import decide
+        try:
+            synth_turns = [t for t in session.turns if t.type == "synth"]
+            last_synth = synth_turns[-1].content if synth_turns else ""
+            verdict_text = decide(
+                question=question, mode=session.mode,
+                turns=session.turns, synth_text=last_synth,
+                decider=decider, model_fn=model_fn,
+                model_override=overrides.get(decider.name),
+            )
+        except Exception as e:    # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).exception("decider failed on continue")
+            verdict_text = (
+                f"## 推荐方案\n(决断员调用失败,无法生成推荐)\n\n"
+                f"## 理由\n- 失败原因: {type(e).__name__}: {e}\n"
+                f"- 重试方式:在 #settings/roles 切换决断员 model 再次续问\n"
+            )
+        max_round = max((t.round for t in session.turns), default=next_round)
+        new_verdict = AgentTurn(
+            round=max_round + 1, role=decider.name, type="verdict",
+            content=verdict_text, ts=clock(),
+        )
+        append_turn(session_path, new_verdict)
+        if on_turn is not None:
+            try:
+                on_turn(new_verdict)
+            except Exception:    # noqa: BLE001
+                pass
+        session.turns.append(new_verdict)
+
     return session

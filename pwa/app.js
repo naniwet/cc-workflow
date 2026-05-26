@@ -4680,21 +4680,41 @@ function paintRoundtableDetail(id, row) {
   const v = row.verdict;
   let verdictBlock = '';
   if (v) {
-    const winner = v.parsed['胜方判定'];
-    verdictBlock = `
-      <section class="rt-verdict">
-        <h2>⚠ 决断员推荐 <span class="rt-verdict-warning">AI 拍板,仅供参考</span></h2>
-        ${v.parsed['推荐方案'] ? `<div class="rt-verdict-headline">${esc(v.parsed['推荐方案'])}</div>` : ''}
-        ${_rtSection('理由', v.parsed['理由'])}
-        ${_rtSection('代价', v.parsed['代价'])}
-        ${_rtSection('备选', v.parsed['备选'])}
-        ${winner ? `<div class="rt-verdict-winner"><strong>胜方判定:</strong> ${esc(winner)}</div>` : ''}
-        <details class="rt-r3-raw">
-          <summary>原始 markdown</summary>
-          <pre>${esc(v.raw)}</pre>
-        </details>
-      </section>
-    `;
+    // 失败态识别:debate.py decider catch 块写的 "(决断员调用失败,无法生成推荐)"
+    // 字符串塞进"推荐方案" 段。这里检测 + 独立 CSS class,避免失败态用橙色加粗
+    // headline 看起来跟正常推荐一样。
+    const rec = v.parsed['推荐方案'] || '';
+    const isFailed = rec.includes('决断员调用失败');
+    if (isFailed) {
+      verdictBlock = `
+        <section class="rt-verdict rt-verdict-failed">
+          <h2>⚠ 决断员未生成 <span class="rt-verdict-warning">调用失败</span></h2>
+          <div class="rt-verdict-failed-msg">
+            ${(v.parsed['理由'] || []).map((l) => `<div>${esc(l)}</div>`).join('')}
+          </div>
+          <details class="rt-r3-raw">
+            <summary>原始 markdown</summary>
+            <pre>${esc(v.raw)}</pre>
+          </details>
+        </section>
+      `;
+    } else {
+      const winner = v.parsed['胜方判定'];
+      verdictBlock = `
+        <section class="rt-verdict">
+          <h2>⚠ 决断员推荐 <span class="rt-verdict-warning">AI 拍板,仅供参考</span></h2>
+          ${rec ? `<div class="rt-verdict-headline">${esc(rec)}</div>` : ''}
+          ${_rtSection('理由', v.parsed['理由'])}
+          ${_rtSection('代价', v.parsed['代价'])}
+          ${_rtSection('备选', v.parsed['备选'])}
+          ${winner ? `<div class="rt-verdict-winner"><strong>胜方判定:</strong> ${esc(winner)}</div>` : ''}
+          <details class="rt-r3-raw">
+            <summary>原始 markdown</summary>
+            <pre>${esc(v.raw)}</pre>
+          </details>
+        </section>
+      `;
+    }
   } else if (row.decider_enabled && r3 && status !== 'error') {
     verdictBlock = `
       <section class="rt-verdict rt-verdict-pending">

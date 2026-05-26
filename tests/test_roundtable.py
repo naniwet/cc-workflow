@@ -951,8 +951,8 @@ class DeciderTests(unittest.TestCase):
         )
         self.assertNotIn("胜方判定", prompt_rt)
 
-    def test_parse_verdict_roundtable_4_sections(self):
-        from backend.roundtable.decider import parse_verdict
+    def test_parse_recommendation_roundtable_4_sections(self):
+        from backend.roundtable.decider import parse_recommendation
         text = """## 推荐方案
 做 X,先 spike 2 周
 
@@ -967,15 +967,15 @@ class DeciderTests(unittest.TestCase):
 ## 备选
 - 如果不行就 Y
 """
-        parsed = parse_verdict(text)
+        parsed = parse_recommendation(text)
         self.assertIn("做 X", parsed["推荐方案"])
         self.assertEqual(len(parsed["理由"]), 2)
         self.assertEqual(len(parsed["代价"]), 2)
         self.assertEqual(parsed["备选"], ["如果不行就 Y"])
         self.assertNotIn("胜方判定", parsed)  # 4 派 mode 不给胜方
 
-    def test_parse_verdict_oneonone_includes_winner(self):
-        from backend.roundtable.decider import parse_verdict
+    def test_parse_recommendation_oneonone_includes_winner(self):
+        from backend.roundtable.decider import parse_recommendation
         text = """## 推荐方案
 选 A
 
@@ -991,7 +991,7 @@ class DeciderTests(unittest.TestCase):
 ## 胜方判定
 正方,因为反方 R2 里 "..." 没站住
 """
-        parsed = parse_verdict(text)
+        parsed = parse_recommendation(text)
         self.assertIn("正方", parsed["胜方判定"])
 
     def test_decide_calls_model_with_decider_system_prompt(self):
@@ -1023,6 +1023,101 @@ class DeciderTests(unittest.TestCase):
             decider=DECIDER, model_fn=fake_llm, model_override="moonshot-v1-32k",
         )
         self.assertEqual(captured["model"], "moonshot-v1-32k")
+
+
+class DeciderIntegrationTests(unittest.TestCase):
+    """决断员跟 run_session / continue_session / I/O 的集成。
+    fake model_fn 注入,验证条件触发 / graceful degradation / round-trip。"""
+
+    def _fake_model_fn_factory(self, *, fail_decider: bool = False):
+        """构造 fake model_fn。按 system_prompt 首段独有 anchor 判 turn type。
+        注意:不能用 "推荐方案" 字符串判 decider — SYNTHESIZER prompt 里也有该词
+        (反向说"不允许给推荐方案")。用 "你是决断员" 这种 unique opener 判。"""
+        def fake(model, system, user, temp):
+            if system.startswith("你是决断员"):
+                if fail_decider:
+                    raise RuntimeError("simulated decider crash")
+                return ("## 推荐方案\n做 X\n\n## 理由\n- r1\n\n"
+                        "## 代价\n- c1\n\n## 备选\n- b1\n")
+            if system.startswith("你是整理员"):
+                return ("## 共识点\n- ok\n\n## 分歧轴\n- a\n\n"
+                        "## 关键判断\n- 你是否 X?\n\n## 条件性结论\n- if X then Y\n\n"
+                        "## 下一步行动\n- do X\n")
+            if system.startswith("你是审查员"):
+                return "## 判断\nCONVERGED\n\n## 理由\n看上去清楚了。"
+            return "fake persona reply"
+        return fake
+
+    def test_run_session_skips_decider_when_param_none(self):
+        """decider=None → session 不应出现 type='verdict' turn(default opt-in 关)。"""
+        from backend.roundtable.debate import run_session
+        from backend.roundtable.roles import ROLES, SYNTHESIZER
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            session = run_session(
+                question="Q?", roles=ROLES, synthesizer=SYNTHESIZER,
+                model_fn=self._fake_model_fn_factory(),
+                session_path=p, max_auto_drills=0, decider=None,
+            )
+            self.assertEqual([t.type for t in session.turns if t.type == "verdict"], [])
+
+    def test_run_session_with_decider_appends_verdict_turn(self):
+        """decider=DECIDER → session 应有 type='verdict' turn,内容是 fake 返的推荐。"""
+        from backend.roundtable.debate import run_session
+        from backend.roundtable.roles import ROLES, SYNTHESIZER
+        from backend.roundtable.decider import DECIDER
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            session = run_session(
+                question="Q?", roles=ROLES, synthesizer=SYNTHESIZER,
+                model_fn=self._fake_model_fn_factory(),
+                session_path=p, max_auto_drills=0,
+                decider=DECIDER, mode="roundtable",
+            )
+            verdict_turns = [t for t in session.turns if t.type == "verdict"]
+            self.assertEqual(len(verdict_turns), 1)
+            self.assertIn("做 X", verdict_turns[0].content)
+            self.assertEqual(verdict_turns[0].role, "决断员")
+
+    def test_run_session_decider_crash_does_not_break_session(self):
+        """decider model_fn 抛异常 → session 仍完整(synth 已落),verdict 段含
+        inline error。graceful degradation(spec §5 test #7)。"""
+        from backend.roundtable.debate import run_session
+        from backend.roundtable.roles import ROLES, SYNTHESIZER
+        from backend.roundtable.decider import DECIDER
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            session = run_session(
+                question="Q?", roles=ROLES, synthesizer=SYNTHESIZER,
+                model_fn=self._fake_model_fn_factory(fail_decider=True),
+                session_path=p, max_auto_drills=0,
+                decider=DECIDER, mode="roundtable",
+            )
+            synth_turns = [t for t in session.turns if t.type == "synth"]
+            verdict_turns = [t for t in session.turns if t.type == "verdict"]
+            self.assertGreater(len(synth_turns), 0)    # synth 完整
+            self.assertEqual(len(verdict_turns), 1)    # verdict 段存在(失败标记)
+            self.assertIn("决断员调用失败", verdict_turns[0].content)
+
+    def test_session_decider_enabled_field_round_trips_through_io(self):
+        """Session.decider_enabled 通过 write_meta → read_session 来回保留。"""
+        from backend.roundtable.data import Session
+        from backend.roundtable.io import write_meta, read_session
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            s = Session(question="Q?", started_at=1.0, decider_enabled=True)
+            write_meta(p, s)
+            loaded = read_session(p)
+            self.assertTrue(loaded.decider_enabled)
+            # 缺字段 = False(老 jsonl 兼容)
+            p2 = Path(d) / "s2.jsonl"
+            import json
+            p2.write_text(json.dumps({
+                "_meta": True, "question": "Q?", "started_at": 1.0,
+                "critique_rounds": 1, "version": 1,
+            }) + "\n")
+            loaded2 = read_session(p2)
+            self.assertFalse(loaded2.decider_enabled)
 
 
 if __name__ == "__main__":

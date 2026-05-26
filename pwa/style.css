@@ -2604,6 +2604,20 @@ pre {
 .rt-verdict-pending {
   border-style: dashed;
 }
+/* 决断员失败态 — 跟成功态视觉切开:灰色 + 不加粗 headline。避免用户瞄一眼
+   把 "决断员调用失败" 当成 AI 推荐的方案名误读。 */
+.rt-verdict-failed {
+  border-color: var(--border);
+  background: rgba(150, 150, 150, 0.06);
+}
+.rt-verdict-failed h2 {
+  color: var(--text-muted);
+}
+.rt-verdict-failed-msg {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  padding: var(--space-2) 0;
+}
 
 /* 新建 form 的 决断员 checkbox 行 */
 .rt-decider-row {

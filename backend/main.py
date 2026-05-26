@@ -2101,12 +2101,12 @@ def get_roundtable(session_id: str) -> dict:
         raw = r3_turns[-1].content
         r3 = {"raw": raw, "parsed": parse_synthesis(raw)}
     # 决断员 verdict — opt-in 时存在,失败时也存在(inline error content)。
-    # 不能用 `from .roundtable.decider import parse_verdict` — 跟模块顶部
-    # 已有的 reviewer.parse_verdict 同名,会 shadow 掉(UnboundLocalError)。
+    # decider 的 parser 叫 parse_recommendation(不跟 reviewer.parse_verdict
+    # 同名 — §3.4 通用语言)。
     verdict = None
     if verdict_turns:
         raw_v = verdict_turns[-1].content
-        verdict = {"raw": raw_v, "parsed": roundtable_decider.parse_verdict(raw_v)}
+        verdict = {"raw": raw_v, "parsed": roundtable_decider.parse_recommendation(raw_v)}
     status = "done" if r3_turns else ("error" if error_turns else
               ("running" if normal_turns else "queued"))
     turns_expected = 4 + 4 * session.critique_rounds + 1
