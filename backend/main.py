@@ -63,6 +63,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import agents_store, approvals, auth, config, cron_state, db, im_feishu, llm, runner, skills, ws_settings
+from .roundtable import decider as roundtable_decider
 from .roundtable import io as roundtable_io
 from .roundtable import model as roundtable_model
 from .roundtable import oneonone as roundtable_oneonone
@@ -1686,15 +1687,19 @@ def _all_role_names() -> set[str]:
         | {roundtable_roles.SYNTHESIZER.name}
         | {roundtable_roles.REVIEWER.name}
         | {"正方", "反方"}
+        | {roundtable_decider.DECIDER.name}    # 决断员 opt-in 元角色
     )
 
 
 class NewOneOnOneRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=4096)
-    # 跟 round-table 同款 — 正方 / 反方 / 整理员 三个角色可 override model
+    # 跟 round-table 同款 — 正方 / 反方 / 整理员 / 决断员 四个角色可 override
     role_models: Optional[dict[str, str]] = None
     # 跟 round-table 同款 attachments(文件路径列表,文本 + 100KB 上限)
     attachments: Optional[list[str]] = None
+    # opt-in 决断员(spec: decider-meta-role)— 默认关,勾选后 synth 之后跑一次
+    # 出 "推荐方案 / 理由 / 代价 / 备选 / 胜方判定"
+    enable_decider: bool = False
 
 
 class NewRoundtableRequest(BaseModel):
@@ -1708,6 +1713,8 @@ class NewRoundtableRequest(BaseModel):
     #     adds ~45s wall clock per session). Higher values rejected —
     #     N≥3 hasn't been validated and is likely to produce padded output.
     critique_rounds: int = Field(default=1, ge=1, le=2)
+    # opt-in 决断员 — 默认关,勾选后 synth 之后跑一次(spec: decider-meta-role)
+    enable_decider: bool = False
     # 文件路径列表(从 POST /roundtable-uploads 拿到)。Backend 校验
     # 必须在 ROUNDTABLE_UPLOADS_DIR 子树下,读 UTF-8 内容,合计 ≤ 100KB,
     # 拼进 question 喂给所有 派。spec §3.2。
@@ -1796,6 +1803,7 @@ def list_roundtable_models() -> dict:
             + [_role_entry(roundtable_roles.REVIEWER, "reviewer")]
             + [_role_entry(r, "proponent")
                for r in roundtable_oneonone.proponent_role_placeholders()]
+            + [_role_entry(roundtable_decider.DECIDER, "decider")]
         ),
     }
 
@@ -1951,6 +1959,7 @@ def create_roundtable(req: NewRoundtableRequest) -> dict:
         enriched_question,
         role_models=merged_models,
         critique_rounds=req.critique_rounds,
+        enable_decider=req.enable_decider,
     )
     return {"id": path.stem, "status": "queued", "question": req.question}
 
@@ -1976,7 +1985,7 @@ def create_oneonone(req: NewOneOnOneRequest) -> dict:
     )
 
     # 2. validate role_models early(early fail 比 framing 完才发现 typo 好)
-    valid_roles = {"正方", "反方", "整理员"}
+    valid_roles = {"正方", "反方", "整理员", roundtable_decider.DECIDER.name}
     if req.role_models:
         for role_name, model_name in req.role_models.items():
             if role_name not in valid_roles:
@@ -2046,6 +2055,7 @@ def create_oneonone(req: NewOneOnOneRequest) -> dict:
         stance_a=stance_a,
         stance_b=stance_b,
         role_models=merged_models,
+        enable_decider=req.enable_decider,
     )
     return {
         "id": path.stem,
@@ -2081,14 +2091,22 @@ def get_roundtable(session_id: str) -> dict:
         session = roundtable_io.read_session(path)
     except (ValueError, OSError) as e:
         raise HTTPException(500, {"error": f"session unreadable: {e}"})
-    # Pull synthesis + any error marker out separately for convenience.
+    # Pull synthesis + verdict + any error marker out separately for convenience.
     r3_turns = [t for t in session.turns if t.type == "synth"]
+    verdict_turns = [t for t in session.turns if t.type == "verdict"]
     error_turns = [t for t in session.turns if t.role == "__error__"]
     normal_turns = [t for t in session.turns if t.role != "__error__"]
     r3 = None
     if r3_turns:
         raw = r3_turns[-1].content
         r3 = {"raw": raw, "parsed": parse_synthesis(raw)}
+    # 决断员 verdict — opt-in 时存在,失败时也存在(inline error content)。
+    # 不能用 `from .roundtable.decider import parse_verdict` — 跟模块顶部
+    # 已有的 reviewer.parse_verdict 同名,会 shadow 掉(UnboundLocalError)。
+    verdict = None
+    if verdict_turns:
+        raw_v = verdict_turns[-1].content
+        verdict = {"raw": raw_v, "parsed": roundtable_decider.parse_verdict(raw_v)}
     status = "done" if r3_turns else ("error" if error_turns else
               ("running" if normal_turns else "queued"))
     turns_expected = 4 + 4 * session.critique_rounds + 1
@@ -2121,6 +2139,8 @@ def get_roundtable(session_id: str) -> dict:
             for t in normal_turns
         ],
         "r3": r3,
+        "verdict": verdict,                       # 决断员 opt-in 输出(可 null)
+        "decider_enabled": session.decider_enabled,
         "reviewer": reviewer_summary,
         "error": error_turns[-1].content if error_turns else None,
     }

@@ -20,7 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-TurnType = Literal["answer", "critique", "synth", "review", "follow_up", "user_question"]
+TurnType = Literal[
+    "answer", "critique", "synth", "review",
+    "follow_up", "user_question",
+    "verdict",                              # 决断员 opt-in 输出(spec: decider-meta-role)
+]
 
 
 @dataclass(frozen=True)
@@ -54,3 +58,6 @@ class Session:
     # 老 jsonl 没这字段,read_session 缺省回 "roundtable" 向前兼容。
     # PWA 拿到后渲染 session header chip 区分两种 mode。
     mode: str = "roundtable"
+    # opt-in:用户在新建表单勾"我要最终结果",决断员在 synth 之后跑一次。
+    # 老 jsonl 缺字段 = False,绝不破坏 synth IP。spec: decider-meta-role §2.1。
+    decider_enabled: bool = False

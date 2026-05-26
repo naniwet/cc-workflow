@@ -912,5 +912,118 @@ class OneOnOneRolesTests(unittest.TestCase):
         self.assertEqual(captured["model"], "moonshot-v1-32k")
 
 
+class DeciderTests(unittest.TestCase):
+    """决断员 opt-in 元角色 — synth 之后 reads synth + R1/R2 → 推荐方案 / 理由
+    / 代价 / 备选(1v1 额外含 胜方判定)。"""
+
+    def test_decider_role_has_required_anchors(self):
+        from backend.roundtable.decider import DECIDER
+        self.assertEqual(DECIDER.name, "决断员")
+        for anchor in ("推荐必须具体", "拒绝中立语", "胜方判定"):
+            self.assertIn(anchor, DECIDER.system_prompt)
+
+    def test_build_decider_user_prompt_includes_question_synth_and_turns(self):
+        from backend.roundtable.decider import build_decider_user_prompt
+        from backend.roundtable.data import AgentTurn
+        turns = [
+            AgentTurn(round=1, role="极简派", type="answer", content="简单点", ts=0.0),
+            AgentTurn(round=2, role="悲观派", type="critique", content="会崩", ts=0.0),
+        ]
+        prompt = build_decider_user_prompt(
+            question="要上 TDD 吗", mode="roundtable",
+            turns=turns, synth_text="共识点: 都说要小步",
+        )
+        self.assertIn("要上 TDD 吗", prompt)
+        self.assertIn("简单点", prompt)
+        self.assertIn("会崩", prompt)
+        self.assertIn("共识点: 都说要小步", prompt)
+
+    def test_build_decider_user_prompt_marks_oneonone_mode(self):
+        """1v1 mode 时 prompt 显式提示决断员"额外给胜方判定"。"""
+        from backend.roundtable.decider import build_decider_user_prompt
+        prompt = build_decider_user_prompt(
+            question="做 X 吗", mode="oneonone", turns=[], synth_text="",
+        )
+        self.assertIn("胜方判定", prompt)
+        # 4 派 prompt 不应提胜方判定(避免干扰)
+        prompt_rt = build_decider_user_prompt(
+            question="X?", mode="roundtable", turns=[], synth_text="",
+        )
+        self.assertNotIn("胜方判定", prompt_rt)
+
+    def test_parse_verdict_roundtable_4_sections(self):
+        from backend.roundtable.decider import parse_verdict
+        text = """## 推荐方案
+做 X,先 spike 2 周
+
+## 理由
+- 极简派说 A
+- 悲观派承认 B
+
+## 代价
+- 你必须接受 C
+- 也要承担 D
+
+## 备选
+- 如果不行就 Y
+"""
+        parsed = parse_verdict(text)
+        self.assertIn("做 X", parsed["推荐方案"])
+        self.assertEqual(len(parsed["理由"]), 2)
+        self.assertEqual(len(parsed["代价"]), 2)
+        self.assertEqual(parsed["备选"], ["如果不行就 Y"])
+        self.assertNotIn("胜方判定", parsed)  # 4 派 mode 不给胜方
+
+    def test_parse_verdict_oneonone_includes_winner(self):
+        from backend.roundtable.decider import parse_verdict
+        text = """## 推荐方案
+选 A
+
+## 理由
+- ...
+
+## 代价
+- ...
+
+## 备选
+- ...
+
+## 胜方判定
+正方,因为反方 R2 里 "..." 没站住
+"""
+        parsed = parse_verdict(text)
+        self.assertIn("正方", parsed["胜方判定"])
+
+    def test_decide_calls_model_with_decider_system_prompt(self):
+        """`decide(...)` 把 DECIDER.system_prompt 当 system,
+        build_decider_user_prompt 输出当 user,model_override 覆盖默认 model。"""
+        from backend.roundtable.decider import decide, DECIDER
+        captured = {}
+        def fake_llm(model, system, user, temp):
+            captured["model"] = model
+            captured["system"] = system
+            captured["user"] = user
+            return "verdict text"
+        decide(
+            question="Q?", mode="roundtable", turns=[], synth_text="S",
+            decider=DECIDER, model_fn=fake_llm,
+        )
+        self.assertEqual(captured["system"], DECIDER.system_prompt)
+        self.assertIn("Q?", captured["user"])
+        self.assertEqual(captured["model"], DECIDER.preferred_model)
+
+    def test_decide_honors_model_override(self):
+        from backend.roundtable.decider import decide, DECIDER
+        captured = {}
+        def fake_llm(model, system, user, temp):
+            captured["model"] = model
+            return "v"
+        decide(
+            question="Q?", mode="roundtable", turns=[], synth_text="",
+            decider=DECIDER, model_fn=fake_llm, model_override="moonshot-v1-32k",
+        )
+        self.assertEqual(captured["model"], "moonshot-v1-32k")
+
+
 if __name__ == "__main__":
     unittest.main()

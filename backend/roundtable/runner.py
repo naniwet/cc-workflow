@@ -63,6 +63,7 @@ def submit(
     *,
     role_models: dict[str, str] | None = None,
     critique_rounds: int = 1,
+    enable_decider: bool = False,
     on_complete: Optional[OnCompleteFn] = None,
 ) -> Path:
     """Kick off a roundtable session in a background thread.
@@ -93,11 +94,13 @@ def submit(
         question=question,
         started_at=started_at,
         critique_rounds=critique_rounds,
+        decider_enabled=enable_decider,
     ))
 
     t = threading.Thread(
         target=_execute,
-        args=(question, path, dict(role_models or {}), critique_rounds, on_complete),
+        args=(question, path, dict(role_models or {}), critique_rounds,
+              enable_decider, on_complete),
         name=f"roundtable-{path.stem}",
         daemon=True,
     )
@@ -110,6 +113,7 @@ def _execute(
     session_path: Path,
     role_models: dict[str, str],
     critique_rounds: int,
+    enable_decider: bool,
     on_complete: Optional[OnCompleteFn],
 ) -> None:
     """Run the debate end-to-end. Any error is written to the session
@@ -120,7 +124,9 @@ def _execute(
     swallow its exceptions: it's an opportunistic push, failures shouldn't
     cascade)."""
     try:
+        from . import decider as decider_mod
         roles, synthesizer, reviewer = _customized_role_list()
+        decider = _customize_role(decider_mod.DECIDER) if enable_decider else None
         run_session(
             question=question,
             roles=roles,
@@ -130,6 +136,8 @@ def _execute(
             role_model_overrides=role_models,
             critique_rounds=critique_rounds,
             reviewer=reviewer,
+            decider=decider,
+            mode="roundtable",
         )
     except ModelError as e:
         # Expected failure mode (provider down, rate limit exhausted,
@@ -151,6 +159,7 @@ def submit_oneonone(
     stance_a: str,
     stance_b: str,
     role_models: dict[str, str] | None = None,
+    enable_decider: bool = False,
     on_complete: Optional[OnCompleteFn] = None,
 ) -> Path:
     """跟 submit() 同形,但跑 1v1 对抗 mode:
@@ -173,12 +182,13 @@ def submit_oneonone(
         started_at=started_at,
         critique_rounds=2,
         mode="oneonone",
+        decider_enabled=enable_decider,
     ))
 
     t = threading.Thread(
         target=_execute_oneonone,
         args=(question, stance_a, stance_b, path,
-              dict(role_models or {}), on_complete),
+              dict(role_models or {}), enable_decider, on_complete),
         name=f"oneonone-{path.stem}",
         daemon=True,
     )
@@ -192,6 +202,7 @@ def _execute_oneonone(
     stance_b: str,
     session_path: Path,
     role_models: dict[str, str],
+    enable_decider: bool,
     on_complete: Optional[OnCompleteFn],
 ) -> None:
     """1v1 调试 worker。跟 _execute 同款错误处理 — ModelError → __error__ 行,
@@ -211,7 +222,9 @@ def _execute_oneonone(
             stance_a, stance_b, template_a=template_a, template_b=template_b,
         )
         # 整理员仍走标准 _customize_role 路径(无占位符,override 直接生效)
+        from . import decider as decider_mod
         synthesizer = _customize_role(roles_mod.SYNTHESIZER)
+        decider = _customize_role(decider_mod.DECIDER) if enable_decider else None
         run_session(
             question=question,
             roles=proponents,
@@ -222,6 +235,8 @@ def _execute_oneonone(
             critique_rounds=2,
             max_auto_drills=0,    # 1v1 不接 reviewer drill(spec Q6)
             reviewer=None,         # max_auto_drills=0 → reviewer 不会被 invoke
+            decider=decider,
+            mode="oneonone",
         )
     except ModelError as e:
         write_error_marker(session_path, f"model error: {type(e).__name__}: {e}")

@@ -389,6 +389,8 @@ def run_session(
     critique_rounds: int = 1,
     max_auto_drills: int = 3,
     reviewer: Optional[Role] = None,
+    decider: Optional[Role] = None,        # opt-in,None = 不跑决断员
+    mode: str = "roundtable",              # 透传给 decider prompt(决定是否要"胜方判定"段)
     on_turn: Optional[Callable[[AgentTurn], None]] = None,
     clock: Callable[[], float] = time.time,
 ) -> Session:
@@ -527,6 +529,35 @@ def run_session(
         max_auto_drills=max_auto_drills,
         on_turn=on_turn,
     )
+
+    # --- Decider(opt-in)----------------------------------------------------
+    # 在所有 synth / drill 完成后跑一次决断员,基于最终 synth 给出推荐。
+    # 失败不影响 session(synth 已落) — verdict 段落 inline error 给用户。
+    if decider is not None:
+        from .decider import decide
+        try:
+            # 用 LAST synth turn 作为 synth_text(auto-drill 完后最新的)
+            synth_turns = [t for t in session.turns if t.type == "synth"]
+            last_synth = synth_turns[-1].content if synth_turns else ""
+            verdict_text = decide(
+                question=question, mode=mode,
+                turns=session.turns, synth_text=last_synth,
+                decider=decider, model_fn=model_fn,
+                model_override=overrides.get(decider.name),
+            )
+        except Exception as e:    # noqa: BLE001 — verdict 失败不能拖死 session
+            verdict_text = (
+                f"## 推荐方案\n(决断员调用失败,无法生成推荐)\n\n"
+                f"## 理由\n- 失败原因: {type(e).__name__}: {e}\n"
+                f"- 重试方式:在 #settings/roles 把决断员 model 改成其它(eg. moonshot)再次新建会话\n"
+            )
+        # verdict 落最后:max(turn.round) + 1,这样 auto-drill / 续问的额外
+        # round 也跑到 verdict 之前(决断员看完所有内容才出)。
+        max_round = max((t.round for t in session.turns), default=synth_round)
+        _record(AgentTurn(
+            round=max_round + 1,
+            role=decider.name, type="verdict", content=verdict_text, ts=clock(),
+        ))
 
     return session
 
