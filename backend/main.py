@@ -1990,6 +1990,20 @@ def create_oneonone(req: NewOneOnOneRequest) -> dict:
                     "known": sorted(roundtable_model.MODEL_ENDPOINTS),
                 })
 
+    # 3a. early-fail:用户在 #settings/roles 改了"正方"/"反方" prompt 时,
+    # 先校验占位符,避免 framing 跑完 worker 才发现 silent loss。
+    persistent_now = role_models_store.load()
+    for proponent_name in ("正方", "反方"):
+        custom_prompt = persistent_now.get(proponent_name, {}).get("system_prompt")
+        if custom_prompt is not None:
+            try:
+                roundtable_oneonone.validate_proponent_template(custom_prompt, proponent_name)
+            except ValueError as e:
+                raise HTTPException(400, {
+                    "error": "proponent_prompt_template_invalid",
+                    "msg": str(e),
+                })
+
     # 3. framing — 一次 LLM 调用拆立场
     try:
         stance_a, stance_b = roundtable_oneonone.frame_stances(

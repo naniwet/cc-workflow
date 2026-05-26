@@ -198,12 +198,23 @@ def _execute_oneonone(
     其它 exception 兜底,on_complete 在 finally 中始终触发。"""
     try:
         from . import oneonone        # 局部 import 避免 module-level 循环
-        proponents = oneonone.make_proponent_roles(stance_a, stance_b)
-        customized_roles = [_customize_role(r) for r in proponents]
+        # 1v1 角色 customization 走专门路径:不能像 4 派那样 _customize_role
+        # 替换 system_prompt — 因为 PROPONENT prompt 含 {stance}/{opponent_stance}
+        # 等占位符,format 必须在 customization 内一次完成。
+        # 用户在 #settings/roles 改了"正方"/"反方"的 system_prompt 时,
+        # override 作为 template 传给 make_proponent_roles,后者校验占位符 +
+        # 一次性 format,不 silent loss。
+        overrides = role_models_store.load()
+        template_a = overrides.get("正方", {}).get("system_prompt") or oneonone.PROPONENT_PROMPT_TEMPLATE
+        template_b = overrides.get("反方", {}).get("system_prompt") or oneonone.PROPONENT_PROMPT_TEMPLATE
+        proponents = oneonone.make_proponent_roles(
+            stance_a, stance_b, template_a=template_a, template_b=template_b,
+        )
+        # 整理员仍走标准 _customize_role 路径(无占位符,override 直接生效)
         synthesizer = _customize_role(roles_mod.SYNTHESIZER)
         run_session(
             question=question,
-            roles=customized_roles,
+            roles=proponents,
             synthesizer=synthesizer,
             model_fn=call_model,
             session_path=session_path,

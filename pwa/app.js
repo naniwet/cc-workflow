@@ -4689,7 +4689,12 @@ function paintRoundtableDetail(id, row) {
   // r3 存在)。进行中的 session 还没 synth,不显示。
   // 跟新建 form 同款 UX:textarea + 附件 + 右下提交按钮。Cmd/Ctrl+Enter
   // 提交,Enter 保持换行(textarea 标准行为)。
-  const continueInputHtml = (r3 || status === 'done') ? `
+  //
+  // 1v1 mode 不暴露续问 — POST /roundtables/{id}/continue 走 4 派 path
+  // (_customized_role_list 返 4 派 + synth + reviewer),跟 1v1 的 [正方, 反方]
+  // 不搭。用户点续问会让 1v1 session "变身"成 4 派。未来若加 1v1 续问
+  // 需要专门写 submit_continue_oneonone。
+  const continueInputHtml = (row.mode !== 'oneonone' && (r3 || status === 'done')) ? `
     <div class="rt-continue-input">
       <textarea data-rt-followup placeholder="继续问...(Cmd/Ctrl+Enter 提交)" rows="3"></textarea>
       <div class="rt-continue-row">

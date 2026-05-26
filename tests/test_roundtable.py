@@ -832,6 +832,33 @@ class OneOnOneRolesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             frame_stances("Q?", fake_llm)
 
+    def test_make_proponent_roles_rejects_template_missing_placeholders(self):
+        """用户在 #settings/roles 改了 '正方' system_prompt 时,如果删了
+        {stance}/{opponent_stance} 占位符,立场字符串就注入不进去。必须 raise
+        而不是 silent fallback,否则用户调试不出来为啥辩士不辩了。"""
+        from backend.roundtable.oneonone import make_proponent_roles
+        bad_template = "你是辩士,出力辩护。"   # 缺所有 4 个占位符
+        with self.assertRaises(ValueError) as ctx:
+            make_proponent_roles("做 X", "不做 X", template_a=bad_template)
+        self.assertIn("占位符", str(ctx.exception))
+
+    def test_make_proponent_roles_rejects_template_missing_some_placeholders(self):
+        """缺一个占位符也要 raise(部分缺 = silent 半丢)。"""
+        from backend.roundtable.oneonone import make_proponent_roles, PROPONENT_PROMPT_TEMPLATE
+        partial = PROPONENT_PROMPT_TEMPLATE.replace("{opponent_stance}", "")
+        with self.assertRaises(ValueError):
+            make_proponent_roles("a", "b", template_b=partial)
+
+    def test_make_proponent_roles_accepts_custom_template_with_all_placeholders(self):
+        """custom template 含全 4 个占位符 → 正常 format,不 raise。"""
+        from backend.roundtable.oneonone import make_proponent_roles
+        custom = "正方/反方 自定义:{stance_label}={stance},vs {opponent_label}={opponent_stance}"
+        roles = make_proponent_roles("a", "b", template_a=custom)
+        self.assertIn("a", roles[0].system_prompt)
+        self.assertIn("b", roles[0].system_prompt)
+        # template_b 走 default,不影响
+        self.assertIn("立场不可摇摆", roles[1].system_prompt)
+
     def test_frame_stances_strips_code_fence(self):
         """LLM 常把 JSON 包在 ```json``` 里,framing 要能拆。"""
         from backend.roundtable.oneonone import frame_stances

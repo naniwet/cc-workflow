@@ -82,6 +82,32 @@ PROPONENT_PROMPT_TEMPLATE = """你是{stance_label}(辩士),你的立场是:**{s
 # --------------------------------------------------------------------------- #
 
 
+_REQUIRED_TEMPLATE_PLACEHOLDERS = (
+    "{stance}", "{opponent_stance}", "{stance_label}", "{opponent_label}",
+)
+
+
+def validate_proponent_template(template: str, role_label: str) -> None:
+    """校验 PROPONENT system_prompt 模板含全部 4 个占位符。
+
+    用户在 #settings/roles 改了"正方"/"反方"system_prompt 时,如果删了
+    占位符,Python `str.format()` 不会报错,但生成的 prompt 里完全没有
+    立场信息 — silent failure。这条 guard 把 silent 变 loud。
+
+    POST /oneonone 在 framing 之前调一次(早 fail),make_proponent_roles
+    再调一次(防御性兜底)。raise ValueError 让 caller 知道是用户的 prompt
+    错(转 400),不是 LLM 抽风(那会转 500)。
+    """
+    missing = [p for p in _REQUIRED_TEMPLATE_PLACEHOLDERS if p not in template]
+    if missing:
+        raise ValueError(
+            f"'{role_label}' system_prompt 模板缺少占位符: {missing}。"
+            f"用户在 #settings/roles 改 prompt 时必须保留全部 4 个占位符 "
+            f"({_REQUIRED_TEMPLATE_PLACEHOLDERS}) — 立场字符串靠这些占位符注入,"
+            f"否则两个辩士各自变成'无立场辩士',胡乱辩论。"
+        )
+
+
 def proponent_role_placeholders() -> list[Role]:
     """供 `GET /roundtables/models` 列出 1v1 角色用 — system_prompt 是带
     {stance} / {opponent_stance} / {stance_label} / {opponent_label} 占位符
@@ -94,7 +120,13 @@ def proponent_role_placeholders() -> list[Role]:
     ]
 
 
-def make_proponent_roles(stance_a: str, stance_b: str) -> list[Role]:
+def make_proponent_roles(
+    stance_a: str,
+    stance_b: str,
+    *,
+    template_a: str = PROPONENT_PROMPT_TEMPLATE,
+    template_b: str = PROPONENT_PROMPT_TEMPLATE,
+) -> list[Role]:
     """Build the two PROPONENT Role instances for a 1v1 session.
 
     name 固定 "正方" / "反方" — 这是用户感知层术语(spec §4.1),
@@ -102,16 +134,22 @@ def make_proponent_roles(stance_a: str, stance_b: str) -> list[Role]:
     name 字段直接用中文跟 4 派(极简派 / 场景派 等)的命名风格一致,
     PWA / synth 渲染时就是这两个字符串。
 
+    template_a / template_b: 默认 PROPONENT_PROMPT_TEMPLATE,但允许 caller
+    传入用户在 #settings/roles 覆盖的 system_prompt(必须含全部 4 个占位符)。
+    每个 template 调 format 前过 validate_proponent_template 防 silent loss。
+
     preferred_model / temperature 走 Role default(v4-flash / 0.7),
     用户可通过 #settings/roles 给"正方"/"反方"单独 override。
     """
-    prompt_a = PROPONENT_PROMPT_TEMPLATE.format(
+    validate_proponent_template(template_a, "正方")
+    validate_proponent_template(template_b, "反方")
+    prompt_a = template_a.format(
         stance_label="正方",
         stance=stance_a,
         opponent_label="反方",
         opponent_stance=stance_b,
     )
-    prompt_b = PROPONENT_PROMPT_TEMPLATE.format(
+    prompt_b = template_b.format(
         stance_label="反方",
         stance=stance_b,
         opponent_label="正方",
