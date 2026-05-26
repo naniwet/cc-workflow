@@ -2568,6 +2568,58 @@ pre {
   margin-left: auto;
 }
 
+/* 决断员 verdict block — 警示色边框(橙色)区分于 synth 的默认色。
+   用户每次看到都该意识到"这是 AI 拍的不是我拍的"。 */
+.rt-verdict {
+  border: 2px solid #ea580c;       /* tailwind orange-600 */
+  background: rgba(234, 88, 12, 0.06);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-top: var(--space-4);
+}
+.rt-verdict h2 {
+  color: #ea580c;
+  margin-top: 0;
+}
+.rt-verdict-warning {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-weight: normal;
+  margin-left: var(--space-2);
+}
+.rt-verdict-headline {
+  font-size: var(--text-base);
+  font-weight: 600;
+  padding: var(--space-2) var(--space-3);
+  background: rgba(234, 88, 12, 0.10);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-3);
+}
+.rt-verdict-winner {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: rgba(234, 88, 12, 0.10);
+  border-radius: var(--radius-sm);
+}
+.rt-verdict-pending {
+  border-style: dashed;
+}
+
+/* 新建 form 的 决断员 checkbox 行 */
+.rt-decider-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  color: var(--text);
+}
+.rt-decider-row input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
 /* 1v1 / 4 派 mode chip — 在 statusTag 旁边显示。颜色跟 statusTag 同视觉
    层级,小一点的字号 + 圆角让它跟 status 区分开。 */
 .rt-mode-chip {

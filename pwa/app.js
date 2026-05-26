@@ -4150,8 +4150,9 @@ function _populateRtModelConfig(mode = 'roundtable') {
   //  - oneonone: proponent(正方 / 反方)+ synthesizer(共用整理员)
   // 后端 /oneonone /roundtables 都各自只接受 mode 域的 role_models,
   // 这里 UI 提前过滤避免用户改了不被读的字段心智混乱。
+  // 决断员两个 mode 都可能用,统一显示。proponent 只在 1v1 显示。
   const visibleRoles = (mode === 'oneonone')
-    ? roles.filter((r) => r.kind === 'proponent' || r.kind === 'synthesizer')
+    ? roles.filter((r) => r.kind === 'proponent' || r.kind === 'synthesizer' || r.kind === 'decider')
     : roles.filter((r) => r.kind !== 'proponent');
   const saved = _loadRtRoleModels();
   slot.innerHTML = visibleRoles.map((r) => _renderRoleModelPicker(r, models, saved)).join('') + `
@@ -4169,6 +4170,7 @@ function _renderRoleModelPicker(role, models, savedOverrides) {
   const kindHint = role.kind === 'synthesizer' ? '<span class="muted rt-role-kind">(整理员)</span>'
                   : role.kind === 'reviewer' ? '<span class="muted rt-role-kind">(审查员)</span>'
                   : role.kind === 'proponent' ? '<span class="muted rt-role-kind">(1v1 对抗)</span>'
+                  : role.kind === 'decider' ? '<span class="muted rt-role-kind">(决断员)</span>'
                   : '';
   const isOverride = current !== role.default_model;
   const radios = models.map((m) => {
@@ -4332,6 +4334,10 @@ function renderRoundtablesView() {
             value: '1',
           })}
         </div>
+        <label class="rt-decider-row" title="勾选后 synth 之上额外给 AI 推荐方案">
+          <input type="checkbox" name="enable_decider" value="1">
+          <span>我要最终结果(AI 拍板,在 synth 之上额外给推荐方案 + 理由 + 代价 + 备选)</span>
+        </label>
         <details class="rt-model-config" data-details-id="rt-model-config">
           <summary>🎛 模型配置(默认即可)</summary>
           <div class="rt-model-config-body" id="rt-model-config-slot">
@@ -4485,8 +4491,8 @@ async function onCreateRoundtable(e) {
     // role_models 按 mode 过滤 — 4 派 不能误把 1v1 正方/反方 的 override 发给
     // /roundtables(后端会 400);1v1 同理。_populateRtModelConfig 已经只显示
     // 当前 mode 的角色,但 localStorage 里的老 override 可能还在,这里再过一遍。
-    const roundtableRoles = new Set(['极简派', '场景派', '借鉴派', '悲观派', '整理员', '审查员']);
-    const oneononeRoles = new Set(['正方', '反方', '整理员']);
+    const roundtableRoles = new Set(['极简派', '场景派', '借鉴派', '悲观派', '整理员', '审查员', '决断员']);
+    const oneononeRoles = new Set(['正方', '反方', '整理员', '决断员']);
     const allowedRoles = mode === 'oneonone' ? oneononeRoles : roundtableRoles;
     const filteredOverrides = {};
     for (const [k, v] of Object.entries(overrides)) {
@@ -4496,6 +4502,8 @@ async function onCreateRoundtable(e) {
     const body = { question: fd.question };
     if (Object.keys(filteredOverrides).length > 0) body.role_models = filteredOverrides;
     if (attachments.length > 0) body.attachments = attachments;
+    // 决断员 checkbox(默认关) — 勾上 backend synth 之后跑一次出 verdict
+    if (fd.enable_decider === '1') body.enable_decider = true;
 
     let endpoint;
     if (mode === 'oneonone') {
@@ -4606,7 +4614,8 @@ function paintRoundtableDetail(id, row) {
   const reviewerKey = reviewer
     ? `${reviewer.hit_max_drills ? '1' : '0'}:${reviewer.converged ? '1' : '0'}`
     : 'null';
-  const sig = `${status}:${turnsDone}:${hasR3 ? '1' : '0'}:${errorKey}:${reviewerKey}`;
+  const hasVerdict = !!row.verdict;
+  const sig = `${status}:${turnsDone}:${hasR3 ? '1' : '0'}:${hasVerdict ? '1' : '0'}:${errorKey}:${reviewerKey}`;
 
   const view = $('view');
   const alreadyPainted = view.querySelector(`.rt-detail[data-rt-id="${esc(id)}"]`);
@@ -4663,6 +4672,38 @@ function paintRoundtableDetail(id, row) {
     </section>
   `);
 
+  // 决断员 verdict block — opt-in 时显示(警示色边框提醒"这是 AI 拍板")。
+  // verdict 段 5 段:推荐方案(单行) / 理由 / 代价 / 备选(bullet 列表) /
+  // 胜方判定(1v1 单行)。decider 失败时 verdict.parsed["推荐方案"] 含
+  // "决断员调用失败" 字样 — 用户 opt-in 了该知道。
+  // pending state:decider_enabled=true 但 verdict 还没生成 → 显示 placeholder
+  const v = row.verdict;
+  let verdictBlock = '';
+  if (v) {
+    const winner = v.parsed['胜方判定'];
+    verdictBlock = `
+      <section class="rt-verdict">
+        <h2>⚠ 决断员推荐 <span class="rt-verdict-warning">AI 拍板,仅供参考</span></h2>
+        ${v.parsed['推荐方案'] ? `<div class="rt-verdict-headline">${esc(v.parsed['推荐方案'])}</div>` : ''}
+        ${_rtSection('理由', v.parsed['理由'])}
+        ${_rtSection('代价', v.parsed['代价'])}
+        ${_rtSection('备选', v.parsed['备选'])}
+        ${winner ? `<div class="rt-verdict-winner"><strong>胜方判定:</strong> ${esc(winner)}</div>` : ''}
+        <details class="rt-r3-raw">
+          <summary>原始 markdown</summary>
+          <pre>${esc(v.raw)}</pre>
+        </details>
+      </section>
+    `;
+  } else if (row.decider_enabled && r3 && status !== 'error') {
+    verdictBlock = `
+      <section class="rt-verdict rt-verdict-pending">
+        <h2>⚠ 决断员推荐 <span class="rt-verdict-warning">生成中...</span></h2>
+        <p class="muted">整理员综合完成后,决断员会基于 synth + R1/R2 给出推荐方案 / 理由 / 代价 / 备选。</p>
+      </section>
+    `;
+  }
+
   // Render one block per round that has any content (so partial sessions
   // show what's done so far). 遍历所有 discovered round(含 auto-drill 续问
   // 产生的 round >= critiqueRounds+2),按 round 升序排列。
@@ -4718,6 +4759,7 @@ function paintRoundtableDetail(id, row) {
     ${errorBlock}
     <div class="rt-detail" data-rt-id="${esc(id)}">
       ${synthBlock}
+      ${verdictBlock}
       ${roundBlocks.join('')}
       ${bannerHtml}
       ${continueInputHtml}
@@ -5325,6 +5367,7 @@ function _renderSettingsRoleModelPicker(role, models) {
   const kindHint = role.kind === 'synthesizer' ? '<span class="muted rt-role-kind">(整理员)</span>'
                   : role.kind === 'reviewer' ? '<span class="muted rt-role-kind">(审查员)</span>'
                   : role.kind === 'proponent' ? '<span class="muted rt-role-kind">(1v1 对抗)</span>'
+                  : role.kind === 'decider' ? '<span class="muted rt-role-kind">(决断员 · opt-in)</span>'
                   : '';
   const radios = models.map((m) => {
     const selected = m.name === current;
