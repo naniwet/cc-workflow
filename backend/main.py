@@ -2004,10 +2004,16 @@ def create_oneonone(req: NewOneOnOneRequest) -> dict:
                     "msg": str(e),
                 })
 
-    # 3. framing — 一次 LLM 调用拆立场
+    # 3. framing — 一次 LLM 调用拆立场。framing_model 跟"整理员"同源(用户
+    # 在 #settings/roles 改了整理员 model 时,framing 一起切),避免维护两套
+    # framing 配置。
+    framing_model = role_models_store.effective_model_for(
+        "整理员", roundtable_oneonone.DEFAULT_FRAMING_MODEL,
+    )
     try:
         stance_a, stance_b = roundtable_oneonone.frame_stances(
             enriched_question, roundtable_model.call_model,
+            framing_model=framing_model,
         )
     except roundtable_oneonone.NonBinaryQuestionError as e:
         raise HTTPException(400, {

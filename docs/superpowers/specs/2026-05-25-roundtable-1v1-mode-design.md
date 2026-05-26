@@ -180,6 +180,15 @@ POST /oneonone
 
 ---
 
+## 5.X Known UX / quality 限制(2026-05-26 self-review 补)
+
+| 现象 | 决定 | 何时翻案 |
+|---|---|---|
+| Framing 同步阻塞 30-180s(v4-pro reasoning model thinking phase) | 接受 — POST /oneonone 必须等 framing 完才 202;实测 user 第一次跑没耐心可改成 background framing + jsonl `type="framing"` turn | 用户 > 3 次反馈"卡得不能忍" |
+| Framing JSON 解析失败 retry 1 次仍挂 | 接受 fail → 500 + hint。**不再 retry**(成本控制 + 防 user 错以为系统通) | retry rate > 20% sessions |
+| Synth 5 段对 1v1 "分歧轴" 段冗余(分歧轴 = 用户问题本身) | **接受冗余** — 不为 1v1 单写 synth prompt。可读性优先于精简,用户能看懂"分歧轴 = 立场 A vs 立场 B"就是 1v1 的本质 | 用户 > 3 次反馈"分歧轴段重复废话" |
+| 辩士"立场不可摇摆 + 强 attack" 是逆 LLM 训练目标 prompt,实测可能效果不稳 | 接受 — 4 条约束已是 prompt engineering 最大努力。LLM 抽风时输出温和总结无法 100% 防 | 找到更强 prompt pattern 或 model 升级 |
+
 ## 6. Out of Scope / Future
 
 | 后续可能项 | 为什么不做 |

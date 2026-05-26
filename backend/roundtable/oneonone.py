@@ -181,44 +181,72 @@ _FRAMING_SYSTEM_PROMPT = """你的任务:把用户的决策问题框成两个**�
 """
 
 # Framing 用更强的 model — 这是 1v1 整轮的 gate,框错了后面全错。
-# 跟整理员同款 v4-pro,可被用户 override(future:加个 settings 项)。
-_FRAMING_MODEL = "deepseek-v4-pro"
+# 默认 v4-pro;caller(POST /oneonone)会从 role_models_store 读"整理员"
+# override 作为 framing_model 传入(W6:跟整理员同源,用户改一处生效两处)。
+DEFAULT_FRAMING_MODEL = "deepseek-v4-pro"
+
+# Framing wall clock 期待:30-180s(v4-pro 是 reasoning model,thinking phase
+# 慢)。call_model 会自动给 reasoning model 走 300s timeout(model.py
+# _REASONING_MODELS),framing 不需要自己管 timeout。
+#
+# UX 后果:POST /oneonone 是同步路径(framing 完才返 202),用户点 submit
+# 后 PWA 卡 30-180s 才进 detail page。这跟 round-table 立即 202 体验
+# 不对称 — 未来改进项是把 framing 也丢 background thread + jsonl 一个
+# type="framing" turn,但 MVP 接受同步阻塞。
 
 # 匹配 ```json ... ``` / ``` ... ``` 包裹的 JSON(LLM 常自己包一层)
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 
 
-def frame_stances(question: str, model_fn: ModelFn) -> Tuple[str, str]:
-    """用一次 LLM 调用把决策问题拆成立场 A/B。
+def frame_stances(
+    question: str,
+    model_fn: ModelFn,
+    *,
+    framing_model: str = DEFAULT_FRAMING_MODEL,
+) -> Tuple[str, str]:
+    """用一次 LLM 调用把决策问题拆成立场 A/B,JSON parse 失败 retry 1 次。
+
+    framing_model: caller 可传入用户 override(eg. role_models_store
+    给"整理员"设了别的 model 时,framing 同源切换)。默认 v4-pro。
 
     Returns: (stance_a, stance_b) — 两个互斥立场字符串
     Raises:
-      - NonBinaryQuestionError: LLM 判定非二值决策(带 hint)
-      - ValueError: LLM 输出无法解析(JSON 坏 / 缺 key)— caller 应转
-        500(framing failed)而非 400(用户没错,LLM 抽风)
+      - NonBinaryQuestionError: LLM 判定非二值决策(带 hint)— **不 retry**,
+        这是 LLM 的 deliberate judgment,不是抽风。
+      - ValueError: LLM 输出无法解析(JSON 坏 / 缺 key) retry 1 次仍失败 →
+        caller 应转 500(framing failed)而非 400(用户没错,LLM 抽风)
     """
-    reply = model_fn(
-        _FRAMING_MODEL,
-        _FRAMING_SYSTEM_PROMPT,
-        f"问题:{question}",
-        0.0,
-    )
-    cleaned = _CODE_FENCE_RE.sub("", reply).strip()
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"framing LLM returned non-JSON: {reply!r}") from e
-
-    if not isinstance(data, dict):
-        raise ValueError(f"framing LLM returned non-object: {data!r}")
-
-    if "error" in data:
-        if data["error"] == "non_binary_question":
-            raise NonBinaryQuestionError(data.get("hint", ""))
-        raise ValueError(f"framing LLM returned unknown error: {data['error']!r}")
-
-    a = data.get("a")
-    b = data.get("b")
-    if not isinstance(a, str) or not isinstance(b, str) or not a or not b:
-        raise ValueError(f"framing LLM missing or empty a/b keys: {data!r}")
-    return a, b
+    last_err: Optional[ValueError] = None
+    for attempt in range(2):        # 1 try + 1 retry
+        # 第 2 次重试 加强 JSON-only 提示(应对 LLM 抽风返 markdown / 加解释)
+        user_msg = (
+            f"问题:{question}\n\n再次提醒:严格只输出 JSON,不要 markdown 包裹,"
+            f"不要任何其它文字。"
+            if attempt > 0 else f"问题:{question}"
+        )
+        reply = model_fn(framing_model, _FRAMING_SYSTEM_PROMPT, user_msg, 0.0)
+        cleaned = _CODE_FENCE_RE.sub("", reply).strip()
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            last_err = ValueError(f"framing LLM returned non-JSON: {reply!r}")
+            continue
+        if not isinstance(data, dict):
+            last_err = ValueError(f"framing LLM returned non-object: {data!r}")
+            continue
+        # NonBinaryQuestionError 是 LLM deliberate 判断,不 retry — 立即 raise
+        if "error" in data:
+            if data["error"] == "non_binary_question":
+                raise NonBinaryQuestionError(data.get("hint", ""))
+            last_err = ValueError(
+                f"framing LLM returned unknown error: {data['error']!r}",
+            )
+            continue
+        a = data.get("a")
+        b = data.get("b")
+        if isinstance(a, str) and isinstance(b, str) and a and b:
+            return a, b
+        last_err = ValueError(f"framing LLM missing or empty a/b keys: {data!r}")
+    # retry 用完仍失败 → 抛最后一次的 err
+    assert last_err is not None
+    raise last_err

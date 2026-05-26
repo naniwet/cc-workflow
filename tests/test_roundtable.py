@@ -867,6 +867,50 @@ class OneOnOneRolesTests(unittest.TestCase):
         a, b = frame_stances("Q?", fake_llm)
         self.assertEqual((a, b), ("上线", "不上线"))
 
+    def test_frame_stances_retries_once_on_garbage_then_succeeds(self):
+        """第一次 LLM 返非 JSON,第二次返合法 → 不抛,返立场。"""
+        from backend.roundtable.oneonone import frame_stances
+        calls = []
+        def fake_llm(model, system, user, temp):
+            calls.append(user)
+            if len(calls) == 1:
+                return "好的,这是 JSON: 不过我忘了格式"  # garbage
+            return '{"a": "立场 A", "b": "立场 B"}'
+        a, b = frame_stances("Q?", fake_llm)
+        self.assertEqual((a, b), ("立场 A", "立场 B"))
+        self.assertEqual(len(calls), 2)
+        # 第二次 user prompt 含"严格只输出 JSON"加强提示
+        self.assertIn("严格只输出 JSON", calls[1])
+
+    def test_frame_stances_non_binary_does_not_retry(self):
+        """LLM 返 NonBinaryQuestionError 是 deliberate 判断,不 retry。"""
+        from backend.roundtable.oneonone import frame_stances, NonBinaryQuestionError
+        calls = []
+        def fake_llm(model, system, user, temp):
+            calls.append(user)
+            return '{"error": "non_binary_question", "hint": "..."}'
+        with self.assertRaises(NonBinaryQuestionError):
+            frame_stances("Q?", fake_llm)
+        self.assertEqual(len(calls), 1)    # 不 retry
+
+    def test_frame_stances_two_failures_raises(self):
+        """两次都 garbage → ValueError(caller 转 500)。"""
+        from backend.roundtable.oneonone import frame_stances
+        def fake_llm(model, system, user, temp):
+            return "not json"
+        with self.assertRaises(ValueError):
+            frame_stances("Q?", fake_llm)
+
+    def test_frame_stances_uses_caller_provided_framing_model(self):
+        """framing_model kwarg 透传到 model_fn(W6:用户 override 整理员 model 时 framing 同源)。"""
+        from backend.roundtable.oneonone import frame_stances
+        captured = {}
+        def fake_llm(model, system, user, temp):
+            captured["model"] = model
+            return '{"a": "x", "b": "y"}'
+        frame_stances("Q?", fake_llm, framing_model="moonshot-v1-32k")
+        self.assertEqual(captured["model"], "moonshot-v1-32k")
+
 
 if __name__ == "__main__":
     unittest.main()
