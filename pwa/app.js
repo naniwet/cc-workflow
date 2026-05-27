@@ -4679,7 +4679,10 @@ function paintRoundtableDetail(id, row) {
   // pending state:decider_enabled=true 但 verdict 还没生成 → 显示 placeholder
   const v = row.verdict;
   let verdictBlock = '';
-  if (v) {
+  // Defensive:backend 正常路径 verdict 要么 null 要么 {raw, parsed},
+  // 但碰到 server-PWA 版本错位 / polling race / 旧 cache 时,可能拿到
+  // {raw} 缺 parsed 的半成品。当成"没 verdict"处理,不抛 undefined.
+  if (v && v.parsed && typeof v.parsed === 'object') {
     // 失败态识别:debate.py decider catch 块写的 "(决断员调用失败,无法生成推荐)"
     // 字符串塞进"推荐方案" 段。这里检测 + 独立 CSS class,避免失败态用橙色加粗
     // headline 看起来跟正常推荐一样。
