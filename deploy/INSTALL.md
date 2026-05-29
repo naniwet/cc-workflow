@@ -158,6 +158,20 @@ install -m 755 /root/projects/cc-workflow/agent-run.sh /usr/local/bin/agent-run
 
 (Or `ln -sf` if you want edits to flow through without reinstall.)
 
+## 3.1. Sync subagent team into ~/.claude/agents/
+
+The repo ships a version-controlled subagent team under `.claude/agents/`
+(code-dev / code-review / spec-writer / plan-writer / user-acceptance-tester).
+Both the PWA `#settings/agents` CRUD **and** the claude CLI's subagent
+dispatch read from `~/.claude/agents/` — NOT the repo dir. Symlink them:
+
+```bash
+bash /root/projects/cc-workflow/scripts/sync-agents.sh
+```
+
+Re-run after every `git pull` that adds/removes a file under `.claude/agents/`.
+It's idempotent and won't clobber non-symlink files you put there by hand.
+
 ## 3.5. Install the tool-approval hook + global allow list
 
 Two pieces wire together to make trust=on / trust=off behave the way
