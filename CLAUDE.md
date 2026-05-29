@@ -178,6 +178,35 @@ PWA 打成 Android APK 有两个脚本,共享 keystore / SDK / gradle wrapper:
 
 ---
 
+## Subagent 团队(team-chat 模式)
+
+`.claude/agents/` 下有一组 project-shared subagent,把"代码任务"拆成各司其职的角色。**主会话(你)= manager**,用户只跟主会话提需求,主会话按 pipeline dispatch 子 agent。**不要建 `manager.md`** —— 主会话已经是 manager,加一层 = 递归 dispatch 浪费 token。
+
+| subagent | 职责 | 不做 |
+|---|---|---|
+| `spec-writer` | 模糊需求 → spec md(含 PM brainstorm)| 写代码 / 写 plan |
+| `plan-writer` | spec → bite-size task 列表 | 写代码 / 评判 spec 对错 |
+| `code-dev` | 写代码 + 写测试(TDD,同一只手)| 最终 review |
+| `code-review` | 独立审计代码 / 设计 | 写代码 / 改代码 |
+| `user-acceptance-tester` | 模拟用户走 E2E + 报 bug | 写 unit test / 修 bug |
+
+**Manager pipeline(主会话收到代码需求时的默认流程):**
+
+1. **Brainstorm** 模糊需求(沟通底线:列假设 / 列选项 / 等用户 confirm 方向)
+2. dispatch `spec-writer` → 用户 review spec → 改 / 确认
+3. dispatch `plan-writer` → 用户 review plan → 改 / 确认
+4. for each task in plan:dispatch `code-dev` → dispatch `code-review` → 修 Block 后再 review → 通过
+5. dispatch `user-acceptance-tester` 走查 E2E(能跑的环境)
+6. 全部绿 → commit + push,给用户总结
+
+**纪律:**
+- **每个 stage 之间留 user checkpoint** —— spec / plan 都要用户 confirm 才进下一步,不要一口气跑到底
+- **TDD 红线:** 测试跟实现都归 code-dev,不拆 tester 写 unit test(user-acceptance-tester 只做 E2E)
+- **trivial 任务跳过 pipeline** —— 改个 typo / bump 版本号这种,主会话直接做,不走 5 段流程
+- **简单任务可跳 spec / plan,但 TDD(code-dev 写测试)不能跳**
+
+---
+
 ## 复杂度边界(不要越线)
 
 按 CLAUDE.md 方法论 §3.3,本项目**刻意拒绝**以下"将来可能有用"的复杂度:
