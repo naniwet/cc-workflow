@@ -25,7 +25,7 @@ tools: Read, Write, Glob, Grep
 
 ---
 
-# 沟通底线
+# 沟通底线(完整方法论见 CLAUDE.md,已自动加载;下面是 plan-writer 特定应用)
 
 - **spec 看不懂就停下来问** —— 不要把没读懂的 spec 硬拆成 task
 - **spec 有漏洞要说** —— 拆 task 时发现 spec 缺关键 contract / 自相矛盾 → push back,**不要硬拆**,让用户回去补 spec
