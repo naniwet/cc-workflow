@@ -1235,22 +1235,25 @@ def merge_session_branch(name: str, body: dict = Body(default={})) -> dict:
 
 
 @app.delete("/workspaces/{name}/session", dependencies=PROTECT)
-def reset_workspace_session(name: str) -> dict:
-    """Reset the PWA's conversation session for this workspace.
+def reset_workspace_session(name: str, session_key: Optional[str] = None) -> dict:
+    """Reset a conversation session for this workspace.
 
-    Drops ~/.cc-state/sessions.json[pwa-<name>] (the row containing
+    Drops ~/.cc-state/sessions.json[<session_key>] (the row containing
     claude_session_id + the token-tracking last_input_tokens used by
-    DIY compact). Next agent-run for this workspace starts a fresh
-    session with no --resume.
+    DIY compact). Next agent-run for this workspace+session starts fresh
+    (no --resume).
 
-    Does NOT touch cron loops' or Feishu chats' sessions — those use
-    different session_keys.
+    session_key 缺省 = pwa-<name>(PWA 默认 session,向后兼容)。多 session
+    时 PWA 传当前选中的 session_key,避免误重置默认 session。
+
+    Does NOT touch cron loops' or Feishu chats' sessions unless their
+    session_key is explicitly passed.
     """
     target = config.WORKSPACES_DIR / name
     if not (target / ".git").exists():
         raise HTTPException(404, {"error": "workspace not found", "name": name})
 
-    key = f"pwa-{name}"
+    key = session_key or f"pwa-{name}"
     cleared: list[str] = []
 
     try:

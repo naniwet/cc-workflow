@@ -548,6 +548,29 @@ const workspaceSessionScroll = {};                  // key: ws name → {scrollT
 const workspaceStreamState = {};                     // key: ws name → {eventCount,newEvents,atBottom}
 const workspaceTurnOverrides = {};                   // key: run id → expanded bool
 
+// 多 session per workspace。一个 workspace = 一个 repo,但可以并行跑多条独立
+// 工作线(session_key),各自 worktree + 分支 + --resume 链。
+//   workspaceActiveSession[ws] = 当前选中的 session_key(undefined = "全部"
+//     视图:不过滤 timeline,Run 投到默认 pwa-<ws>)。设了具体值 = 过滤
+//     timeline 到该 session + Run 投到它。
+//   workspaceSessionsList[ws] = {worktree_mode, sessions:[...]} 从
+//     GET /workspaces/<ws>/sessions 拉来缓存,detail 页进入时刷新。
+const workspaceActiveSession = {};
+const workspaceSessionsList = {};
+
+// Run 投递目标:选了具体 session 就投它,否则默认 pwa-<ws>(= 现状)。
+function activeSessionKey(ws) {
+  return workspaceActiveSession[ws] || `pwa-${ws}`;
+}
+
+// detail 页 timeline 过滤:选了具体 session 才过滤,"全部"视图不动(避免把
+// cron / 飞书等其它 session_key 的 run 从 workspace timeline 藏掉 —— 那是回归)。
+function _filterTurnsBySession(ws, turns) {
+  const active = workspaceActiveSession[ws];
+  if (!active) return turns;
+  return turns.filter((t) => (t.session_key || `pwa-${ws}`) === active);
+}
+
 // 追踪上次 render 时每个 turn 的 status,用来 detect "刚结束" 的 turn
 // (running/queued → done/failed)。这种 turn 自动写一笔 override = true,
 // 让 workspaceTurnExpansion 的"manual override 优先"规则生效保持展开,
@@ -729,7 +752,7 @@ async function _dispatchAllQueues() {
         body: JSON.stringify({
           workspace: ws,
           prompt: next.prompt,
-          session_key: `pwa-${ws}`,
+          session_key: activeSessionKey(ws),
           source: 'pwa',
           ...(attachmentPaths ? { attachments: attachmentPaths } : {}),
         }),
@@ -1923,6 +1946,30 @@ function _onFormPickerClick(e) {
 // form-picker work without renderXxx needing to wire its own handlers.
 document.addEventListener('click', _onFormPickerClick);
 
+// 多 session chip 条点击(delegation:mobile + desktop detail 共用)。
+//   普通 chip → 切 active session(空 = "全部")→ 重画
+//   "+ 新建" → prompt 名字 → 设为 active → 重画(worktree 首次 Run 时建)
+document.addEventListener('click', (e) => {
+  const chip = e.target.closest('.rt-session-chip');
+  if (!chip) return;
+  const ws = chip.dataset.ws;
+  if (!ws) return;
+  if (chip.classList.contains('rt-session-new')) {
+    const raw = prompt('新 session 名(只用字母/数字/-,会建独立 worktree + 分支):', '');
+    if (raw == null) return;
+    const clean = raw.trim().replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '');
+    if (!clean) { showError('session 名不能为空 / 只含非法字符'); return; }
+    // 命名方案 α:<ws>--<name>,映射成分支 cc/<ws>-<ws>--<name>
+    workspaceActiveSession[ws] = `${ws}--${clean}`;
+    renderWorkspaceDetailView(ws);
+    return;
+  }
+  // 普通 chip:data-session 为空 = "全部"(active=undefined)
+  const key = chip.dataset.session || '';
+  workspaceActiveSession[ws] = key || undefined;
+  renderWorkspaceDetailView(ws);
+});
+
 // Cancel button on long-running rows. Delegated rather than bound per
 // row because rows are re-rendered on every poll; binding individually
 // would either leak or require a binding pass in every renderXxx.
@@ -2294,14 +2341,18 @@ async function _onResetSessionClick(e) {
   const ws = btn.dataset.ws;
   if (!ws) return;
   _closeAncestorMenu(btn);
+  const sk = activeSessionKey(ws);
   if (!confirm(
-    `开启 "${ws}" 的新对话?\n\n` +
-    `下一次 PWA prompt 会从一张白纸开始,Claude 不再记得之前聊过什么。\n\n` +
-    `(cron loops 和飞书的会话不受影响,只重置 PWA 这条线。)`
+    `开启 "${ws}" 的新对话?(session: ${sk})\n\n` +
+    `下一次 prompt 会从一张白纸开始,Claude 不再记得之前聊过什么。\n\n` +
+    `(只重置当前选中的 session,其它 session / cron / 飞书不受影响。)`
   )) return;
   btn.disabled = true;
   try {
-    const result = await api(`/workspaces/${encodeURIComponent(ws)}/session`, { method: 'DELETE' });
+    const result = await api(
+      `/workspaces/${encodeURIComponent(ws)}/session?session_key=${encodeURIComponent(sk)}`,
+      { method: 'DELETE' },
+    );
     const what = (result?.cleared || []).join(' + ') || '(nothing cleared)';
     // 后端真删了 runs.db + log 文件,下一次 refreshAll 拉回来就是干净
     // 的新 session,前端不用做 cutoff 过滤(2025-05-16 之前一版用
@@ -2330,10 +2381,11 @@ async function _onMergeToMainClick(e) {
   const ws = btn.dataset.ws;
   if (!ws) return;
   _closeAncestorMenu(btn);
+  const sk = activeSessionKey(ws);
   if (!confirm(
-    `把 "${ws}" 当前 PWA session 的 cc/* 分支合并到 main 并推送?\n\n` +
-    `流程:rebase cc/${ws}-pwa-${ws} 到 main → fast-forward merge → git push origin main\n\n` +
-    `cc/* 分支保留,下一轮 PWA 对话继续在它上面 append commit。\n\n` +
+    `把 "${ws}" 的 session "${sk}" 的 cc/* 分支合并到 main 并推送?\n\n` +
+    `流程:rebase cc/${ws}-${sk} 到 main → fast-forward merge → git push origin main\n\n` +
+    `cc/* 分支保留,下一轮对话继续在它上面 append commit。\n\n` +
     `如果有冲突或 main worktree 不干净,操作会安全中止并提示。`
   )) return;
   btn.disabled = true;
@@ -2343,7 +2395,7 @@ async function _onMergeToMainClick(e) {
     const result = await api(`/workspaces/${encodeURIComponent(ws)}/merge-session-branch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ session_key: sk }),
     });
     if (result?.push_ok) {
       showToast('success', `${ws}: merged ${result.branch} → ${result.main_branch} + pushed`, { ttl: 3000 });
@@ -2561,7 +2613,9 @@ function workspaceColHtml(name, data, opts = {}) {
   //              也可以点 workspace name 跳到 detail 看完整版。
   // 渲染走同一个 _workspaceTurnHtml,handler / CSS 都共用。
   let timelineHtml;
-  const turns = _workspaceSessionTurns(data);
+  // detail 页按选中 session 过滤;overview 不过滤(避免藏掉 cron/飞书 run)。
+  const allTurns = _workspaceSessionTurns(data);
+  const turns = detail ? _filterTurnsBySession(name, allTurns) : allTurns;
   const turnsToShow = detail ? turns : turns.slice(-maxRows);
   _pinJustFinishedTurns(turnsToShow);
   const expandedTurns = workspaceTurnExpansion(
@@ -2691,6 +2745,7 @@ function workspaceColHtml(name, data, opts = {}) {
         </div>
         ${providerEngineBlock}
       </div>
+      ${detail ? _sessionBarHtml(name) : ''}
       <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
       ${_queueListHtml(name)}
       <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
@@ -2863,7 +2918,7 @@ async function onTriggerSubmit(e) {
       body: JSON.stringify({
         workspace: ws,
         prompt,
-        session_key: `pwa-${ws}`,
+        session_key: activeSessionKey(ws),
         source: 'pwa',
         ...(attachmentPaths ? { attachments: attachmentPaths } : {}),
       }),
@@ -2937,12 +2992,30 @@ function _rescrollAfterKeyboardSettles(ws) {
 //             history pollution). Replaced the earlier swipe-carousel
 //             on 2026-05-15.
 function renderWorkspaceDetailView(startName, opts = {}) {
+  // 进 detail 页拉一次该 workspace 的 session 列表(多 session chip 条用)。
+  // 拉回来后存 workspaceSessionsList[ws] 并触发重画。每次 poll 不重拉
+  // (列表变化只在新建 / 关闭 session 时,那两处会主动 refresh)。
+  _ensureWorkspaceSessions(startName);
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
   if (isMobile) {
     renderMobileWorkspaceDetail(startName, opts);
   } else {
     renderDesktopWorkspaceDetail(startName);
   }
+}
+
+// 拉 session 列表 → 缓存 → 重画 chip 条。force=true 时强拉(新建 / 关闭后)。
+async function _ensureWorkspaceSessions(name, { force = false } = {}) {
+  if (!force && workspaceSessionsList[name]) return;
+  try {
+    const info = await api(`/workspaces/${encodeURIComponent(name)}/sessions`);
+    workspaceSessionsList[name] = info;
+    // 只在还停在该 workspace detail 时重画(避免拉回来时用户已经走了)
+    const route = parseRoute();
+    if (route.name === 'workspace-detail' && route.id === name) {
+      renderWorkspaceDetailView(name);
+    }
+  } catch { /* 老 backend / 网络失败 → chip 条不显示,降级到单 session */ }
 }
 
 function renderMobileWorkspaceDetail(startName, opts = {}) {
@@ -2959,7 +3032,7 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
   const currentIdx = Math.max(0, sortedNames.indexOf(startName));
   const currentName = sortedNames[currentIdx];
   const data = groups[currentName] || { active: [], queued: [], recent: [] };
-  const turns = _workspaceSessionTurns(data);
+  const turns = _filterTurnsBySession(currentName, _workspaceSessionTurns(data));
   _pinJustFinishedTurns(turns);
   const expandedTurns = workspaceTurnExpansion(turns, workspaceTurnOverrides);
   const eventCount = expandedTurns.length + pendingApprovalsForWorkspace(currentName).length;
@@ -2982,6 +3055,45 @@ function _workspaceSessionTurns(data) {
     byId.set(id, { ...r, id });
   }
   return [...byId.values()].sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+}
+
+// 多 session chip 条 —— 只在 detail 页显示。worktree_mode=off 时整条隐藏
+// (off 把所有 session_key 压成 default,多 session 无意义)。
+// 布局:[全部] [pwa-ws 默认] [ws--fix-bug] ... [+ 新建]
+//   - "全部":view-only,不过滤 timeline,Run 投默认。active=undefined 时高亮
+//   - 具体 session chip:点了过滤 timeline + Run 投它
+//   - "+ 新建":弹个名字输入 → 设为 active(worktree 在首次 Run 时由
+//     agent-run.sh 自动建)
+function _sessionBarHtml(name) {
+  const info = workspaceSessionsList[name];
+  if (!info) return '';                          // 还没拉到列表 → 不显示(下次 poll 补)
+  if (info.worktree_mode === 'off') return '';   // off 模式无多 session 概念
+  const active = workspaceActiveSession[name];   // undefined = 全部
+  const sessions = info.sessions || [];
+  // 默认 session(pwa-<ws>)永远在,即使 runs.db 里还没它的 run。
+  const defaultKey = `pwa-${name}`;
+  const haveDefault = sessions.some((s) => s.session_key === defaultKey);
+  const chips = [];
+  // "全部" chip
+  chips.push(`<button class="rt-session-chip${!active ? ' is-active' : ''}"
+    data-ws="${esc(name)}" data-session="" type="button">全部</button>`);
+  if (!haveDefault) {
+    chips.push(`<button class="rt-session-chip${active === defaultKey ? ' is-active' : ''}"
+      data-ws="${esc(name)}" data-session="${esc(defaultKey)}" type="button">默认</button>`);
+  }
+  for (const s of sessions) {
+    const k = s.session_key;
+    // 显示名:默认那条显示"默认",其余去掉 <ws>-- 前缀只显示用户起的名
+    const label = k === defaultKey ? '默认'
+      : (k.startsWith(`${name}--`) ? k.slice(name.length + 2) : k);
+    const dot = s.last_status === 'running' ? ' ●' : '';
+    chips.push(`<button class="rt-session-chip${active === k ? ' is-active' : ''}"
+      data-ws="${esc(name)}" data-session="${esc(k)}" type="button"
+      title="${esc(k)} · ${s.run_count} runs${s.has_worktree ? ' · worktree' : ''}">${esc(label)}${dot}</button>`);
+  }
+  chips.push(`<button class="rt-session-chip rt-session-new"
+    data-ws="${esc(name)}" type="button">+ 新建</button>`);
+  return `<div class="rt-session-bar" data-ws="${esc(name)}">${chips.join('')}</div>`;
 }
 
 function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
@@ -3057,6 +3169,7 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
           </div>
         </details>
       </div>
+      ${_sessionBarHtml(name)}
       <div class="workspace-session-stream" data-ws="${esc(name)}" data-event-count="${esc(eventCount)}">
         ${turnsHtml}
       </div>

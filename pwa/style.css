@@ -716,6 +716,34 @@ body.is-dragging .ws-col:not(.dragging) {
 /* ============================================================================
  *  Timeline (chat-bubble rows)
  * ============================================================================ */
+/* 多 session chip 条 —— detail 页 timeline 上方。横向 chip,可换行。 */
+.rt-session-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0;
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.rt-session-chip {
+  font-size: var(--text-xs);
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rt-session-chip:hover { color: var(--text); border-color: var(--accent); }
+.rt-session-chip.is-active {
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 500;
+}
+.rt-session-new { border-style: dashed; }
+
 .ws-timeline {
   display: flex;
   flex-direction: column;
