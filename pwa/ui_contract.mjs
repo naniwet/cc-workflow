@@ -226,3 +226,44 @@ export function parseStreamLinesToEvents(rawLines) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// 多 session per workspace —— 纯函数(被 app.js import,被 contract test 覆盖)。
+//
+// 一个 workspace = 一个 repo,但可以并行跑多条独立工作线(session_key),
+// 各自 worktree + 分支 + --resume 链。命名方案 α:默认 pwa-<ws>,用户建的
+// 额外 session = <ws>--<name>。
+// ---------------------------------------------------------------------------
+
+// Run 投递目标:选了具体 session 投它,否则默认 pwa-<ws>(= 现状)。
+export function resolveRunSessionKey(ws, activeKey) {
+  return activeKey || `pwa-${ws}`;
+}
+
+// detail 页 timeline 过滤:activeKey 为空 = "全部"视图,原样返回(关键:
+// 不过滤,避免把 cron / 飞书等其它 session_key 的 run 藏掉 —— review W1)。
+// 选了具体 session 才过滤到它。无 session_key 的老 run 归到默认 pwa-<ws>。
+export function filterTurnsBySession(ws, turns, activeKey) {
+  if (!activeKey) return turns;
+  return turns.filter((t) => (t.session_key || `pwa-${ws}`) === activeKey);
+}
+
+// 是不是用户建的并行工作线(<ws>-- 前缀)。默认 pwa-<ws> / cron(loop 名)/
+// 飞书(feishu-*)都不算 —— 它们是"系统线",只在"全部"视图里看,不单独出 chip。
+export function isUserSession(ws, sessionKey) {
+  return typeof sessionKey === 'string' && sessionKey.startsWith(`${ws}--`);
+}
+
+// chip 显示名:去掉 <ws>-- 前缀。按 ws 名长度精确切(不靠 split),所以
+// ws 名本身含 -- 也不误切。非用户 session 原样返回。
+export function sessionChipLabel(ws, sessionKey) {
+  const prefix = `${ws}--`;
+  return sessionKey.startsWith(prefix) ? sessionKey.slice(prefix.length) : sessionKey;
+}
+
+// session_key → 文件系统安全段。必须跟 agent-run.sh 的 SESSION_SAFE
+// (tr -c 'A-Za-z0-9._-' '_')+ backend merge endpoint 的 re.sub 完全一致 ——
+// 三处派生同一个事实(review W3:别让 worktree 路径多处真相源漂移)。
+export function sessionSafe(sessionKey) {
+  return String(sessionKey).replace(/[^A-Za-z0-9._-]/g, '_');
+}

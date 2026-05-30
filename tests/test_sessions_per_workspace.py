@@ -144,6 +144,16 @@ class SessionsEndpointTests(unittest.TestCase):
         s2 = next(x for x in r2.json()["sessions"] if x["session_key"] == "myrepo--fix-bug")
         self.assertTrue(s2["has_worktree"])
 
+    def test_worktree_detection_uses_session_safe_path(self):
+        """cron loop 名含空格 → worktree 目录用 session_safe(空格替 _)。
+        endpoint 的 has_worktree 探测必须跟 agent-run.sh SESSION_SAFE 一致(W3)。"""
+        self._seed("myrepo", "daily report", "r1")   # session_key 含空格
+        # 真实 worktree 目录是 safe 版:myrepo-daily_report
+        (self.ws_dir / ".wt" / "myrepo-daily_report").mkdir(parents=True)
+        r = self.client.get("/workspaces/myrepo/sessions")
+        s = next(x for x in r.json()["sessions"] if x["session_key"] == "daily report")
+        self.assertTrue(s["has_worktree"])   # safe 派生命中,不是 raw "myrepo-daily report"
+
     def test_response_carries_worktree_mode(self):
         """PWA 用 worktree_mode 决定要不要显示多 session UI(off 时无意义)。"""
         self._seed("myrepo", "pwa-myrepo", "r1")

@@ -10,6 +10,11 @@ import {
   roundtablePersonaAvatarsHtml,
   workspaceAutoScrollState,
   workspaceTurnExpansion,
+  resolveRunSessionKey,
+  filterTurnsBySession,
+  isUserSession,
+  sessionChipLabel,
+  sessionSafe,
 } from '../pwa/ui_contract.mjs';
 
 test('status accent mapping follows the mobile overview design', () => {
@@ -236,4 +241,51 @@ test('parseStreamLinesToEvents: result 行带 token 统计', () => {
   assert.deepEqual(parseStreamLinesToEvents(lines), [
     { kind: 'result', subtype: 'success', inTokens: 1234, outTokens: 56, text: '汇总文本' },
   ]);
+});
+
+// ---------- 多 session per workspace 纯函数(W2 review fix)----------
+
+test('resolveRunSessionKey: 选了 session 投它,否则默认 pwa-<ws>', () => {
+  assert.equal(resolveRunSessionKey('myrepo', undefined), 'pwa-myrepo');
+  assert.equal(resolveRunSessionKey('myrepo', ''), 'pwa-myrepo');
+  assert.equal(resolveRunSessionKey('myrepo', 'myrepo--fix-bug'), 'myrepo--fix-bug');
+});
+
+test('filterTurnsBySession: "全部"(无 active)不过滤,避免藏 cron/飞书 run', () => {
+  const turns = [
+    { id: 'a', session_key: 'pwa-myrepo' },
+    { id: 'b', session_key: 'daily-report' },   // cron
+    { id: 'c', session_key: 'myrepo--fix-bug' },
+  ];
+  // 全部视图:原样返回(W1 footgun 防护 — cron run 不被藏)
+  assert.equal(filterTurnsBySession('myrepo', turns, undefined).length, 3);
+  // 选具体 user session:只留它(cron/默认 都过滤掉,这是聚焦该工作线的预期)
+  const fixOnly = filterTurnsBySession('myrepo', turns, 'myrepo--fix-bug');
+  assert.deepEqual(fixOnly.map((t) => t.id), ['c']);
+});
+
+test('filterTurnsBySession: 无 session_key 的 turn 归到默认 pwa-<ws>', () => {
+  const turns = [{ id: 'x' }];   // 老 run 没 session_key
+  assert.equal(filterTurnsBySession('myrepo', turns, 'pwa-myrepo').length, 1);
+});
+
+test('isUserSession: 只有 <ws>-- 前缀的算用户建的并行工作线', () => {
+  assert.equal(isUserSession('myrepo', 'myrepo--fix-bug'), true);
+  assert.equal(isUserSession('myrepo', 'pwa-myrepo'), false);   // 默认
+  assert.equal(isUserSession('myrepo', 'daily-report'), false); // cron
+  assert.equal(isUserSession('myrepo', 'feishu-xxx'), false);   // 飞书
+});
+
+test('sessionChipLabel: 去掉 <ws>-- 前缀;ws 名本身含 -- 不误切', () => {
+  assert.equal(sessionChipLabel('myrepo', 'myrepo--fix-bug'), 'fix-bug');
+  // ws 名含 --:按 ws 长度精确切,不靠 split
+  assert.equal(sessionChipLabel('a--b', 'a--b--feat'), 'feat');
+  // 非用户 session:原样
+  assert.equal(sessionChipLabel('myrepo', 'pwa-myrepo'), 'pwa-myrepo');
+});
+
+test('sessionSafe: 跟 agent-run.sh SESSION_SAFE + merge endpoint 一致(非法字符替 _)', () => {
+  assert.equal(sessionSafe('myrepo--fix-bug'), 'myrepo--fix-bug');  // α 命名已干净
+  assert.equal(sessionSafe('daily report'), 'daily_report');        // cron 名含空格
+  assert.equal(sessionSafe('飞书/x'), '___x');                       // 飞书/ → ___,x 保留
 });

@@ -22,6 +22,10 @@ import {
   roundtablePersonaAvatarsHtml,
   workspaceAutoScrollState,
   workspaceTurnExpansion,
+  resolveRunSessionKey,
+  filterTurnsBySession,
+  isUserSession,
+  sessionChipLabel,
 } from './ui_contract.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -558,17 +562,14 @@ const workspaceTurnOverrides = {};                   // key: run id → expanded
 const workspaceActiveSession = {};
 const workspaceSessionsList = {};
 
-// Run 投递目标:选了具体 session 就投它,否则默认 pwa-<ws>(= 现状)。
+// 这两个是对 ui_contract.mjs 纯函数的薄封装,注入当前 DOM 状态
+// workspaceActiveSession[ws]。纯逻辑(命名 / 过滤 / 前缀解析)都在
+// ui_contract.mjs,被 pwa-ui-contract.test.mjs 单测覆盖(review W2)。
 function activeSessionKey(ws) {
-  return workspaceActiveSession[ws] || `pwa-${ws}`;
+  return resolveRunSessionKey(ws, workspaceActiveSession[ws]);
 }
-
-// detail 页 timeline 过滤:选了具体 session 才过滤,"全部"视图不动(避免把
-// cron / 飞书等其它 session_key 的 run 从 workspace timeline 藏掉 —— 那是回归)。
 function _filterTurnsBySession(ws, turns) {
-  const active = workspaceActiveSession[ws];
-  if (!active) return turns;
-  return turns.filter((t) => (t.session_key || `pwa-${ws}`) === active);
+  return filterTurnsBySession(ws, turns, workspaceActiveSession[ws]);
 }
 
 // 追踪上次 render 时每个 turn 的 status,用来 detect "刚结束" 的 turn
@@ -1950,11 +1951,11 @@ document.addEventListener('click', _onFormPickerClick);
 //   普通 chip → 切 active session(空 = "全部")→ 重画
 //   "+ 新建" → prompt 名字 → 设为 active → 重画(worktree 首次 Run 时建)
 document.addEventListener('click', (e) => {
-  const chip = e.target.closest('.rt-session-chip');
+  const chip = e.target.closest('.ws-session-chip');
   if (!chip) return;
   const ws = chip.dataset.ws;
   if (!ws) return;
-  if (chip.classList.contains('rt-session-new')) {
+  if (chip.classList.contains('ws-session-new')) {
     const raw = prompt('新 session 名(只用字母/数字/-,会建独立 worktree + 分支):', '');
     if (raw == null) return;
     const clean = raw.trim().replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '');
@@ -3059,41 +3060,40 @@ function _workspaceSessionTurns(data) {
 
 // 多 session chip 条 —— 只在 detail 页显示。worktree_mode=off 时整条隐藏
 // (off 把所有 session_key 压成 default,多 session 无意义)。
-// 布局:[全部] [pwa-ws 默认] [ws--fix-bug] ... [+ 新建]
-//   - "全部":view-only,不过滤 timeline,Run 投默认。active=undefined 时高亮
-//   - 具体 session chip:点了过滤 timeline + Run 投它
-//   - "+ 新建":弹个名字输入 → 设为 active(worktree 在首次 Run 时由
-//     agent-run.sh 自动建)
+// 布局(review W1=c,去掉"默认" chip):[全部] [fix-bug] [feat-x] ... [+ 新建]
+//   - "全部":view-only,不过滤 timeline(含 cron / 飞书 / 默认 pwa 线)。
+//     active=undefined 时高亮。Run 投默认 pwa-<ws>
+//   - 用户 session chip(<ws>-- 前缀):点了过滤 timeline 到它 + Run 投它
+//   - 默认 pwa-<ws> / cron / 飞书 等"系统线" **不出 chip** —— 它们在"全部"
+//     视图里看,避免点"默认"反而藏掉 cron/飞书 run 的语义裂缝(W1 footgun)
+//   - "+ 新建":弹名字 → 设为 active(worktree 首次 Run 时 agent-run.sh 建)
 function _sessionBarHtml(name) {
   const info = workspaceSessionsList[name];
   if (!info) return '';                          // 还没拉到列表 → 不显示(下次 poll 补)
   if (info.worktree_mode === 'off') return '';   // off 模式无多 session 概念
   const active = workspaceActiveSession[name];   // undefined = 全部
-  const sessions = info.sessions || [];
-  // 默认 session(pwa-<ws>)永远在,即使 runs.db 里还没它的 run。
-  const defaultKey = `pwa-${name}`;
-  const haveDefault = sessions.some((s) => s.session_key === defaultKey);
-  const chips = [];
-  // "全部" chip
-  chips.push(`<button class="rt-session-chip${!active ? ' is-active' : ''}"
-    data-ws="${esc(name)}" data-session="" type="button">全部</button>`);
-  if (!haveDefault) {
-    chips.push(`<button class="rt-session-chip${active === defaultKey ? ' is-active' : ''}"
-      data-ws="${esc(name)}" data-session="${esc(defaultKey)}" type="button">默认</button>`);
+  // 只展示用户建的并行工作线(<ws>-- 前缀)。
+  const userSessions = (info.sessions || []).filter((s) => isUserSession(name, s.session_key));
+  // 刚 + 新建 但还没 Run 的 session 不在 db 列表里 —— 把当前 active 补进去,
+  // 否则点"+ 新建"后没 chip 高亮,用户一脸懵。
+  const keys = new Set(userSessions.map((s) => s.session_key));
+  if (active && isUserSession(name, active) && !keys.has(active)) {
+    userSessions.push({ session_key: active, run_count: 0, has_worktree: false });
   }
-  for (const s of sessions) {
+  const chips = [];
+  chips.push(`<button class="ws-session-chip${!active ? ' is-active' : ''}"
+    data-ws="${esc(name)}" data-session="" type="button">全部</button>`);
+  for (const s of userSessions) {
     const k = s.session_key;
-    // 显示名:默认那条显示"默认",其余去掉 <ws>-- 前缀只显示用户起的名
-    const label = k === defaultKey ? '默认'
-      : (k.startsWith(`${name}--`) ? k.slice(name.length + 2) : k);
+    const label = sessionChipLabel(name, k);
     const dot = s.last_status === 'running' ? ' ●' : '';
-    chips.push(`<button class="rt-session-chip${active === k ? ' is-active' : ''}"
+    chips.push(`<button class="ws-session-chip${active === k ? ' is-active' : ''}"
       data-ws="${esc(name)}" data-session="${esc(k)}" type="button"
       title="${esc(k)} · ${s.run_count} runs${s.has_worktree ? ' · worktree' : ''}">${esc(label)}${dot}</button>`);
   }
-  chips.push(`<button class="rt-session-chip rt-session-new"
+  chips.push(`<button class="ws-session-chip ws-session-new"
     data-ws="${esc(name)}" type="button">+ 新建</button>`);
-  return `<div class="rt-session-bar" data-ws="${esc(name)}">${chips.join('')}</div>`;
+  return `<div class="ws-session-bar" data-ws="${esc(name)}">${chips.join('')}</div>`;
 }
 
 function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {

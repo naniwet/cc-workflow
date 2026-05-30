@@ -654,10 +654,14 @@ def get_workspace_sessions(workspace: str) -> dict:
     sessions = []
     for s in db.list_sessions_for_workspace(workspace):
         key = s["session_key"]
+        # worktree 路径段必须经 session_safe(跟 agent-run.sh SESSION_SAFE +
+        # merge endpoint 一致)—— review W3:同一物理路径别多处独立派生。
+        # cron loop 名含空格 / 中文时 raw key != safe,不 safe 会探测错路径。
+        session_safe = re.sub(r"[^A-Za-z0-9._-]", "_", key)
         sessions.append({
             **s,
             "is_default": key == default_key,
-            "has_worktree": (wt_root / f"{workspace}-{key}").is_dir(),
+            "has_worktree": (wt_root / f"{workspace}-{session_safe}").is_dir(),
         })
     return {
         "worktree_mode": ws_settings.worktree_mode_for(workspace),
