@@ -190,6 +190,45 @@ def delete_runs_for_session(workspace: str, session_key: str) -> list[str]:
         return ids
 
 
+def list_sessions_for_workspace(workspace: str) -> list[dict]:
+    """列一个 workspace 下所有 distinct session_key + 聚合元数据。
+
+    给 GET /workspaces/{ws}/sessions 用 —— PWA 多 session UI 的读模型。
+    每个 session_key = 一条独立工作线(自己的 --resume 链 + worktree + 分支)。
+
+    返回每项:{session_key, run_count, last_started_at, last_status}
+    按 last_started_at 降序(最近活动的 session 排前)。
+
+    worktree 探测(有没有 .wt/<ws>-<key>/ 目录)不在这里 —— 那是 filesystem
+    层,留给 main.py endpoint 拼,db 只管 runs 表聚合。
+    """
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT session_key, "
+            "COUNT(*) AS run_count, "
+            "MAX(started_at) AS last_started_at "
+            "FROM runs WHERE workspace = ? AND session_key IS NOT NULL "
+            "GROUP BY session_key "
+            "ORDER BY last_started_at DESC",
+            (workspace,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            # 最近一条 run 的 status —— 单独查(GROUP BY 里取不到"最新行的列")
+            last = c.execute(
+                "SELECT status FROM runs WHERE workspace = ? AND session_key = ? "
+                "ORDER BY started_at DESC LIMIT 1",
+                (workspace, r["session_key"]),
+            ).fetchone()
+            out.append({
+                "session_key": r["session_key"],
+                "run_count": r["run_count"],
+                "last_started_at": r["last_started_at"],
+                "last_status": last["status"] if last else None,
+            })
+        return out
+
+
 # Columns returned by /sessions endpoint.
 #
 # Q1 PWA polish: prompt + output snippet added so the workspace timeline

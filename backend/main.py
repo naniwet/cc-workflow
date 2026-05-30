@@ -633,6 +633,38 @@ def get_sessions() -> dict:
     return db.list_sessions_view()
 
 
+@app.get("/workspaces/{workspace}/sessions", dependencies=PROTECT)
+def get_workspace_sessions(workspace: str) -> dict:
+    """列一个 workspace 下所有并行工作线(session_key)。多 session UI 读模型。
+
+    每个 session_key = 独立 --resume 链 + worktree + 分支。返回:
+      { worktree_mode, sessions: [{session_key, run_count, last_started_at,
+        last_status, is_default, has_worktree}, ...] }
+
+    - is_default: session_key == f"pwa-{ws}"(PWA 默认那条,历史保留)
+    - has_worktree: .wt/<ws>-<key>/ 目录存在
+    - worktree_mode: PWA 用它决定要不要显示多 session UI(off 时所有 key 被
+      压成 default,多 session 无意义)
+    """
+    if not (config.WORKSPACES_DIR / workspace).is_dir():
+        raise HTTPException(404, {"error": "workspace not found", "name": workspace})
+
+    default_key = f"pwa-{workspace}"
+    wt_root = config.WORKSPACES_DIR / ".wt"
+    sessions = []
+    for s in db.list_sessions_for_workspace(workspace):
+        key = s["session_key"]
+        sessions.append({
+            **s,
+            "is_default": key == default_key,
+            "has_worktree": (wt_root / f"{workspace}-{key}").is_dir(),
+        })
+    return {
+        "worktree_mode": ws_settings.worktree_mode_for(workspace),
+        "sessions": sessions,
+    }
+
+
 @app.get("/workspaces", dependencies=PROTECT)
 def get_workspaces() -> list[str]:
     """List ~/workspaces/* git repos. Used by PWA Workspaces view + run_form_card."""
