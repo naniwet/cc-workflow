@@ -4454,7 +4454,8 @@ function renderRoundtablesView() {
         </div>
         <label class="rt-decider-row" title="勾选后 synth 之上额外给 AI 推荐方案">
           <input type="checkbox" name="enable_decider" value="1">
-          <span>我要最终结果(AI 拍板,在 synth 之上额外给推荐方案 + 理由 + 代价 + 备选)</span>
+          <span><strong>我要最终结果(AI 拍板)</strong><br>
+            <span class="muted" style="font-size:11px">在 synth 之上额外给:推荐方案 + 理由 + 代价 + 备选</span></span>
         </label>
         <details class="rt-model-config" data-details-id="rt-model-config">
           <summary>🎛 模型配置(默认即可)</summary>

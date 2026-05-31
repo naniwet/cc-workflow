@@ -2647,20 +2647,28 @@ pre {
   padding: var(--space-2) 0;
 }
 
-/* 新建 form 的 决断员 checkbox 行 */
+/* 新建 form 的 决断员 checkbox 行。
+   关键:全局 `input{width:100%}` 会把 checkbox 也撑满一行(把 label 挤到右边),
+   必须 width:auto + flex:0 0 auto 把它锁回原始小方块。align-items:flex-start
+   让 checkbox 跟 label 第一行顶部对齐(label 换行时不居中漂移)。 */
 .rt-decider-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
   margin-top: var(--space-1);
   font-size: var(--text-sm);
+  line-height: 1.4;
   cursor: pointer;
   color: var(--text);
 }
 .rt-decider-row input[type="checkbox"] {
-  margin: 0;
+  width: auto;
+  flex: 0 0 auto;
+  margin: 2px 0 0;     /* 微调跟第一行文字基线对齐 */
+  padding: 0;
   cursor: pointer;
 }
+.rt-decider-row span { flex: 1; }
 
 /* 1v1 / 4 派 mode chip — 在 statusTag 旁边显示。颜色跟 statusTag 同视觉
    层级,小一点的字号 + 圆角让它跟 status 区分开。 */
