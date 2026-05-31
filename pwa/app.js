@@ -1416,6 +1416,9 @@ const _SLASH_TRIGGER_RE = /(?:^|\s)\/(\S*)$/;
 // One popup element for the whole PWA, lazily created on first need.
 let _slashPopupEl = null;
 let _slashState = null;        // { textarea, workspace, items, filtered, idx, queryStart }
+// 每个 ws 自动拉过一次 / 命令就记下,避免每次打 / 重复 fetch。手动 Sync 不受
+// 影响(它直接 syncSkillsFor 覆盖缓存)。
+const _skillsAutoFetched = new Set();
 
 function _ensureSlashPopup() {
   if (_slashPopupEl) return _slashPopupEl;
@@ -1486,8 +1489,27 @@ function _openOrUpdateSlashPopup(textarea, workspace, query, queryStart) {
     s.name.toLowerCase().includes(ql)
     || (s.description || '').toLowerCase().includes(ql),
   );
-  // If we have no cache yet and no items, show a hint to sync.
+  // 缓存空 → 自动拉一次(免得用户必须先手动 Sync。怕记不住命令 = 打 / 就该
+  // 看到列表)。_skillsAutoFetched 防重复拉:每个 ws 自动拉一次就够;手动
+  // Sync 按钮仍能强制刷新(加了新命令时)。拉完若用户还在打这个 /,重开 popup。
   if (all.length === 0 && filtered.length === 0) {
+    if (!_skillsAutoFetched.has(workspace)) {
+      _skillsAutoFetched.add(workspace);
+      _renderSlashPopupEmpty(textarea, workspace, { loading: true });
+      _slashState = { textarea, workspace, items: [], filtered: [], idx: -1, queryStart };
+      syncSkillsFor(workspace).then((items) => {
+        if (!items || items.length === 0) return;
+        // 用户可能已经走了 / 关了 popup;只在还聚焦该 textarea + / 还在时重开
+        if (document.activeElement !== textarea) return;
+        const cur = textarea.value.substring(0, textarea.selectionStart);
+        const m = cur.match(_SLASH_TRIGGER_RE);
+        if (!m) return;
+        const q = m[1] || '';
+        _openOrUpdateSlashPopup(textarea, workspace, q, textarea.selectionStart - q.length - 1);
+      });
+      return;
+    }
+    // 已经自动拉过(确实没命令)→ 显示空提示
     _renderSlashPopupEmpty(textarea, workspace);
     _slashState = { textarea, workspace, items: [], filtered: [], idx: -1, queryStart };
     return;
@@ -1506,13 +1528,16 @@ function _openOrUpdateSlashPopup(textarea, workspace, query, queryStart) {
   _renderSlashPopup();
 }
 
-function _renderSlashPopupEmpty(textarea, workspace) {
+function _renderSlashPopupEmpty(textarea, workspace, { loading = false } = {}) {
   const el = _ensureSlashPopup();
-  el.innerHTML = `
+  el.innerHTML = loading
+    ? `<div class="slash-popup-empty"><div>加载 / 命令中…</div></div>`
+    : `
     <div class="slash-popup-empty">
-      <div>暂无 skills 数据。</div>
+      <div>没有可用的 / 命令。</div>
       <div class="muted" style="font-size:11px;margin-top:4px">
-        点 workspace 列头的 🔄 Sync /commands 按钮拉一次。
+        在 ~/.claude/commands/ 或 workspace 的 .claude/commands/ 放 .md 命令,
+        再点 ⋯ → 🔄 Sync /commands 刷新。
       </div>
     </div>
   `;
