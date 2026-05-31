@@ -1644,6 +1644,9 @@ function bindWorkspaceColHandlers(root) {
       // input fires after every value change (typing, paste, IME commit) —
       // use it to detect "user just typed / or extended the slash query".
       ta.addEventListener('input', _onPromptInput);
+      // 粘贴图片(Cmd/Ctrl+V):捕获剪贴板里的 image blob → 当附件传
+      // (跟 📎 同一个 _pendingUploads 管道;claude 收到路径后用 Read 看图)。
+      ta.addEventListener('paste', _onPromptPaste);
       // Closing the popup on blur would race the click handler on items
       // (blur fires before click). We pre-prevent the click's default to
       // keep focus, so blur shouldn't fire for clicks. Bind anyway for
@@ -1771,6 +1774,43 @@ function _onAttachInputChange(e) {
   _renderChips(ws);
   // 清 input value,允许下次选同名文件(否则 change 不触发)
   input.value = '';
+}
+
+let _pasteSeq = 0;   // 给没名字的粘贴图片合成唯一文件名
+
+// 粘贴图片到 prompt textarea → 当附件。只拦截图片;纯文本粘贴照常走默认。
+function _onPromptPaste(e) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  const form = e.currentTarget.closest('form');
+  const ws = form?.dataset.workspace;
+  if (!ws) return;
+  const images = [];
+  for (const it of items) {
+    if (it.kind === 'file' && (it.type || '').startsWith('image/')) {
+      const f = it.getAsFile();
+      if (f) images.push(f);
+    }
+  }
+  if (images.length === 0) return;   // 没图片 → 让默认文本粘贴正常进 textarea
+  e.preventDefault();                 // 有图片 → 拦下,别把二进制塞进文本框
+  for (let f of images) {
+    // 粘贴的图片常常没文件名 → 合成一个带扩展名的(claude 按扩展名认类型)
+    if (!f.name) {
+      const ext = ((f.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '')) || 'png';
+      f = new File([f], `pasted-${++_pasteSeq}.${ext}`, { type: f.type });
+    }
+    if ((_pendingUploads[ws] || []).length >= _UPLOAD_MAX_FILES) {
+      showError(`最多 ${_UPLOAD_MAX_FILES} 个附件,已跳过粘贴的图片`);
+      break;
+    }
+    if (_totalPendingBytes(ws) + f.size > _UPLOAD_MAX_BYTES) {
+      showError(`附件总大小超过 ${_UPLOAD_MAX_BYTES / (1024 * 1024)} MB,已跳过粘贴的图片`);
+      continue;
+    }
+    _addPendingFile(ws, f);
+  }
+  _renderChips(ws);
 }
 
 function _onChipRemoveClick(e) {
