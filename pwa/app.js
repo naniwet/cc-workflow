@@ -1974,24 +1974,13 @@ function _onFormPickerClick(e) {
 document.addEventListener('click', _onFormPickerClick);
 
 // 多 session chip 条点击(delegation:mobile + desktop detail 共用)。
-//   普通 chip → 切 active session(空 = "全部")→ 重画
-//   "+ 新建" → prompt 名字 → 设为 active → 重画(worktree 首次 Run 时建)
+// 切 active session(空 data-session = "全部")→ 重画。新建 session 走
+// overview tile 的 ⋯ 菜单"+新 session"(_onNewSessionClick),不在 chip 条里。
 document.addEventListener('click', (e) => {
   const chip = e.target.closest('.ws-session-chip');
   if (!chip) return;
   const ws = chip.dataset.ws;
   if (!ws) return;
-  if (chip.classList.contains('ws-session-new')) {
-    const raw = prompt('新 session 名(只用字母/数字/-,会建独立 worktree + 分支):', '');
-    if (raw == null) return;
-    const clean = raw.trim().replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '');
-    if (!clean) { showError('session 名不能为空 / 只含非法字符'); return; }
-    // 命名方案 α:<ws>--<name>,映射成分支 cc/<ws>-<ws>--<name>
-    workspaceActiveSession[ws] = `${ws}--${clean}`;
-    renderWorkspaceDetailView(ws);
-    return;
-  }
-  // 普通 chip:data-session 为空 = "全部"(active=undefined)
   const key = chip.dataset.session || '';
   workspaceActiveSession[ws] = key || undefined;
   renderWorkspaceDetailView(ws);
@@ -2597,7 +2586,17 @@ function parseSessionTileId(id) {
 // 返回 { [sessionTileId]: {ws, sessionKey, active, recent} }。
 function groupBySession(workspaces, sessions) {
   const valid = new Set(workspaces);
-  const isPwaLine = (ws, key) => key === `pwa-${ws}` || key.startsWith(`${ws}--`);
+  // 把一条 run 的 session_key 映射成它该归的 "tile key"(= tile 的 sessionKey):
+  //   - "default"(worktree_mode=off 时 runner.submit 压成的)/ "pwa-<ws>"
+  //     (auto 时 PWA 默认)→ 都归到默认 tile(统一用 pwa-<ws> 当 tile key)
+  //   - "<ws>--<name>" → 用户建的并行工作线,各自一个 tile
+  //   - 其它(cron loop 名 / feishu-*)→ null,不出 tile(有 Tasks / 飞书 入口)
+  // 之前漏了 "default" → off 模式的 run 全被滤掉,overview 看不到对话(2026-05-31)。
+  const tileKeyFor = (ws, key) => {
+    if (key === 'default' || key === `pwa-${ws}`) return `pwa-${ws}`;
+    if (key.startsWith(`${ws}--`)) return key;
+    return null;
+  };
   const g = {};
   // 1. 每个 workspace 保底默认 session
   for (const w of workspaces) {
@@ -2607,10 +2606,10 @@ function groupBySession(workspaces, sessions) {
   const bucket = (list, field) => {
     for (const r of list || []) {
       if (!valid.has(r.workspace)) continue;
-      const key = r.session_key || `pwa-${r.workspace}`;
-      if (!isPwaLine(r.workspace, key)) continue;
-      const id = sessionTileId(r.workspace, key);
-      if (!g[id]) g[id] = { ws: r.workspace, sessionKey: key, active: [], recent: [] };
+      const tileKey = tileKeyFor(r.workspace, r.session_key || `pwa-${r.workspace}`);
+      if (!tileKey) continue;     // cron/飞书 → 不出 tile
+      const id = sessionTileId(r.workspace, tileKey);
+      if (!g[id]) g[id] = { ws: r.workspace, sessionKey: tileKey, active: [], recent: [] };
       g[id][field].push(r);
     }
   };
@@ -3167,6 +3166,9 @@ function _sessionBarHtml(name) {
   if (active && isUserSession(name, active) && !keys.has(active)) {
     userSessions.push({ session_key: active, run_count: 0, has_worktree: false });
   }
+  // 没有用户建的 session → 整条 chip 条隐藏(单 session 时一个孤零零的"全部"
+  // 没意义)。新建 session 走 overview tile 的 ⋯ 菜单"+新 session",不在这里。
+  if (userSessions.length === 0) return '';
   const chips = [];
   chips.push(`<button class="ws-session-chip${!active ? ' is-active' : ''}"
     data-ws="${esc(name)}" data-session="" type="button">全部</button>`);
@@ -3178,8 +3180,6 @@ function _sessionBarHtml(name) {
       data-ws="${esc(name)}" data-session="${esc(k)}" type="button"
       title="${esc(k)} · ${s.run_count} runs${s.has_worktree ? ' · worktree' : ''}">${esc(label)}${dot}</button>`);
   }
-  chips.push(`<button class="ws-session-chip ws-session-new"
-    data-ws="${esc(name)}" type="button">+ 新建</button>`);
   return `<div class="ws-session-bar" data-ws="${esc(name)}">${chips.join('')}</div>`;
 }
 
