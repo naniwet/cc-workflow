@@ -2378,6 +2378,9 @@ async function _onResetSessionClick(e) {
 //   ok=true, push_ok=true  → success "Merged + pushed"
 //   ok=true, push_ok=false → warning "Merged locally, push failed: ..."
 //   ok=false (HTTPException) → error "Merge failed: ..."
+// "Create PR" 按钮:push 当前 session 的 cc/* 分支到 origin + gh pr create。
+// 比直接 merge 进 main 多一层 review。后端 POST /workspaces/{ws}/create-pr,
+// gh 没装 / 没 auth 时 graceful 报错(分支仍 push 了,可手动开 PR)。
 async function _onMergeToMainClick(e) {
   const btn = e.currentTarget;
   const ws = btn.dataset.ws;
@@ -2385,32 +2388,27 @@ async function _onMergeToMainClick(e) {
   _closeAncestorMenu(btn);
   const sk = activeSessionKey(ws);
   if (!confirm(
-    `把 "${ws}" 的 session "${sk}" 的 cc/* 分支合并到 main 并推送?\n\n` +
-    `流程:rebase cc/${ws}-${sk} 到 main → fast-forward merge → git push origin main\n\n` +
-    `cc/* 分支保留,下一轮对话继续在它上面 append commit。\n\n` +
-    `如果有冲突或 main worktree 不干净,操作会安全中止并提示。`
+    `给 "${ws}" 的 session "${sk}" 开 PR?\n\n` +
+    `流程:push cc/${ws}-${sk} 到 origin → gh pr create 开到 main 的 PR\n\n` +
+    `(需要服务器装了 GitHub CLI 并 gh auth login。没装的话分支会 push 上去,` +
+    `你可手动去 GitHub 开 PR。)`
   )) return;
   btn.disabled = true;
   const originalText = btn.querySelector('span')?.textContent || '';
-  if (originalText) btn.querySelector('span').textContent = 'Merging…';
+  if (originalText) btn.querySelector('span').textContent = 'Creating PR…';
   try {
-    const result = await api(`/workspaces/${encodeURIComponent(ws)}/merge-session-branch`, {
+    const result = await api(`/workspaces/${encodeURIComponent(ws)}/create-pr`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_key: sk }),
     });
-    if (result?.push_ok) {
-      showToast('success', `${ws}: merged ${result.branch} → ${result.main_branch} + pushed`, { ttl: 3000 });
-    } else {
-      showToast('warning',
-        `${ws}: merged to ${result.main_branch} locally, push failed — ${result.push_msg || '(no detail)'}`,
-        { ttl: 5000 });
-    }
+    const note = result?.note ? `(${result.note})` : '';
+    showToast('success', `${ws}: PR ${note} → ${result.pr_url || result.branch}`, { ttl: 5000 });
     refreshAll();
   } catch (err) {
-    // backend HTTPException 抛过来的 detail 里有 error + msg,api() 包装了
-    // err.message 已经包含;直接 surface。
-    showError(`merge failed: ${err.message}`);
+    // backend HTTPException detail 含 error + msg(gh 没装 / 没 auth / push 失败),
+    // api() 已把它塞进 err.message,直接 surface。
+    showError(`create PR failed: ${err.message}`);
   } finally {
     btn.disabled = false;
     if (originalText) btn.querySelector('span').textContent = originalText;
@@ -2692,7 +2690,7 @@ function workspaceColHtml(name, data, opts = {}) {
           <div class="ws-menu-section">
             <span class="ws-menu-section-label">Session</span>
             <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}">
-              ${ICONS.download} <span>Merge to main + push</span>
+              ${ICONS.download} <span>Create PR</span>
             </button>
             <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}">
               ${ICONS.rewind} <span>New chat</span>
@@ -3121,7 +3119,7 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning }) {
             <div class="ws-menu-section">
               <span class="ws-menu-section-label">Session</span>
               <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
-                ${ICONS.download} <span>Merge to main + push</span>
+                ${ICONS.download} <span>Create PR</span>
               </button>
               <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
                 ${ICONS.rewind} <span>New chat</span>

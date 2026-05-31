@@ -1238,6 +1238,98 @@ def merge_session_branch(name: str, body: dict = Body(default={})) -> dict:
     }
 
 
+@app.post("/workspaces/{name}/create-pr", dependencies=PROTECT)
+def create_session_pr(name: str, body: dict = Body(default={})) -> dict:
+    """把当前 session 的 cc/* 分支推到 origin + 开一个 PR(替代直接 merge 进 main)。
+
+    背景:多 session 下每条工作线 = cc/<ws>-<session_safe> 分支。比起
+    "Merge to main + push"(直接进 main),开 PR 让改动先过 review 再合 ——
+    更稳的 git workflow。用户选的(2026-05-31)。
+
+    流程:
+      1. 校验 worktree 存在(否则这条 session 还没 claude 改动)
+      2. push -u origin <branch>(失败直接报,没推上去开不了 PR)
+      3. gh pr create --base <main> --head <branch> --fill
+         - gh 没装 / 没 auth → graceful 报错告诉用户怎么修,不崩
+         - PR 已存在 → gh pr view 拿现有 url 返回(幂等)
+    返回 {ok, branch, main_branch, pr_url}。
+    """
+    from . import ui_cards
+    known = set(ui_cards._discover_workspaces())
+    if name not in known:
+        raise HTTPException(404, {"error": "workspace not found", "name": name})
+    target = config.WORKSPACES_DIR / name
+    if not (target / ".git").exists():
+        raise HTTPException(400, {"error": "not a git repo", "name": name})
+
+    session_key = (body or {}).get("session_key") or f"pwa-{name}"
+    session_safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_key)
+    branch_name = f"cc/{name}-{session_safe}"
+    worktree_path = config.WORKSPACES_DIR / ".wt" / f"{name}-{session_safe}"
+    if not worktree_path.exists():
+        raise HTTPException(400, {
+            "error": "no_worktree",
+            "msg": f"no worktree at {worktree_path} — 这条 session 还没 claude 改动,无 PR 可开",
+        })
+
+    import subprocess
+
+    def _run(cwd, argv, timeout=120):
+        try:
+            p = subprocess.run(argv, cwd=str(cwd), capture_output=True,
+                               text=True, timeout=timeout, check=False)
+            return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
+        except subprocess.TimeoutExpired:
+            return 124, "", f"{argv[0]} timed out ({timeout}s)"
+        except FileNotFoundError:
+            return 127, "", f"{argv[0]} not installed"
+        except OSError as e:
+            return 127, "", f"{argv[0]} not runnable: {e}"
+
+    # main 分支名
+    rc, head, err = _run(target, ["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    main_branch = head or "main"
+
+    # 1. push 分支到 origin
+    rc, out, err = _run(worktree_path, ["git", "push", "-u", "origin", branch_name])
+    if rc != 0:
+        raise HTTPException(400, {
+            "error": "push_failed",
+            "msg": f"push {branch_name} → origin 失败: {(err or out)[:500]}",
+        })
+
+    # 2. gh pr create(graceful:gh 没装 / 没 auth)
+    rc, out, err = _run(target, [
+        "gh", "pr", "create", "--base", main_branch, "--head", branch_name, "--fill",
+    ])
+    if rc == 0:
+        return {"ok": True, "workspace": name, "branch": branch_name,
+                "main_branch": main_branch, "pr_url": out.strip()}
+
+    combined = f"{out}\n{err}".strip()
+    if rc == 127:
+        raise HTTPException(400, {
+            "error": "gh_not_installed",
+            "msg": "服务器没装 GitHub CLI(gh)。装:https://cli.github.com/ ,"
+                   "然后 `gh auth login`。分支已 push 到 origin,可手动去 GitHub 开 PR。",
+            "branch": branch_name,
+        })
+    # PR 已存在 → 拿现有 url(幂等)
+    if "already exists" in combined.lower() or "a pull request for branch" in combined.lower():
+        rc2, url2, _ = _run(target, ["gh", "pr", "view", branch_name, "--json", "url", "-q", ".url"])
+        if rc2 == 0 and url2:
+            return {"ok": True, "workspace": name, "branch": branch_name,
+                    "main_branch": main_branch, "pr_url": url2.strip(),
+                    "note": "PR 已存在,返回现有 PR"}
+    # 其它失败(没 auth / 不是 GitHub repo / 等)
+    raise HTTPException(400, {
+        "error": "gh_pr_create_failed",
+        "msg": f"gh pr create 失败(分支已 push):{combined[:500]}",
+        "hint": "可能没 `gh auth login`,或 origin 不是 GitHub repo。",
+        "branch": branch_name,
+    })
+
+
 @app.delete("/workspaces/{name}/session", dependencies=PROTECT)
 def reset_workspace_session(name: str, session_key: Optional[str] = None) -> dict:
     """Reset a conversation session for this workspace.
