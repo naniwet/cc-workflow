@@ -2315,7 +2315,10 @@ async function _onSyncSkillsClick(e) {
   try {
     const items = await syncSkillsFor(ws);
     if (items !== null) {
-      showToast('success', `${ws}: ${items.length} skills 同步成功`, { ttl: 2200 });
+      // 扫的是 commands/*.md(slash 命令)+ skills/*/SKILL.md,两类都在 `/`
+      // 自动补全里。统称 "/命令",跟按钮 "Sync /commands" 一致(别只说 skills,
+      // 用户反馈"不仅仅是 skills")。
+      showToast('success', `${ws}: 同步了 ${items.length} 个 / 命令`, { ttl: 2200 });
     }
   } finally {
     btn.disabled = false;
