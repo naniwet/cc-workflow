@@ -744,6 +744,13 @@ body.is-dragging .ws-col:not(.dragging) {
 }
 .ws-session-new { border-style: dashed; }
 
+/* session tile 标题里的 "/ <session 名>" 后缀 —— 比 ws 名淡,小一号 */
+.ws-session-tag {
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 0.85em;
+}
+
 .ws-timeline {
   display: flex;
   flex-direction: column;

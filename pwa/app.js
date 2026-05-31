@@ -562,6 +562,12 @@ const workspaceTurnOverrides = {};                   // key: run id → expanded
 const workspaceActiveSession = {};
 const workspaceSessionsList = {};
 
+// 用户在 overview "+ 新 session" 声明的、还没跑过 run 的空 session。
+// groupBySession 基于 runs,空 session 不在 runs 里不会出 tile —— 这个集合
+// 让它先出一个空 tile(用户能往里发第一条 prompt)。in-memory,刷新丢失
+// (跟 _promptQueue 一致:还没 run 的声明不持久化)。元素 = sessionTileId。
+const _declaredEmptySessions = new Set();
+
 // 这两个是对 ui_contract.mjs 纯函数的薄封装,注入当前 DOM 状态
 // workspaceActiveSession[ws]。纯逻辑(命名 / 过滤 / 前缀解析)都在
 // ui_contract.mjs,被 pwa-ui-contract.test.mjs 单测覆盖(review W2)。
@@ -698,12 +704,13 @@ async function _uploadFiles(ws, fileObjs) {
 // 第 3 参 attachments(可选)— File 对象数组(跟 _pendingUploads 同结构);
 // 出队时 _dispatchAllQueues 拿 File 上传。不持久化:刷新 PWA 队列里的 File
 // 引用丢失,跟 _promptQueue 现状一致。
-function _enqueuePrompt(ws, prompt, attachments = []) {
+function _enqueuePrompt(ws, prompt, attachments = [], sessionKey = null) {
   if (!_promptQueue[ws]) _promptQueue[ws] = [];
   _promptQueue[ws].push({
     id: `q-${++_promptQueueSeq}`,
     prompt,
     attachments,
+    sessionKey,                      // 出队 dispatch 时投到这个 session(null = activeSessionKey)
     queuedAt: Math.floor(Date.now() / 1000),
   });
 }
@@ -753,7 +760,7 @@ async function _dispatchAllQueues() {
         body: JSON.stringify({
           workspace: ws,
           prompt: next.prompt,
-          session_key: activeSessionKey(ws),
+          session_key: next.sessionKey || activeSessionKey(ws),
           source: 'pwa',
           ...(attachmentPaths ? { attachments: attachmentPaths } : {}),
         }),
@@ -1044,8 +1051,11 @@ function renderWorkspacesView() {
 // to create a new row. Max 4 per row (hardcoded). Hidden cards drop
 // out of the layout and appear in a slim strip below.
 function renderDesktopOverview() {
-  const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
-  const allNames = Object.keys(groups);
+  // 按 session 平铺(一格一个 session,不是一格一个 workspace)。布局/拖拽/
+  // 隐藏系统是泛型的(effectiveLayout 对一组唯一字符串 id 操作),喂 session
+  // tile id 进去即可。老的 workspace-键布局会失效一次,重排成默认。
+  const groups = groupBySession(lastData.workspaces, lastData.sessions);
+  const allNames = Object.keys(groups);          // 现在是 session tile id
   const layout = effectiveLayout(allNames);
 
   // Provider picker — uses the unified form-picker component so dark
@@ -1057,9 +1067,14 @@ function renderDesktopOverview() {
   const layoutHtml = layout.length === 0
     ? ''
     : layout.map((row, rowIdx) => {
-        const cells = row.map((n) =>
-          workspaceColHtml(n, groups[n] || { active: [], queued: [], recent: [] })
-        ).join('');
+        const cells = row.map((id) => {
+          const g = groups[id];
+          if (!g) return '';
+          // id = session tile id;渲染该 session 的 tile(workspaceColHtml
+          // 加 sessionKey opt:header 显示 ws/session,form 带 data-session-key,
+          // timeline 已经是该 session 的 run)。
+          return workspaceColHtml(g.ws, g, { sessionKey: g.sessionKey, tileId: id });
+        }).join('');
         return `
           <div class="ws-row-gap" data-gap-before="${rowIdx}" aria-hidden="true"></div>
           <div class="ws-row" data-row-idx="${rowIdx}">${cells}</div>
@@ -1073,7 +1088,12 @@ function renderDesktopOverview() {
     ? `<div class="ws-hidden-strip">
          <span class="muted">Hidden (${hiddenNamesPresent.length}):</span>
          ${hiddenNamesPresent
-            .map((n) => `<button class="ws-restore-btn" type="button" data-ws="${esc(n)}" title="Restore to overview">${esc(n)}</button>`)
+            .map((n) => {
+              // n 是 session tile id;pill label 显示 "ws / session"(默认只 ws)。
+              const { ws, sessionKey } = parseSessionTileId(n);
+              const lbl = sessionKey === `pwa-${ws}` ? ws : `${ws}/${sessionChipLabel(ws, sessionKey)}`;
+              return `<button class="ws-restore-btn" type="button" data-ws="${esc(n)}" title="Restore to overview">${esc(lbl)}</button>`;
+            })
             .join('')}
        </div>`
     : '';
@@ -1651,6 +1671,11 @@ function bindWorkspaceColHandlers(root) {
   for (const btn of root.querySelectorAll('.ws-merge-to-main')) {
     btn.addEventListener('click', _onMergeToMainClick);
     _addTapFallback(btn, _onMergeToMainClick);
+  }
+  // "+ 新 session(同 repo)" —— 在该 session tile 的 ⋯ 菜单里,给同一个
+  // workspace 开一条新工作线(<ws>--<name>)。
+  for (const btn of root.querySelectorAll('.ws-new-session')) {
+    btn.addEventListener('click', _onNewSessionClick);
   }
   // Delete workspace button — extra destructive. Removes the entire
   // ~/workspaces/<name>/ directory + per-ws settings + session.
@@ -2343,7 +2368,9 @@ async function _onResetSessionClick(e) {
   const ws = btn.dataset.ws;
   if (!ws) return;
   _closeAncestorMenu(btn);
-  const sk = activeSessionKey(ws);
+  // session tile 的按钮带 data-session-key → 操作该 tile 的 session;
+  // 老路径退回 activeSessionKey(ws)。
+  const sk = btn.dataset.sessionKey || activeSessionKey(ws);
   if (!confirm(
     `开启 "${ws}" 的新对话?(session: ${sk})\n\n` +
     `下一次 prompt 会从一张白纸开始,Claude 不再记得之前聊过什么。\n\n` +
@@ -2386,7 +2413,7 @@ async function _onMergeToMainClick(e) {
   const ws = btn.dataset.ws;
   if (!ws) return;
   _closeAncestorMenu(btn);
-  const sk = activeSessionKey(ws);
+  const sk = btn.dataset.sessionKey || activeSessionKey(ws);
   if (!confirm(
     `给 "${ws}" 的 session "${sk}" 开 PR?\n\n` +
     `流程:push cc/${ws}-${sk} 到 origin → gh pr create 开到 main 的 PR\n\n` +
@@ -2553,6 +2580,66 @@ async function onAddWorkspace(e) {
   }
 }
 
+// session-tile id:workspace + session_key 的稳定唯一键。用 unit-separator
+// ()分隔,不会跟 ws 名 / session_key 里的合法字符撞。
+const SESSION_ID_SEP = '';
+function sessionTileId(ws, sessionKey) { return `${ws}${SESSION_ID_SEP}${sessionKey}`; }
+function parseSessionTileId(id) {
+  const i = id.indexOf(SESSION_ID_SEP);
+  return i < 0 ? { ws: id, sessionKey: `pwa-${id}` }
+               : { ws: id.slice(0, i), sessionKey: id.slice(i + 1) };
+}
+
+// 桌面 overview 按 session 平铺用:把 runs 按 (workspace, session_key) 分桶。
+// 只保留 PWA 工作线(pwa-<ws> 默认 + <ws>--<name> 用户建的),cron(loop 名)
+// / 飞书(feishu-*)的 session 排除 —— 它们有 Tasks tab / 飞书,塞进 overview
+// 会刷屏。每个 workspace 保底有默认 session tile(即使没 run,可起新)。
+// 返回 { [sessionTileId]: {ws, sessionKey, active, recent} }。
+function groupBySession(workspaces, sessions) {
+  const valid = new Set(workspaces);
+  const isPwaLine = (ws, key) => key === `pwa-${ws}` || key.startsWith(`${ws}--`);
+  const g = {};
+  // 1. 每个 workspace 保底默认 session
+  for (const w of workspaces) {
+    g[sessionTileId(w, `pwa-${w}`)] = { ws: w, sessionKey: `pwa-${w}`, active: [], recent: [] };
+  }
+  // 2. 扫 runs,PWA 工作线归桶(顺便发现用户建的 <ws>--* session)
+  const bucket = (list, field) => {
+    for (const r of list || []) {
+      if (!valid.has(r.workspace)) continue;
+      const key = r.session_key || `pwa-${r.workspace}`;
+      if (!isPwaLine(r.workspace, key)) continue;
+      const id = sessionTileId(r.workspace, key);
+      if (!g[id]) g[id] = { ws: r.workspace, sessionKey: key, active: [], recent: [] };
+      g[id][field].push(r);
+    }
+  };
+  bucket(sessions.active, 'active');
+  bucket(sessions.recent, 'recent');
+  // 3. 用户 "+ 新 session" 声明的空 session(还没 run)也出 tile
+  for (const id of _declaredEmptySessions) {
+    const { ws, sessionKey } = parseSessionTileId(id);
+    if (valid.has(ws) && !g[id]) {
+      g[id] = { ws, sessionKey, active: [], recent: [] };
+    }
+  }
+  return g;
+}
+
+// "+ 新 session" 处理:提示名 → 声明 <ws>--<name> 空 session → 重画(出新 tile)。
+function _onNewSessionClick(e) {
+  const btn = e.currentTarget;
+  const ws = btn.dataset.ws;
+  if (!ws) return;
+  _closeAncestorMenu(btn);
+  const raw = prompt(`在 "${ws}" 新建一条 session(独立 worktree + 分支)。名字(字母/数字/-):`, '');
+  if (raw == null) return;
+  const clean = raw.trim().replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '');
+  if (!clean) { showError('session 名不能为空 / 只含非法字符'); return; }
+  _declaredEmptySessions.add(sessionTileId(ws, `${ws}--${clean}`));
+  render();
+}
+
 function groupByWorkspace(workspaces, sessions) {
   // Start from filesystem-backed workspace names (what /workspaces returns).
   // Old behavior `??=` auto-created entries for any r.workspace seen in
@@ -2579,6 +2666,14 @@ function workspaceColHtml(name, data, opts = {}) {
   const maxRows = opts.maxRows ?? 10;
   const detail = !!opts.detail;
   const extraClass = opts.extraClass ?? '';
+  // session tile 模式(桌面 overview):每格一个 session。sessionKey set 时:
+  //   - colKey = tileId(.ws-col / timeline 的 data-ws 用它当布局 / 状态键,
+  //     避免同 ws 多 tile 串台)
+  //   - run 投到这个 sessionKey(form data-session-key),不是 activeSessionKey
+  //   - header 显示 ws / <session 名>,跳过 detail 的 chip 切换条
+  const sessionKey = opts.sessionKey || null;
+  const colKey = opts.tileId || name;   // 布局 / 状态键(tile 模式 = tileId)
+  const skAttr = sessionKey ? ` data-session-key="${esc(sessionKey)}"` : '';
 
   // Detail + Overview 都用同一套 turn-streaming UI(设计图 §3.2 + §4)。
   //   Detail  :expandAll=true,所有 turn 默认展开看完整 event timeline
@@ -2588,9 +2683,11 @@ function workspaceColHtml(name, data, opts = {}) {
   //              也可以点 workspace name 跳到 detail 看完整版。
   // 渲染走同一个 _workspaceTurnHtml,handler / CSS 都共用。
   let timelineHtml;
-  // detail 页按选中 session 过滤;overview 不过滤(避免藏掉 cron/飞书 run)。
+  // session tile:data 已经是该 session 的 run(groupBySession 分好桶),原样用。
+  // detail 页按选中 session 过滤;workspace overview(老路径)不过滤。
   const allTurns = _workspaceSessionTurns(data);
-  const turns = detail ? _filterTurnsBySession(name, allTurns) : allTurns;
+  const turns = sessionKey ? allTurns
+    : (detail ? _filterTurnsBySession(name, allTurns) : allTurns);
   const turnsToShow = detail ? turns : turns.slice(-maxRows);
   _pinJustFinishedTurns(turnsToShow);
   const expandedTurns = workspaceTurnExpansion(
@@ -2612,9 +2709,17 @@ function workspaceColHtml(name, data, opts = {}) {
   // gets a drag handle for PC drag-to-reorder.
   // Detail: plain h2 (we're already in detail; the back-link handles exit).
   // No drag handle either — we're focused on one workspace.
+  // session tile:标题显示 "ws / <session 名>"(默认 session 只显示 ws)。
+  // session 名 = 去掉 <ws>-- 前缀;默认 pwa-<ws> 显示"默认"。
+  const sessLabel = sessionKey
+    ? (sessionKey === `pwa-${name}` ? '默认' : sessionChipLabel(name, sessionKey))
+    : '';
+  const titleInner = sessionKey
+    ? `${esc(name)} <span class="ws-session-tag">/ ${esc(sessLabel)}</span>`
+    : esc(name);
   const headerTitle = detail
     ? `<h2>${esc(name)}</h2>`
-    : `<h2><a class="ws-name-link" href="#workspaces/${encodeURIComponent(name)}">${esc(name)}</a></h2>`;
+    : `<h2><a class="ws-name-link" href="#workspaces/${encodeURIComponent(name)}">${titleInner}</a></h2>`;
 
   const dragHandle = detail
     ? ''
@@ -2622,7 +2727,7 @@ function workspaceColHtml(name, data, opts = {}) {
 
   const hideBtn = detail
     ? ''
-    : `<button class="ws-hide-btn" type="button" data-ws="${esc(name)}"
+    : `<button class="ws-hide-btn" type="button" data-ws="${esc(colKey)}"
                title="Hide from overview (restore via the strip at bottom)"
                aria-label="Hide">${ICONS.eyeOff}</button>`;
 
@@ -2689,12 +2794,15 @@ function workspaceColHtml(name, data, opts = {}) {
           </div>
           <div class="ws-menu-section">
             <span class="ws-menu-section-label">Session</span>
-            <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}">
+            <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}"${skAttr}>
               ${ICONS.download} <span>Create PR</span>
             </button>
-            <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}">
+            <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}"${skAttr}>
               ${ICONS.rewind} <span>New chat</span>
             </button>
+            ${sessionKey ? `<button class="ws-new-session ws-menu-item" type="button" data-ws="${esc(name)}">
+              ${ICONS.more} <span>+ 新 session(同 repo)</span>
+            </button>` : ''}
           </div>
           <button class="ws-delete-workspace ws-menu-item ws-menu-item-danger" type="button" data-ws="${esc(name)}">
             ${ICONS.trash} <span>Delete workspace</span>
@@ -2704,8 +2812,14 @@ function workspaceColHtml(name, data, opts = {}) {
     </div>
   `;
 
+  // .ws-col data-ws = colKey:drag/hide/layout 用它当 id(tile 模式 = tileId,
+  // 同 ws 多 tile 不串)。timeline data-ws 同样用 colKey(scroll/stream 状态键)。
+  // form data-workspace=真实 ws(workspace 级动作),data-session-key=本 tile
+  // 的 session(run 投递目标);老路径 sessionKey=null 时 onTriggerSubmit 退回
+  // activeSessionKey(ws)。
+  const skAttr = sessionKey ? ` data-session-key="${esc(sessionKey)}"` : '';
   return `
-    <div class="ws-col ${extraClass}" data-ws="${esc(name)}">
+    <div class="ws-col ${extraClass}" data-ws="${esc(colKey)}" data-tile-ws="${esc(name)}">
       <div class="ws-head">
         <div class="ws-head-row">
           ${dragHandle}
@@ -2715,9 +2829,9 @@ function workspaceColHtml(name, data, opts = {}) {
         ${providerEngineBlock}
       </div>
       ${detail ? _sessionBarHtml(name) : ''}
-      <div class="ws-timeline" data-ws="${esc(name)}">${timelineHtml}</div>
-      ${_queueListHtml(name)}
-      <form class="trigger-form" data-workspace="${esc(name)}" data-form-id="ws-${esc(name)}">
+      <div class="ws-timeline" data-ws="${esc(colKey)}">${timelineHtml}</div>
+      ${_queueListHtml(name, sessionKey)}
+      <form class="trigger-form" data-workspace="${esc(name)}"${skAttr} data-form-id="ws-${esc(colKey)}">
         <div class="attach-chips" data-ws="${esc(name)}"></div>
         <input type="file" class="attach-input" data-ws="${esc(name)}" multiple hidden>
         <button type="button" class="attach-btn" data-ws="${esc(name)}" aria-label="Attach files">📎</button>
@@ -2731,8 +2845,11 @@ function workspaceColHtml(name, data, opts = {}) {
 // Render queued prompts for a workspace(workspace 已有 run 在跑 + 用户
 // 继续发的 prompt 会进这个队列;跑完一条自动 dispatch 下一条)。每条
 // 一行 + ⏳ icon + 内容 + × 删除。空队列返回空字符串。
-function _queueListHtml(ws) {
-  const items = _promptQueue[ws] || [];
+function _queueListHtml(ws, sessionKey = null) {
+  // session tile 模式:只显示投到本 tile session 的排队项(同 ws 多 tile 不串)。
+  // 老路径(sessionKey=null)显示该 ws 全部排队项。
+  let items = _promptQueue[ws] || [];
+  if (sessionKey) items = items.filter((m) => (m.sessionKey || `pwa-${ws}`) === sessionKey);
   if (items.length === 0) return '';
   const rows = items.map((m) => {
     const nAttach = (m.attachments && m.attachments.length) || 0;
@@ -2839,18 +2956,21 @@ async function onTriggerSubmit(e) {
   e.preventDefault();
   const form = e.target;
   const ws = form.dataset.workspace;
+  // session tile 的 form 带 data-session-key → run 投这个 session;老路径
+  // (workspace overview / detail)没这属性 → 退回 activeSessionKey(ws)。
+  const sessionKey = form.dataset.sessionKey || activeSessionKey(ws);
   const prompt = form.elements.prompt.value.trim();
   if (!prompt) return;
   // 提交时拿当前 ws 的 pending 附件(File 对象),清掉 _pendingUploads[ws]
   // (无论走 busy / 立即提交,UI 上的 chip 都该消失)。
   const pending = [..._pendingUploads[ws] || []];
-  // Workspace 已有 run 在跑 / 已有排队 → 这条进队列,不调 /run。后端会
-  // 409 拒绝(workspace_busy),前端排队 + 上一条跑完自动 dispatch 才能
-  // 顺畅串起来。
+  // Workspace 已有 run 在跑 / 已有排队 → 这条进队列,不调 /run。busy-check
+  // 保持 ws 级(保守:同 repo 串行,跟后端 flock 对齐)。排队项记 sessionKey,
+  // 出队 dispatch 时投到对的 session。
   const busy = _hasActiveRun(ws) || (_promptQueue[ws]?.length > 0);
   if (busy) {
     // File 对象塞进队列(不上传 — 等出队时 _dispatchAllQueues 再上传)
-    _enqueuePrompt(ws, prompt, pending);
+    _enqueuePrompt(ws, prompt, pending, sessionKey);
     _clearPending(ws);
     _renderChips(ws);
     form.reset();
@@ -2887,7 +3007,7 @@ async function onTriggerSubmit(e) {
       body: JSON.stringify({
         workspace: ws,
         prompt,
-        session_key: activeSessionKey(ws),
+        session_key: sessionKey,
         source: 'pwa',
         ...(attachmentPaths ? { attachments: attachmentPaths } : {}),
       }),
