@@ -966,10 +966,16 @@ body.is-dragging .ws-col:not(.dragging) {
 .ws-col .trigger-form {
   margin-top: auto;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: flex-end;
 }
-.ws-col .trigger-form textarea { flex: 1 1 0; min-width: 0; min-height: 60px; }
+/* 布局:chips 单独占一行在最上;下面一行 [textarea ....] [📎][Run] —— 📎 跟
+   Run 挨在右边,不再一左一右隔着 textarea。用 order 重排,不动 HTML 顺序。 */
+.ws-col .trigger-form .attach-chips { order: -1; flex: 0 0 100%; }
+.ws-col .trigger-form textarea { order: 0; flex: 1 1 0; min-width: 0; min-height: 60px; }
+.ws-col .trigger-form .attach-btn { order: 1; }
+.ws-col .trigger-form button[type="submit"] { order: 2; }
 .ws-col .trigger-form button   { white-space: nowrap; flex: 0 0 auto; }
 
 /* ============================================================================
@@ -2336,6 +2342,7 @@ pre {
     bottom: 0;
     z-index: 25;
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
     align-items: flex-end;
     padding: var(--space-2) var(--space-3);
@@ -2343,6 +2350,11 @@ pre {
     background: rgba(20, 22, 27, 0.96);
     border-top: 1px solid var(--border-subtle);
   }
+  /* 跟桌面一致:chips 单独一行在上;[textarea] [📎][Run] 一行,📎 挨 Run。 */
+  .workspace-input .attach-chips { order: -1; flex: 0 0 100%; }
+  .workspace-input textarea { order: 0; }
+  .workspace-input .attach-btn { order: 1; }
+  .workspace-input .run-btn { order: 2; }
   .workspace-input textarea {
     /* basis 0 而不是 auto:flex-wrap 容器里 basis: auto 会按 textarea 默认
        cols (~200px) 算自然宽度,加上 attach-btn / run-btn 容易撑过容器宽度
