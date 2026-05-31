@@ -125,6 +125,19 @@ WORKSPACE="${POSITIONAL[0]}"
 PROMPT="${POSITIONAL[1]}"
 SESSION_KEY="${POSITIONAL[2]:-default}"
 
+# sessions.json 存储键(跟 SESSION_KEY 区分:SESSION_KEY 还要给 worktree-skip
+# 逻辑用 —— "default" 才不开 worktree)。worktree_mode=off 时 runner.submit 把
+# 多个 workspace 的 session_key 都压成 "default" → sessions.json["default"]
+# 全局共享 → A workspace 建的 sid 在 B 的 cwd resume 不到(claude session store
+# 按 cwd-project 分)→ 跨 ws 必 stale(2026-05-31 踩的坑)。namespace 掉:
+# "default" 加 workspace 前缀。pwa-<ws> / loop 名已经天然按 ws 唯一,不动
+# (backend reset_workspace_session 仍按 pwa-<ws> 匹配,不破)。
+if [[ "$SESSION_KEY" == "default" ]]; then
+    STORE_KEY="default::${WORKSPACE}"
+else
+    STORE_KEY="$SESSION_KEY"
+fi
+
 WORKSPACE_PATH="${WORKSPACES_DIR}/${WORKSPACE}"
 [[ -d "${WORKSPACE_PATH}/.git" ]] || die "$EX_USAGE" "workspace not a git repo: ${WORKSPACE_PATH}"
 
@@ -211,7 +224,7 @@ ensure_sessions_file() {
 
 get_session_id() {  # $1=engine; stdout=sid or empty
     ensure_sessions_file
-    jq -r --arg k "$SESSION_KEY" --arg f "${1}_session_id" \
+    jq -r --arg k "$STORE_KEY" --arg f "${1}_session_id" \
         '(.[$k][$f] // "")' "$SESSIONS_FILE" 2>/dev/null || true
 }
 
@@ -220,7 +233,7 @@ get_session_id() {  # $1=engine; stdout=sid or empty
 # Returns 0 when missing (fresh session) or unparseable.
 get_session_tokens() {
     ensure_sessions_file
-    jq -r --arg k "$SESSION_KEY" \
+    jq -r --arg k "$STORE_KEY" \
         '(.[$k].last_input_tokens // 0)' "$SESSIONS_FILE" 2>/dev/null || printf '0'
 }
 
@@ -230,7 +243,7 @@ save_session_tokens() {  # $1=tokens (integer)
     ensure_sessions_file
     local tokens="$1" tmp
     tmp="$(mktemp)"
-    jq --arg k "$SESSION_KEY" --arg ws "$WORKSPACE" --argjson t "$tokens" \
+    jq --arg k "$STORE_KEY" --arg ws "$WORKSPACE" --argjson t "$tokens" \
         '
         (.[$k] //= {workspace:$ws, claude_session_id:null, codex_session_id:null, last_active_at:0})
         | .[$k].last_input_tokens = $t
@@ -243,7 +256,7 @@ clear_session_id() {  # $1=engine
     ensure_sessions_file
     local field="${1}_session_id" tmp
     tmp="$(mktemp)"
-    jq --arg k "$SESSION_KEY" --arg f "$field" \
+    jq --arg k "$STORE_KEY" --arg f "$field" \
         'if .[$k] then .[$k][$f] = null else . end' \
         "$SESSIONS_FILE" > "$tmp" && mv "$tmp" "$SESSIONS_FILE"
 }
@@ -272,7 +285,7 @@ save_session_id() {  # $1=engine, $2=sid
     local field="${1}_session_id" sid="$2" now tmp
     now="$(date +%s)"
     tmp="$(mktemp)"
-    jq --arg k "$SESSION_KEY" --arg ws "$WORKSPACE" --arg f "$field" \
+    jq --arg k "$STORE_KEY" --arg ws "$WORKSPACE" --arg f "$field" \
        --arg sid "$sid" --argjson now "$now" '
         (.[$k] //= {workspace:$ws, claude_session_id:null, codex_session_id:null, last_active_at:0})
         | .[$k][$f] = $sid
