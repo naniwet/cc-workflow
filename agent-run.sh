@@ -530,20 +530,35 @@ ${PROMPT}"
 
     # ---------- stale-session recovery ----------
     # When --resume <sid> points to a conversation claude no longer
-    # knows about, claude exits non-zero with stderr:
-    #     "No conversation found with session ID: <sid>"
+    # knows about, claude reports "No conversation found with session ID: <sid>".
     # Causes we've seen:
     #   - ~/.claude/projects/ was manually cleaned
     #   - claude expired old sessions but sessions.json wasn't invalidated
     #   - state migration / deploy mode flip left orphan sids
+    #   - worktree_mode=off 让多个 workspace 共用 session_key="default" →
+    #     A workspace 建的 sid 在 B workspace 的 cwd 里 resume 不到(claude
+    #     session store 按 cwd-project 分),跨 ws 必然 stale
     # Recover transparently: clear the stale sid, rerun without --resume.
-    # User just sees the fresh-session reply (with no prior context); much
-    # better than a baffling "exit 66" they can't act on.
+    #
+    # 两种 claude 行为都要 catch(2026-05-31 踩的坑):
+    #   旧版:rc != 0 + stderr 里 "No conversation found..."
+    #   claude 2.1.133:**rc == 0** + stream 里一条 result 事件
+    #     {"subtype":"error_during_execution",...,"errors":["No conversation
+    #      found with session ID: ..."]} —— 退出码是 0,只能扫 stream。
+    # 之前只认旧版 → 新版漏网,错误直接抛给用户(error_during_execution)。
     #
     # Only retry once — second-attempt failure means something else is
     # wrong, fall through to the normal failure path.
-    if [[ $rc -ne 0 ]] && [[ -n "$sid" ]] \
-       && grep -qF "No conversation found with session ID" "$errfile"; then
+    _stale_session=0
+    if [[ -n "$sid" ]]; then
+        if [[ $rc -ne 0 ]] && grep -qF "No conversation found with session ID" "$errfile"; then
+            _stale_session=1   # 旧版:非零退出 + stderr
+        elif grep -qF '"subtype":"error_during_execution"' "$stream" \
+             && grep -qF "No conversation found with session ID" "$stream"; then
+            _stale_session=1   # claude 2.1.133:rc=0 + stream 里 error result
+        fi
+    fi
+    if [[ $_stale_session -eq 1 ]]; then
         err "claude: --resume ${sid} failed (session not in claude store); clearing + retrying fresh"
         clear_session_id claude \
             || err "warn: clear_session_id failed; sessions.json may still contain stale sid"
