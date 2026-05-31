@@ -1864,12 +1864,17 @@ function _providerOptionsHtml(selected, includeDefault) {
 // stay tidy and stay in sync if the option list ever needs special handling.
 function _newWsProviderPickerHtml() {
   const list = lastData.providers || [];
-  const defaultLabel = lastData.globalProvider
-    ? `default · ${lastData.globalProvider}`
+  const globalDefault = lastData.globalProvider;
+  const defaultLabel = globalDefault
+    ? `default · ${globalDefault}`
     : 'default';
   const options = [{ value: '', label: defaultLabel }];
   for (const p of list) {
     const n = p.name || p;   // 兼容老 list[str] 格式
+    // 跳过等于全局默认的那个 —— "default · <它>" 已经覆盖,再列一遍 = 视觉重复。
+    // 跟 _providerRadioListHtml(⋯ 菜单)line 2029 的去重逻辑一致。新建 workspace
+    // 没有"已 pin"状态,所以无条件跳过(不像 ⋯ 菜单要留 pin 行)。
+    if (n === globalDefault) continue;
     options.push({ value: n, label: n });
   }
   return _renderFormPicker({ name: 'provider', options, value: '' });
