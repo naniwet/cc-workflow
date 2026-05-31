@@ -267,3 +267,34 @@ export function sessionChipLabel(ws, sessionKey) {
 export function sessionSafe(sessionKey) {
   return String(sessionKey).replace(/[^A-Za-z0-9._-]/g, '_');
 }
+
+// ---------------------------------------------------------------------------
+// session tile 归桶 / id —— 桌面 overview 一格一个 session 的核心纯逻辑。
+// 抽到这里被 pwa-ui-contract.test.mjs 覆盖(review W1:这是"归错 tile /
+// 看不到对话"风险的真相源,五分支边界必须单测钉死)。
+// ---------------------------------------------------------------------------
+
+// session tile id:workspace + session_key 的稳定唯一键。用 unit-separator
+// (\x1f)分隔 —— ws 名 / session_key 都是 [A-Za-z0-9._-],不含控制字符,不撞。
+export const SESSION_ID_SEP = '';
+export function sessionTileId(ws, sessionKey) {
+  return `${ws}${SESSION_ID_SEP}${sessionKey}`;
+}
+export function parseSessionTileId(id) {
+  const i = id.indexOf(SESSION_ID_SEP);
+  return i < 0 ? { ws: id, sessionKey: `pwa-${id}` }
+               : { ws: id.slice(0, i), sessionKey: id.slice(i + 1) };
+}
+
+// 把一条 run 的 session_key 映射成它该归的 tile key(= tile 的 sessionKey):
+//   "default"(worktree_mode=off 时 runner.submit 压成)/ "pwa-<ws>"(auto 默认)
+//     → 默认 tile(统一 pwa-<ws>)
+//   "<ws>--<name>" → 用户建的并行工作线,各自 tile
+//   其它(cron loop 名 / feishu-*)→ null,不出 tile(有 Tasks / 飞书 入口)
+// 漏 "default" 会让 off 模式的 run 全被滤掉(2026-05-31 踩的坑)。
+export function tileKeyFor(ws, sessionKey) {
+  const key = sessionKey || `pwa-${ws}`;
+  if (key === 'default' || key === `pwa-${ws}`) return `pwa-${ws}`;
+  if (key.startsWith(`${ws}--`)) return key;
+  return null;
+}

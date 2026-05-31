@@ -15,6 +15,9 @@ import {
   isUserSession,
   sessionChipLabel,
   sessionSafe,
+  sessionTileId,
+  parseSessionTileId,
+  tileKeyFor,
 } from '../pwa/ui_contract.mjs';
 
 test('status accent mapping follows the mobile overview design', () => {
@@ -288,4 +291,46 @@ test('sessionSafe: 跟 agent-run.sh SESSION_SAFE + merge endpoint 一致(非法�
   assert.equal(sessionSafe('myrepo--fix-bug'), 'myrepo--fix-bug');  // α 命名已干净
   assert.equal(sessionSafe('daily report'), 'daily_report');        // cron 名含空格
   assert.equal(sessionSafe('飞书/x'), '___x');                       // 飞书/ → ___,x 保留
+});
+
+// ---------- session tile 归桶 / id(review W1:风险最高逻辑必须钉死)----------
+
+test('tileKeyFor: default / pwa-<ws> 都归默认 tile(off + auto 模式统一)', () => {
+  // off 模式 runner.submit 压成 "default" → 默认 tile(之前漏这个,看不到对话)
+  assert.equal(tileKeyFor('myrepo', 'default'), 'pwa-myrepo');
+  // auto 模式 PWA 默认
+  assert.equal(tileKeyFor('myrepo', 'pwa-myrepo'), 'pwa-myrepo');
+  // 空 session_key 兜底成默认
+  assert.equal(tileKeyFor('myrepo', ''), 'pwa-myrepo');
+  assert.equal(tileKeyFor('myrepo', undefined), 'pwa-myrepo');
+});
+
+test('tileKeyFor: 用户建的 <ws>--<name> 各自一个 tile', () => {
+  assert.equal(tileKeyFor('myrepo', 'myrepo--fix-bug'), 'myrepo--fix-bug');
+  assert.equal(tileKeyFor('myrepo', 'myrepo--feat-x'), 'myrepo--feat-x');
+});
+
+test('tileKeyFor: cron / 飞书 的 session 不出 tile(返 null)', () => {
+  assert.equal(tileKeyFor('myrepo', 'daily-report'), null);   // cron loop 名
+  assert.equal(tileKeyFor('myrepo', 'feishu-oc_xxx'), null);  // 飞书
+  // 别的 workspace 的 key 在本 ws 也不归(前缀不匹配)
+  assert.equal(tileKeyFor('myrepo', 'pwa-other'), null);
+  assert.equal(tileKeyFor('myrepo', 'other--x'), null);
+});
+
+test('tileKeyFor: ws 名本身含 -- 不误判', () => {
+  // ws = "a--b":它的默认 / 用户 session
+  assert.equal(tileKeyFor('a--b', 'pwa-a--b'), 'pwa-a--b');
+  assert.equal(tileKeyFor('a--b', 'a--b--feat'), 'a--b--feat');
+  assert.equal(tileKeyFor('a--b', 'default'), 'pwa-a--b');
+});
+
+test('sessionTileId / parseSessionTileId round-trip', () => {
+  const id = sessionTileId('myrepo', 'myrepo--fix');
+  const { ws, sessionKey } = parseSessionTileId(id);
+  assert.equal(ws, 'myrepo');
+  assert.equal(sessionKey, 'myrepo--fix');
+  // 默认 session
+  const id2 = sessionTileId('myrepo', 'pwa-myrepo');
+  assert.deepEqual(parseSessionTileId(id2), { ws: 'myrepo', sessionKey: 'pwa-myrepo' });
 });

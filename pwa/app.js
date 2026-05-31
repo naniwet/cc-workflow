@@ -26,6 +26,9 @@ import {
   filterTurnsBySession,
   isUserSession,
   sessionChipLabel,
+  sessionTileId,
+  parseSessionTileId,
+  tileKeyFor,
 } from './ui_contract.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -1416,9 +1419,12 @@ const _SLASH_TRIGGER_RE = /(?:^|\s)\/(\S*)$/;
 // One popup element for the whole PWA, lazily created on first need.
 let _slashPopupEl = null;
 let _slashState = null;        // { textarea, workspace, items, filtered, idx, queryStart }
-// 每个 ws 自动拉过一次 / 命令就记下,避免每次打 / 重复 fetch。手动 Sync 不受
-// 影响(它直接 syncSkillsFor 覆盖缓存)。
+// 每个 ws 自动拉**成功**一次就记下,避免每次打 / 重复 fetch。失败不记 →
+// 下次打 / 能重试(W2:之前在 fetch 前就标记,一次抖动 = 永久静默降级)。
+// 手动 Sync 不受影响(它直接 syncSkillsFor 覆盖缓存)。
 const _skillsAutoFetched = new Set();
+// 进行中守卫:_openOrUpdateSlashPopup 每次按键都触发,防同一 ws 并发多个 fetch。
+const _skillsFetching = new Set();
 
 function _ensureSlashPopup() {
   if (_slashPopupEl) return _slashPopupEl;
@@ -1452,13 +1458,16 @@ function _saveSkillsCache(workspace, items) {
   } catch {}
 }
 
-async function syncSkillsFor(workspace) {
+// silent=true:自动拉(打 / 触发)时失败不弹 toast —— 用户没主动点,不该被
+// 打扰;手动 Sync 按钮仍 silent=false 弹错。失败返 null,caller 据此决定要不要
+// 重试(不标记"已拉过")。
+async function syncSkillsFor(workspace, { silent = false } = {}) {
   try {
     const items = await api(`/skills?workspace=${encodeURIComponent(workspace)}`);
     _saveSkillsCache(workspace, Array.isArray(items) ? items : []);
     return items;
   } catch (e) {
-    showError(e, { prefix: 'sync /commands' });
+    if (!silent) showError(e, { prefix: 'sync /commands' });
     return null;
   }
 }
@@ -1493,12 +1502,15 @@ function _openOrUpdateSlashPopup(textarea, workspace, query, queryStart) {
   // 看到列表)。_skillsAutoFetched 防重复拉:每个 ws 自动拉一次就够;手动
   // Sync 按钮仍能强制刷新(加了新命令时)。拉完若用户还在打这个 /,重开 popup。
   if (all.length === 0 && filtered.length === 0) {
-    if (!_skillsAutoFetched.has(workspace)) {
-      _skillsAutoFetched.add(workspace);
+    if (!_skillsAutoFetched.has(workspace) && !_skillsFetching.has(workspace)) {
+      _skillsFetching.add(workspace);                       // in-flight,防并发
       _renderSlashPopupEmpty(textarea, workspace, { loading: true });
       _slashState = { textarea, workspace, items: [], filtered: [], idx: -1, queryStart };
-      syncSkillsFor(workspace).then((items) => {
-        if (!items || items.length === 0) return;
+      syncSkillsFor(workspace, { silent: true }).then((items) => {
+        _skillsFetching.delete(workspace);
+        if (items === null) return;          // 失败 → 不标记 fetched,下次打 / 重试
+        _skillsAutoFetched.add(workspace);   // 成功(含空结果)→ 不再自动拉
+        if (items.length === 0) return;
         // 用户可能已经走了 / 关了 popup;只在还聚焦该 textarea + / 还在时重开
         if (document.activeElement !== textarea) return;
         const cur = textarea.value.substring(0, textarea.selectionStart);
@@ -1509,9 +1521,11 @@ function _openOrUpdateSlashPopup(textarea, workspace, query, queryStart) {
       });
       return;
     }
-    // 已经自动拉过(确实没命令)→ 显示空提示
-    _renderSlashPopupEmpty(textarea, workspace);
-    _slashState = { textarea, workspace, items: [], filtered: [], idx: -1, queryStart };
+    // 已自动拉过(确实没命令)或正在拉 → 空提示(正在拉时上面已设 loading)
+    if (!_skillsFetching.has(workspace)) {
+      _renderSlashPopupEmpty(textarea, workspace);
+      _slashState = { textarea, workspace, items: [], filtered: [], idx: -1, queryStart };
+    }
     return;
   }
   if (filtered.length === 0) {
@@ -2637,16 +2651,7 @@ async function onAddWorkspace(e) {
   }
 }
 
-// session-tile id:workspace + session_key 的稳定唯一键。用 unit-separator
-// ()分隔,不会跟 ws 名 / session_key 里的合法字符撞。
-const SESSION_ID_SEP = '';
-function sessionTileId(ws, sessionKey) { return `${ws}${SESSION_ID_SEP}${sessionKey}`; }
-function parseSessionTileId(id) {
-  const i = id.indexOf(SESSION_ID_SEP);
-  return i < 0 ? { ws: id, sessionKey: `pwa-${id}` }
-               : { ws: id.slice(0, i), sessionKey: id.slice(i + 1) };
-}
-
+// sessionTileId / parseSessionTileId / tileKeyFor 已抽到 ui_contract.mjs(有单测,review W1)。
 // 桌面 overview 按 session 平铺用:把 runs 按 (workspace, session_key) 分桶。
 // 只保留 PWA 工作线(pwa-<ws> 默认 + <ws>--<name> 用户建的),cron(loop 名)
 // / 飞书(feishu-*)的 session 排除 —— 它们有 Tasks tab / 飞书,塞进 overview
@@ -2654,17 +2659,8 @@ function parseSessionTileId(id) {
 // 返回 { [sessionTileId]: {ws, sessionKey, active, recent} }。
 function groupBySession(workspaces, sessions) {
   const valid = new Set(workspaces);
-  // 把一条 run 的 session_key 映射成它该归的 "tile key"(= tile 的 sessionKey):
-  //   - "default"(worktree_mode=off 时 runner.submit 压成的)/ "pwa-<ws>"
-  //     (auto 时 PWA 默认)→ 都归到默认 tile(统一用 pwa-<ws> 当 tile key)
-  //   - "<ws>--<name>" → 用户建的并行工作线,各自一个 tile
-  //   - 其它(cron loop 名 / feishu-*)→ null,不出 tile(有 Tasks / 飞书 入口)
-  // 之前漏了 "default" → off 模式的 run 全被滤掉,overview 看不到对话(2026-05-31)。
-  const tileKeyFor = (ws, key) => {
-    if (key === 'default' || key === `pwa-${ws}`) return `pwa-${ws}`;
-    if (key.startsWith(`${ws}--`)) return key;
-    return null;
-  };
+  // 归桶决策(五分支:default / pwa-<ws> / <ws>--* / cron / feishu)在
+  // tileKeyFor(ui_contract.mjs,有单测)。这里只迭代组装。
   const g = {};
   // 1. 每个 workspace 保底默认 session
   for (const w of workspaces) {
