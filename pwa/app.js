@@ -2816,8 +2816,7 @@ function workspaceColHtml(name, data, opts = {}) {
   // 同 ws 多 tile 不串)。timeline data-ws 同样用 colKey(scroll/stream 状态键)。
   // form data-workspace=真实 ws(workspace 级动作),data-session-key=本 tile
   // 的 session(run 投递目标);老路径 sessionKey=null 时 onTriggerSubmit 退回
-  // activeSessionKey(ws)。
-  const skAttr = sessionKey ? ` data-session-key="${esc(sessionKey)}"` : '';
+  // activeSessionKey(ws)。skAttr 在函数顶部已声明(providerEngineBlock 也用)。
   return `
     <div class="ws-col ${extraClass}" data-ws="${esc(colKey)}" data-tile-ws="${esc(name)}">
       <div class="ws-head">
