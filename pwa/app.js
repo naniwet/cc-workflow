@@ -1665,9 +1665,15 @@ function _onPromptKeydown(e) {
   if (e.isComposing || e.keyCode === 229) return;
   // Shift+Enter / Alt+Enter:换行,不发送。
   if (e.shiftKey || e.altKey) return;
-  // 其余 Enter(plain / Cmd / Ctrl)= 发送。Mobile 跟 PC 一致 —— chat
-  // app 的默认心智(ChatGPT / 飞书 都一样),要换行用 Shift+Enter。
-  // 上一版 mobile gate 掉 plain Enter,用户反馈"回车发送的逻辑也不见了"。
+  // 移动端软键盘的回车/换行键 = 换行(不发送)—— 手机上没有 Shift+Enter,
+  // 软键盘回车当发送会让多行输入很痛(用户反馈"输入法的换行变成发送")。
+  // 移动端发送走屏幕上随手可点的 Run 按钮。只有显式 Cmd/Ctrl+Enter(接了
+  // 硬件键盘)才在移动端也发送。
+  // 2026-05-31:从"mobile 跟 PC 一致 plain Enter 发送"翻案 —— 软键盘场景
+  // 换行优先;PC 保持 plain Enter 发送不变(Shift+Enter 换行)。
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  if (isMobile && !e.metaKey && !e.ctrlKey) return;   // 换行,放行默认行为
+  // PC plain Enter / 两端 Cmd|Ctrl+Enter = 发送
   e.preventDefault();
   const form = e.currentTarget.closest('form');
   if (form) form.requestSubmit();
