@@ -34,3 +34,4 @@ providers.json
 
 # Misc local scratch dirs — never project artifacts.
 packages/
+.superpowers/
