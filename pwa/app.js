@@ -3506,8 +3506,20 @@ async function _loadTurnEvents(runId) {
     // 弱,所以这里显式管 —— 主要照顾 mobile workspace-session-stream,
     // PC .ws-timeline 也保持同样语义(用户在底就跟到底)。
     const stream = container.closest('.workspace-session-stream, .ws-timeline');
+    // 是否该 append 后补滚到底。两个信号取或:
+    //   ① wasAtBottom:append 前实测就在底(运行中跟新内容的常态)
+    //   ② persistedAtBottom:持久化滚动状态说"用户没往上滚过"(fresh nav
+    //      进入 = 没存过状态 = undefined !== false = true)。
+    // 加 ② 是因为 fresh nav 初始滚到底用的是折叠高度(展开的最后一轮 events
+    // 还没异步加载),之后 events 撑开,①的临时测量在边界不可靠 → 漏补滚 →
+    // 停在中间(用户报"默认停在第一个 done")。用持久状态兜住:fresh nav 后
+    // 每次 event 加载都贴底,直到用户主动往上滚(scroll handler 置 atBottom=false)。
+    const _ws = stream?.dataset.ws;
+    const persistedAtBottom = stream?.classList.contains('ws-timeline')
+      ? (timelineScroll[_ws]?.atBottom !== false)
+      : (workspaceStreamState[_ws]?.atBottom !== false);
     const wasAtBottom = stream
-      ? (stream.scrollHeight - stream.clientHeight - stream.scrollTop) < 80
+      ? ((stream.scrollHeight - stream.clientHeight - stream.scrollTop) < 80 || persistedAtBottom)
       : false;
 
     const newLines = allLines.slice(already);
