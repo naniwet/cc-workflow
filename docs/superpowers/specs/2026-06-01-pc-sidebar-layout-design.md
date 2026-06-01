@@ -184,10 +184,11 @@ DOM 渲染、拖拽 dragstart/drop、localStorage 读写、CSS 布局 —— `no
 
 ---
 
-## 7. Open Questions
+## 7. Open Questions(已定)
 
-1. **`+ 新对话` 创建 session 的具体入口**:复用现有"新建 session"路径(`<ws>--<name>` 命名)还是要弹个命名框?→ 倾向:点 `+ 新对话` 直接建一个自动命名的新 session(如 `<ws>--2`),进 pane 聚焦;命名可后置。**留给 plan 阶段定,不阻塞主结构。**
-2. **窄桌面窗(769~900px)双开是否够宽**:两个 pane 各 ~380px,timeline 可读但偏窄。→ 接受;真窄就别开第二个。不为此加响应式断点(YAGNI)。
+1. **`+ 新对话` 创建 session 的入口** —— **已定(用户)**:点 `+ 新对话` 直接建一个**自动命名**的新 session(如 `<ws>--2`),进 pane 聚焦,**不弹命名框**。
+   - **session 重命名(改标题)→ 不进本 spec,列为 fast-follow。** 理由:① 要后端存 title(否则 mac/Android/飞书/cron 多端标题不同步,localStorage 只存本机不够);② 与布局正交(移动端、侧边栏都适用)。本次布局先用自动命名,重命名作为布局完成后的独立小 spec。
+2. **窄桌面窗(769~900px)双开是否够宽**:两个 pane 各 ~380px,timeline 可读但偏窄。→ **接受**;真窄就别开第二个。不为此加响应式断点(YAGNI)。
 
 ---
 
