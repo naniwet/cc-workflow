@@ -189,6 +189,8 @@ DOM 渲染、拖拽 dragstart/drop、localStorage 读写、CSS 布局 —— `no
 1. **`+ 新对话` 创建 session 的入口** —— **已定(用户)**:点 `+ 新对话` 直接建一个**自动命名**的新 session(如 `<ws>--2`),进 pane 聚焦,**不弹命名框**。
    - **session 重命名(改标题)→ 不进本 spec,列为 fast-follow。** 理由:① 要后端存 title(否则 mac/Android/飞书/cron 多端标题不同步,localStorage 只存本机不够);② 与布局正交(移动端、侧边栏都适用)。本次布局先用自动命名,重命名作为布局完成后的独立小 spec。
 2. **窄桌面窗(769~900px)双开是否够宽**:两个 pane 各 ~380px,timeline 可读但偏窄。→ **接受**;真窄就别开第二个。不为此加响应式断点(YAGNI)。
+3. **(实现期发现,Review B 确认 fast-follow)poll-time 不重新 prune `paneState.panes`**:本 session 内删 repo/session 后,失效 tileId 留在 panes 直到下次进 app(`loadPcLayout` 是唯一 prune 时机)。失效 tile 命中 `_pcMainHtml` 的空桶兜底 → 渲染成 "no runs yet" 空态,不崩、不丢数据、reload 自愈。不在 poll 时重 prune 是有意的(避免 "poll 抢 active pane" 副作用)。→ **fast-follow**:真要做就在 poll 后补跑一次 `_prunePanes`。
+4. **(实现期发现,Review B 确认 fast-follow)附件队列 `_pendingUploads` 按裸 ws 名索引**:同 repo 两 pane 共享同一附件队列(其余 timeline / 草稿 / scroll / form 投递已按 tileId 隔离,不串台)。窄场景(双 pane 且两边都挂附件)、不影响正确性(提交时按 ws 取队列)。→ **fast-follow**:把整条上传链(`_pendingUploads` / `_renderChips` / `onTriggerSubmit` / paste 的 `data-ws`)改成按 tileId 索引。
 
 ---
 

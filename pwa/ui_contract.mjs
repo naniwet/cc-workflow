@@ -298,3 +298,124 @@ export function tileKeyFor(ws, sessionKey) {
   if (key.startsWith(`${ws}--`)) return key;
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// PC 侧边栏布局 —— 纯函数(spec: 2026-06-01-pc-sidebar-layout-design.md §5)。
+// 被 app.js 的 renderDesktopSidebarLayout / dispatchPane 调,被 contract test
+// 覆盖。两个都是 0 IO / 0 localStorage 的纯函数(localStorage 读写归 app.js)。
+// ---------------------------------------------------------------------------
+
+// 主区最多并排几个 pane。放开到 N 只改这一个常量 + 网格 CSS(spec §3.3,
+// 轻易可逆)。
+export const MAX_PANES = 2;
+
+// pane 状态 reducer(纯函数 state→state)。state = {panes:[tileId...],
+// activePaneIdx}。三条不变量(每个 action 后都成立):
+//   ① panes 长度 ∈ [1, MAX_PANES]  ② 无重复 tileId
+//   ③ activePaneIdx 永远指向存在的 pane
+//
+// action:
+//   {type:'focus', tileId}      写进 active pane;tileId 已开则只切 activePaneIdx
+//   {type:'openBeside', tileId} 未满 append 设 active;已满替换非 active;已开则只 focus
+//   {type:'close', idx}         仅 2 pane 合法,删该 idx,剩下成 active(idx 0);单 pane no-op
+export function paneStateReducer(state, action) {
+  const panes = state.panes;
+  const activeIdx = state.activePaneIdx;
+
+  if (!action || typeof action !== 'object') return state;
+
+  if (action.type === 'focus') {
+    const existing = panes.indexOf(action.tileId);
+    if (existing >= 0) {
+      // 已开:只切 active,不 dup
+      return { panes, activePaneIdx: existing };
+    }
+    // 写进当前 active pane(替换它)
+    const nextPanes = panes.slice();
+    nextPanes[activeIdx] = action.tileId;
+    return { panes: nextPanes, activePaneIdx: activeIdx };
+  }
+
+  if (action.type === 'openBeside') {
+    const existing = panes.indexOf(action.tileId);
+    if (existing >= 0) {
+      // 已开:只 focus,不 dup
+      return { panes, activePaneIdx: existing };
+    }
+    if (panes.length < MAX_PANES) {
+      // 未满:append 并设为 active
+      const nextPanes = panes.concat(action.tileId);
+      return { panes: nextPanes, activePaneIdx: nextPanes.length - 1 };
+    }
+    // 已满:替换非 active 的那个,替进去的成 active
+    const replaceIdx = activeIdx === 0 ? panes.length - 1 : 0;
+    const nextPanes = panes.slice();
+    nextPanes[replaceIdx] = action.tileId;
+    return { panes: nextPanes, activePaneIdx: replaceIdx };
+  }
+
+  if (action.type === 'close') {
+    if (panes.length <= 1) return state;   // 至少留 1 个 pane,no-op
+    const nextPanes = panes.slice();
+    nextPanes.splice(action.idx, 1);
+    return { panes: nextPanes, activePaneIdx: 0 };
+  }
+
+  return state;   // 未知 action:原样返回
+}
+
+// 侧边栏两级树(纯函数,0 IO)。
+//
+// 契约:buildSidebarTree(groupBySession(workspaces, sessions))
+//   —— 直接吃 groupBySession 的输出,只做一件事:把 tiles 按 workspace
+//   组成两级树。分桶 / 排除(cron/飞书/orphan)+ 保底默认 session + 用户刚
+//   "+ 新对话" 的空 session 注入(_declaredEmptySessions),全是 groupBySession
+//   的职责。buildSidebarTree 信任 groups,不再自己分桶(否则两处分桶逻辑会漂)。
+//
+// 输入 groups:plain object,key = sessionTileId(ws, sessionKey),
+//   value = {ws, sessionKey, ...}。迭代顺序 = 插入序(groupBySession 的
+//   bucket 顺序:默认 tile → active 线 → recent 线 → declaredEmpty)。
+//
+// 输出数组(每 ws 一项,保 groups 里 ws 的首次出现顺序),每 entry:
+//   {ws, tileId(默认 session 的 tile), sessionCount, expandable(>=2), sessions}
+//   sessions 仅 expandable 时填,元素 {sessionKey, label, tileId},顺序严格保
+//   groups 插入序(= 墙的顺序,天然一致)。顶层 tileId = 该 ws 默认 tile
+//   (pwa-<ws>);groups 里没有默认 tile 时退到该 ws 第一个 tile。
+export function buildSidebarTree(groups) {
+  // ws → 该 ws 的 {sessionKey, tileId} 列表(按 groups 插入序累积)
+  const byWs = new Map();
+  for (const tileId of Object.keys(groups || {})) {
+    const { ws, sessionKey } = groups[tileId];
+    if (!byWs.has(ws)) byWs.set(ws, []);
+    byWs.get(ws).push({ sessionKey, tileId });
+  }
+
+  return Array.from(byWs.entries()).map(([ws, tiles]) => {
+    const sessionCount = tiles.length;
+    const expandable = sessionCount >= 2;
+    const defaultTileId = sessionTileId(ws, `pwa-${ws}`);
+    const hasDefault = tiles.some((t) => t.tileId === defaultTileId);
+    return {
+      ws,
+      tileId: hasDefault ? defaultTileId : tiles[0].tileId,
+      sessionCount,
+      expandable,
+      sessions: expandable
+        ? tiles.map(({ sessionKey, tileId }) => ({
+            sessionKey,
+            label: sessionChipLabel(ws, sessionKey),
+            tileId,
+          }))
+        : [],
+    };
+  });
+}
+
+// 持久化 pane 清洗(纯函数,spec §3.5)。localStorage 里存的 panes 可能含
+// 已删 repo / session 的 tileId(刷新时数据已经变了)→ 只保留仍在
+// validTileIds 里的,保序;全失效返回 [](由调用方决定回落到默认聚焦)。
+// validTileIds 可为 Set 或 array。
+export function _prunePanes(panes, validTileIds) {
+  const valid = validTileIds instanceof Set ? validTileIds : new Set(validTileIds || []);
+  return (panes || []).filter((tileId) => valid.has(tileId));
+}

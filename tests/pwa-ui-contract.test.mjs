@@ -18,6 +18,10 @@ import {
   sessionTileId,
   parseSessionTileId,
   tileKeyFor,
+  MAX_PANES,
+  paneStateReducer,
+  buildSidebarTree,
+  _prunePanes,
 } from '../pwa/ui_contract.mjs';
 
 test('status accent mapping follows the mobile overview design', () => {
@@ -333,4 +337,254 @@ test('sessionTileId / parseSessionTileId round-trip', () => {
   // 默认 session
   const id2 = sessionTileId('myrepo', 'pwa-myrepo');
   assert.deepEqual(parseSessionTileId(id2), { ws: 'myrepo', sessionKey: 'pwa-myrepo' });
+});
+
+// ---------- paneStateReducer(PC 侧边栏主区 1~2 pane,spec §5.2)----------
+// 纯函数 state→state,无 IO / 无 localStorage。三条不变量(每个 case 后成立):
+//   ① panes 长度 ∈ [1,2]  ② 无重复 tileId  ③ activePaneIdx 指向存在的 pane
+
+// 不变量断言 helper:任何 reducer 输出都过这一关。
+function assertPaneInvariants(state) {
+  assert.ok(state.panes.length >= 1 && state.panes.length <= MAX_PANES,
+    `panes 长度越界: ${state.panes.length}`);
+  assert.equal(new Set(state.panes).size, state.panes.length, '出现重复 tileId');
+  assert.ok(state.activePaneIdx >= 0 && state.activePaneIdx < state.panes.length,
+    `activePaneIdx 指向不存在的 pane: ${state.activePaneIdx}`);
+}
+
+test('MAX_PANES = 2(放开 N 只改这个常量)', () => {
+  assert.equal(MAX_PANES, 2);
+});
+
+test('paneStateReducer focus: 写进 active pane(替换它)', () => {
+  const state = { panes: ['a', 'b'], activePaneIdx: 1 };
+  const next = paneStateReducer(state, { type: 'focus', tileId: 'c' });
+  assert.deepEqual(next.panes, ['a', 'c']);   // 写进 idx=1(active)
+  assert.equal(next.activePaneIdx, 1);
+  assertPaneInvariants(next);
+});
+
+test('paneStateReducer focus: 已开项只切 activePaneIdx,不重复加', () => {
+  const state = { panes: ['a', 'b'], activePaneIdx: 0 };
+  const next = paneStateReducer(state, { type: 'focus', tileId: 'b' });
+  assert.deepEqual(next.panes, ['a', 'b']);   // 不 dup
+  assert.equal(next.activePaneIdx, 1);        // 切到 b 所在 pane
+  assertPaneInvariants(next);
+});
+
+test('paneStateReducer focus: focus 当前 active 自身 = no-op', () => {
+  const state = { panes: ['a'], activePaneIdx: 0 };
+  const next = paneStateReducer(state, { type: 'focus', tileId: 'a' });
+  assert.deepEqual(next.panes, ['a']);
+  assert.equal(next.activePaneIdx, 0);
+  assertPaneInvariants(next);
+});
+
+test('paneStateReducer openBeside: 未满 → append 并设为 active', () => {
+  const state = { panes: ['a'], activePaneIdx: 0 };
+  const next = paneStateReducer(state, { type: 'openBeside', tileId: 'b' });
+  assert.deepEqual(next.panes, ['a', 'b']);
+  assert.equal(next.activePaneIdx, 1);        // 新开的成 active
+  assertPaneInvariants(next);
+});
+
+test('paneStateReducer openBeside: 已满 → 替换非 active 的那个', () => {
+  // active = idx 0,非 active = idx 1 → 新 tile 替掉 idx 1
+  const state = { panes: ['a', 'b'], activePaneIdx: 0 };
+  const next = paneStateReducer(state, { type: 'openBeside', tileId: 'c' });
+  assert.deepEqual(next.panes, ['a', 'c']);   // b 被替掉,a(active)保留
+  assert.equal(next.activePaneIdx, 1);        // 替进去的成 active
+  assertPaneInvariants(next);
+
+  // active = idx 1 时,替掉 idx 0
+  const state2 = { panes: ['a', 'b'], activePaneIdx: 1 };
+  const next2 = paneStateReducer(state2, { type: 'openBeside', tileId: 'c' });
+  assert.deepEqual(next2.panes, ['c', 'b']);  // a 被替掉,b(active)保留
+  assert.equal(next2.activePaneIdx, 0);
+  assertPaneInvariants(next2);
+});
+
+test('paneStateReducer openBeside: tileId 已存在 → 只 focus 不 dup', () => {
+  const state = { panes: ['a', 'b'], activePaneIdx: 0 };
+  const next = paneStateReducer(state, { type: 'openBeside', tileId: 'b' });
+  assert.deepEqual(next.panes, ['a', 'b']);   // 不 dup
+  assert.equal(next.activePaneIdx, 1);        // 切到 b
+  assertPaneInvariants(next);
+});
+
+test('paneStateReducer close: 2 pane 时删 idx,剩下成 active(activePaneIdx 归 0)', () => {
+  const state = { panes: ['a', 'b'], activePaneIdx: 1 };
+  const next = paneStateReducer(state, { type: 'close', idx: 0 });
+  assert.deepEqual(next.panes, ['b']);
+  assert.equal(next.activePaneIdx, 0);
+  assertPaneInvariants(next);
+
+  // 删 idx 1
+  const next2 = paneStateReducer({ panes: ['a', 'b'], activePaneIdx: 0 }, { type: 'close', idx: 1 });
+  assert.deepEqual(next2.panes, ['a']);
+  assert.equal(next2.activePaneIdx, 0);
+  assertPaneInvariants(next2);
+});
+
+test('paneStateReducer close: 单 pane 时是 no-op(至少留 1 个)', () => {
+  const state = { panes: ['a'], activePaneIdx: 0 };
+  const next = paneStateReducer(state, { type: 'close', idx: 0 });
+  assert.deepEqual(next.panes, ['a']);        // 不删,至少留 1
+  assert.equal(next.activePaneIdx, 0);
+  assertPaneInvariants(next);
+});
+
+test('paneStateReducer: 未知 action type 原样返回(不破坏不变量)', () => {
+  const state = { panes: ['a', 'b'], activePaneIdx: 1 };
+  const next = paneStateReducer(state, { type: 'bogus' });
+  assert.deepEqual(next.panes, ['a', 'b']);
+  assert.equal(next.activePaneIdx, 1);
+  assertPaneInvariants(next);
+});
+
+// ---------- buildSidebarTree(PC 侧边栏两级树,spec §5.1)----------
+// 纯函数,无 IO。新契约(code-review checkpoint A 修订):
+//   buildSidebarTree(groupBySession(workspaces, sessions))
+// 它不再自己分桶 —— 直接吃 groupBySession 的输出 groups,只把 tiles 按
+// workspace 组成两级树。分桶 / 排除(cron/飞书/orphan/declaredEmpty 注入)
+// 全是 groupBySession 的职责,buildSidebarTree 信任 groups。
+//
+// groups 形状(贴 app.js groupBySession 真实返回):plain object,
+//   key = sessionTileId(ws, sessionKey),value = { ws, sessionKey, active, recent }。
+// 迭代顺序 = 插入序(JS string key),侧边栏 children 顺序忠实反映它。
+
+// fixture helper:按"插入序"组装 groups,跟 groupBySession 返回形状一致。
+// 每个 entry 用 sessionTileId 当 key,value 至少含 {ws, sessionKey}。
+function groups(...tiles) {
+  const g = {};
+  for (const { ws, sessionKey } of tiles) {
+    g[sessionTileId(ws, sessionKey)] = { ws, sessionKey, active: [], recent: [] };
+  }
+  return g;
+}
+
+test('buildSidebarTree: 单 session repo → expandable:false, sessions:[]', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes' },
+  ));
+  assert.equal(tree.length, 1);
+  assert.deepEqual(tree[0], {
+    ws: 'notes',
+    tileId: sessionTileId('notes', 'pwa-notes'),
+    sessionCount: 1,
+    expandable: false,
+    sessions: [],
+  });
+});
+
+test('buildSidebarTree: 无 run 的新 repo(groupBySession 保底默认 tile)→ 默认 leaf', () => {
+  // groupBySession 给每个 workspace 保底一个默认 tile,即使没 run。
+  const tree = buildSidebarTree(groups(
+    { ws: 'fresh', sessionKey: 'pwa-fresh' },
+  ));
+  assert.equal(tree.length, 1);
+  assert.equal(tree[0].ws, 'fresh');
+  assert.equal(tree[0].tileId, sessionTileId('fresh', 'pwa-fresh'));
+  assert.equal(tree[0].sessionCount, 1);
+  assert.equal(tree[0].expandable, false);
+  assert.deepEqual(tree[0].sessions, []);
+});
+
+test('buildSidebarTree: 多 session(≥2)repo → expandable:true + 正确 children', () => {
+  // groups 插入序 = 默认 → active 线 → recent 线(groupBySession bucket
+  // 顺序),children 忠实保留这个顺序,不再自己排。
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc-workflow', sessionKey: 'pwa-cc-workflow' },
+    { ws: 'cc-workflow', sessionKey: 'cc-workflow--feat-x' },
+    { ws: 'cc-workflow', sessionKey: 'cc-workflow--fix-bug' },
+  ));
+  assert.equal(tree.length, 1);
+  const entry = tree[0];
+  assert.equal(entry.ws, 'cc-workflow');
+  assert.equal(entry.tileId, sessionTileId('cc-workflow', 'pwa-cc-workflow'));
+  assert.equal(entry.sessionCount, 3);        // 默认 + 2 个用户线
+  assert.equal(entry.expandable, true);
+  // children 顺序 = groups 插入序(信任 groups,不重排)
+  assert.deepEqual(entry.sessions, [
+    { sessionKey: 'pwa-cc-workflow', label: 'pwa-cc-workflow', tileId: sessionTileId('cc-workflow', 'pwa-cc-workflow') },
+    { sessionKey: 'cc-workflow--feat-x', label: 'feat-x', tileId: sessionTileId('cc-workflow', 'cc-workflow--feat-x') },
+    { sessionKey: 'cc-workflow--fix-bug', label: 'fix-bug', tileId: sessionTileId('cc-workflow', 'cc-workflow--fix-bug') },
+  ]);
+});
+
+test('buildSidebarTree: children label 用 sessionChipLabel(去 <ws>-- 前缀)', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'myrepo', sessionKey: 'pwa-myrepo' },
+    { ws: 'myrepo', sessionKey: 'myrepo--polish' },
+  ));
+  const labels = tree[0].sessions.map((s) => s.label);
+  assert.deepEqual(labels, ['pwa-myrepo', 'polish']);   // 用户线去前缀
+});
+
+test('buildSidebarTree: 含 declaredEmpty 空 session 的 ws → 它出现在树里(Warn 2)', () => {
+  // 用户刚点 "+ 新对话"、还没 run 的空 session:groupBySession 已把它注入
+  // groups(_declaredEmptySessions)。buildSidebarTree 信任 groups,所以这条
+  // 空 session 忠实出现在树里(spec §7-1:新建对话立刻可见)。
+  const tree = buildSidebarTree(groups(
+    { ws: 'myrepo', sessionKey: 'pwa-myrepo' },
+    { ws: 'myrepo', sessionKey: 'myrepo--new-chat' },   // 还没 run 的空 session
+  ));
+  assert.equal(tree[0].sessionCount, 2);
+  assert.equal(tree[0].expandable, true);
+  assert.deepEqual(tree[0].sessions.map((s) => s.sessionKey), [
+    'pwa-myrepo', 'myrepo--new-chat',
+  ]);
+});
+
+test('buildSidebarTree: 树不无中生有 —— groups 里没 cron/飞书 tile,树里也没有', () => {
+  // groupBySession 已用 tileKeyFor 排掉 cron/飞书,给的 groups 里本就只有
+  // 默认 tile。buildSidebarTree 忠实反映 groups,不会凭空造出别的 tile。
+  const tree = buildSidebarTree(groups(
+    { ws: 'myrepo', sessionKey: 'pwa-myrepo' },
+  ));
+  assert.equal(tree[0].sessionCount, 1);
+  assert.equal(tree[0].expandable, false);
+  assert.deepEqual(tree[0].sessions, []);
+});
+
+test('buildSidebarTree: 多 repo → 每个 repo 一个 entry,保 groups 顺序', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc-workflow', sessionKey: 'pwa-cc-workflow' },
+    { ws: 'cc-workflow', sessionKey: 'cc-workflow--a' },
+    { ws: 'notes', sessionKey: 'pwa-notes' },
+  ));
+  assert.deepEqual(tree.map((e) => e.ws), ['cc-workflow', 'notes']);
+  assert.equal(tree[0].expandable, true);     // cc-workflow 有默认 + a = 2
+  assert.equal(tree[1].expandable, false);    // notes 单 session
+});
+
+test('buildSidebarTree: 顶层 tileId 默认 tile 缺失时退到该 ws 第一个 tile', () => {
+  // 理论上 groupBySession 总给默认 tile;但若没有(防御),顶层 tileId
+  // 退到该 ws 出现的第一个 tile,而不是凭空造一个 pwa-<ws>。
+  const tree = buildSidebarTree(groups(
+    { ws: 'myrepo', sessionKey: 'myrepo--only-user-line' },
+  ));
+  assert.equal(tree.length, 1);
+  assert.equal(tree[0].tileId, sessionTileId('myrepo', 'myrepo--only-user-line'));
+  assert.equal(tree[0].sessionCount, 1);
+  assert.equal(tree[0].expandable, false);
+});
+
+// _prunePanes —— 持久化 pane 清洗(spec §3.5):repo / session 被删后,
+// localStorage 里残留的 tileId 要丢掉。validTileIds 可为 Set 或 array。
+test('_prunePanes: 丢掉已不存在的 tileId,保留存在的(保序)', () => {
+  const valid = new Set(['a', 'b', 'c']);
+  assert.deepEqual(_prunePanes(['a', 'gone', 'b'], valid), ['a', 'b']);
+});
+
+test('_prunePanes: 全部存在 → 原样保序返回', () => {
+  assert.deepEqual(_prunePanes(['b', 'a'], new Set(['a', 'b'])), ['b', 'a']);
+});
+
+test('_prunePanes: 全部失效 → []', () => {
+  assert.deepEqual(_prunePanes(['x', 'y'], new Set(['a', 'b'])), []);
+});
+
+test('_prunePanes: validTileIds 传 array 也行', () => {
+  assert.deepEqual(_prunePanes(['a', 'gone'], ['a', 'b']), ['a']);
 });

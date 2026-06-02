@@ -29,6 +29,9 @@ import {
   sessionTileId,
   parseSessionTileId,
   tileKeyFor,
+  buildSidebarTree,
+  paneStateReducer,
+  _prunePanes,
 } from './ui_contract.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -100,13 +103,9 @@ const ICONS = {
   success: `<svg ${_S}><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>`,
   info:    `<svg ${_S}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
   warning: `<svg ${_S}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
-  // 6-dot vertical grip — drag handle on PC workspace cards
-  grip:    `<svg ${_S}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>`,
   // Maximize / minimize corner arrows (kept for potential reuse)
   maximize: `<svg ${_S}><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
   minimize: `<svg ${_S}><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
-  // Eye with a slash — "hide this card from the overview"
-  eyeOff:   `<svg ${_S}><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>`,
   // Lock / unlock — workspace trust state (auto-approve tools or not)
   lock:    `<svg ${_S}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
   unlock:  `<svg ${_S}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>`,
@@ -805,112 +804,83 @@ function setEventFilterShowAll(on) {
 // replaced by explicit header [‹][›] arrow navigation. See
 // renderMobileWorkspaceDetail.)
 
-// PC row-based layout. Persisted as localStorage['ws-layout'] — a 2D
-// array of workspace names, one inner array per row. e.g.
-//     [["demo-repo", "test-repo", "ai-meeting"], ["chat-history-room"]]
-// gives a "3 on top, 1 on bottom" layout. Within a row, every card gets
-// an equal flex share, so the bottom card here would be full-width.
-// Per-browser; not synced to server.
-let _wsLayout = [];
+// ─────────────────────────────────────────────────────────────────────────
+// PC 侧边栏布局 —— pane 状态 + localStorage 持久化
+// (spec: 2026-06-01-pc-sidebar-layout-design.md §3.5)
+//
+// paneState = { panes:[tileId...], activePaneIdx, expandedRepos:[ws...] }
+//   panes / activePaneIdx 的变换归纯函数 paneStateReducer(ui_contract.mjs);
+//   expandedRepos 是侧边栏塌缩态,由 dispatchPane 保留透传(reducer 不碰它)。
+// 持久化 key 'cc.pcLayout'。Per-browser,不同步到服务器。
+// ─────────────────────────────────────────────────────────────────────────
+const PC_LAYOUT_KEY = 'cc.pcLayout';
+let paneState = null;
 
-// Hard cap on row width — 4 cards max per row. No user-facing toggle:
-// keeps the UI focused on the row-split-by-drag interaction.
-const WS_MAX_PER_ROW = 4;
-
-// Names of workspaces the user hid from the overview. Hidden cards
-// don't render in any row; instead a slim "Hidden: …" strip at the
-// bottom of the layout lets the user restore them.
-let _wsHidden = new Set();
-
-function _sanitizeLayout(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((row) => Array.isArray(row))
-    .map((row) => row.filter((n) => typeof n === 'string'))
-    .filter((row) => row.length > 0);
+// 当前数据下的侧边栏树(单点分桶:复用 groupBySession + buildSidebarTree,
+// 不在这另造 groups)。
+function _pcSidebarTree() {
+  return buildSidebarTree(groupBySession(lastData.workspaces, lastData.sessions));
 }
 
-function loadWsLayout() {
+// 默认聚焦:第一个 repo 的默认 tile;无 repo → 空 panes(渲染层出空态)。
+function _pcDefaultPanes() {
+  const tree = _pcSidebarTree();
+  return tree.length ? [tree[0].tileId] : [];
+}
+
+function loadPcLayout() {
+  let saved = null;
   try {
-    _wsLayout = _sanitizeLayout(JSON.parse(localStorage.getItem('ws-layout')));
-    if (_wsLayout.length > 0) return;
-  } catch { /* fall through to migration */ }
-  // Migration: older sessions stored a flat order under "ws-order".
-  // Treat it as a single row so the user's prior reorder isn't lost.
+    saved = JSON.parse(localStorage.getItem(PC_LAYOUT_KEY));
+  } catch { /* 坏数据 / private mode — 静默回默认 */ }
+
+  const tree = _pcSidebarTree();
+  const validTileIds = new Set();
+  for (const node of tree) {
+    validTileIds.add(node.tileId);
+    for (const s of node.sessions) validTileIds.add(s.tileId);
+  }
+
+  let panes = _prunePanes(Array.isArray(saved?.panes) ? saved.panes : [], validTileIds);
+  // prune 后空(repo/session 全被删 或 首次进入无持久化)→ 回落默认聚焦第一个 repo。
+  if (panes.length === 0) panes = _pcDefaultPanes();
+
+  // activePaneIdx 越界夹回有效范围([0, panes.length-1];panes 空时 0)。
+  let activePaneIdx = Number.isInteger(saved?.activePaneIdx) ? saved.activePaneIdx : 0;
+  activePaneIdx = Math.max(0, Math.min(activePaneIdx, Math.max(0, panes.length - 1)));
+
+  const expandedRepos = Array.isArray(saved?.expandedRepos)
+    ? saved.expandedRepos.filter((n) => typeof n === 'string')
+    : [];
+
+  paneState = { panes, activePaneIdx, expandedRepos };
+  return paneState;
+}
+
+function savePcLayout() {
   try {
-    const order = JSON.parse(localStorage.getItem('ws-order'));
-    if (Array.isArray(order) && order.length > 0) {
-      _wsLayout = [order.filter((n) => typeof n === 'string')];
-      saveWsLayout();
-      return;
-    }
-  } catch {}
-  _wsLayout = [];
+    localStorage.setItem(PC_LAYOUT_KEY, JSON.stringify(paneState));
+  } catch { /* private-mode / quota — 静默跳过 */ }
 }
 
-function saveWsLayout() {
-  try {
-    localStorage.setItem('ws-layout', JSON.stringify(_wsLayout));
-  } catch { /* private-mode / quota — silently skip */ }
+// pane 操作的唯一入口:跑 reducer(panes/activePaneIdx)→ 透传 expandedRepos →
+// 持久化 → 重渲染。
+function dispatchPane(action) {
+  if (!paneState) loadPcLayout();
+  const next = paneStateReducer(
+    { panes: paneState.panes, activePaneIdx: paneState.activePaneIdx },
+    action,
+  );
+  paneState = { ...next, expandedRepos: paneState.expandedRepos };
+  savePcLayout();
+  // 重画前后包 snapshot/restore(跟 render() 同风格):dispatchPane 会重建
+  // 主区 DOM,不包就会丢掉 pane 里输了一半的草稿 / timeline scroll /
+  // <details open>。render() 自己有这层包裹,dispatchPane 是另一条重画入口,
+  // 得自己补。
+  snapshotDrafts();
+  renderDesktopSidebarLayout();
+  restoreDrafts();
 }
-
-function loadWsHidden() {
-  try {
-    const arr = JSON.parse(localStorage.getItem('ws-hidden'));
-    _wsHidden = new Set(Array.isArray(arr) ? arr.filter((n) => typeof n === 'string') : []);
-  } catch { _wsHidden = new Set(); }
-}
-
-function saveWsHidden() {
-  try { localStorage.setItem('ws-hidden', JSON.stringify([..._wsHidden])); } catch {}
-}
-
-// Build the effective layout for the current workspaces:
-//   - drop names no longer present (deleted workspaces)
-//   - drop names in _wsHidden (user explicitly hid them)
-//   - append fresh names (newly-created since last save) to the last row,
-//     creating a new row when the last is at max-per-row
-//   - drop now-empty rows
-function effectiveLayout(allNames) {
-  const present = new Set(allNames);
-  const placed = new Set();
-  const layout = [];
-  for (const row of _wsLayout) {
-    const kept = row.filter((n) => present.has(n) && !placed.has(n) && !_wsHidden.has(n));
-    if (kept.length) {
-      layout.push(kept);
-      for (const n of kept) placed.add(n);
-    }
-  }
-  const fresh = allNames.filter((n) => !placed.has(n) && !_wsHidden.has(n)).sort();
-  for (const n of fresh) {
-    if (layout.length === 0 || layout[layout.length - 1].length >= WS_MAX_PER_ROW) {
-      layout.push([n]);
-    } else {
-      layout[layout.length - 1].push(n);
-    }
-  }
-  return layout;
-}
-
-// Mutators — call save+render after.
-function _removeFromLayout(name) {
-  for (const row of _wsLayout) {
-    const i = row.indexOf(name);
-    if (i >= 0) { row.splice(i, 1); return; }
-  }
-}
-
-function _findLayoutCoord(name) {
-  for (let r = 0; r < _wsLayout.length; r++) {
-    const c = _wsLayout[r].indexOf(name);
-    if (c >= 0) return { row: r, col: c };
-  }
-  return null;
-}
-
-loadWsLayout();
-loadWsHidden();
 
 function snapshotDrafts() {
   for (const form of document.querySelectorAll('form[data-form-id]')) {
@@ -1045,90 +1015,39 @@ function renderWorkspacesView() {
   if (window.matchMedia('(max-width: 768px)').matches) {
     renderMobileOverview();
   } else {
-    renderDesktopOverview();
+    renderDesktopSidebarLayout();
   }
 }
 
-// PC overview = row-based layout. Each row is a flex container where
-// cards share width equally; drop a card on the gap above/below a row
-// to create a new row. Max 4 per row (hardcoded). Hidden cards drop
-// out of the layout and appear in a slim strip below.
-function renderDesktopOverview() {
-  // 按 session 平铺(一格一个 session,不是一格一个 workspace)。布局/拖拽/
-  // 隐藏系统是泛型的(effectiveLayout 对一组唯一字符串 id 操作),喂 session
-  // tile id 进去即可。老的 workspace-键布局会失效一次,重排成默认。
+// PC = 左侧固定侧边栏(两级 workspace ▸ session 导航 + 新建)+ 右侧主区
+// (≤2 个聚焦 pane)。取代旧的卡片墙 renderDesktopOverview(2026-06-01,
+// spec: 2026-06-01-pc-sidebar-layout-design.md)。
+//
+// 数据流:_pcSidebarTree()(= groupBySession + buildSidebarTree 纯函数)给
+// 侧边栏树;同一份 groups 给主区 pane(panes 里的 tileId 直接索引 groups)。
+// pane 状态(paneState)由 dispatchPane / loadPcLayout 管(§3.5)。
+function renderDesktopSidebarLayout() {
+  if (!paneState) loadPcLayout();
+  const tree = _pcSidebarTree();
   const groups = groupBySession(lastData.workspaces, lastData.sessions);
-  const allNames = Object.keys(groups);          // 现在是 session tile id
-  const layout = effectiveLayout(allNames);
 
   // Provider picker — uses the unified form-picker component so dark
   // theming matches the workspace ⋯ menu / roundtable model picker.
   const newWsProviderPicker = _newWsProviderPickerHtml();
 
-  // Render: alternating row-gap + row. The trailing gap (after the last
-  // row) is a drop target for "create new row at the bottom".
-  const layoutHtml = layout.length === 0
-    ? ''
-    : layout.map((row, rowIdx) => {
-        const cells = row.map((id) => {
-          const g = groups[id];
-          if (!g) return '';
-          // id = session tile id;渲染该 session 的 tile(workspaceColHtml
-          // 加 sessionKey opt:header 显示 ws/session,form 带 data-session-key,
-          // timeline 已经是该 session 的 run)。
-          return workspaceColHtml(g.ws, g, { sessionKey: g.sessionKey, tileId: id });
-        }).join('');
-        return `
-          <div class="ws-row-gap" data-gap-before="${rowIdx}" aria-hidden="true"></div>
-          <div class="ws-row" data-row-idx="${rowIdx}">${cells}</div>
-        `;
-      }).join('') + `<div class="ws-row-gap" data-gap-before="${layout.length}" aria-hidden="true"></div>`;
-
-  // Hidden strip — only visible when the user has actually hidden things.
-  // Each pill is a "restore" button.
-  const hiddenNamesPresent = [...allNames].filter((n) => _wsHidden.has(n));
-  const hiddenHtml = hiddenNamesPresent.length
-    ? `<div class="ws-hidden-strip">
-         <span class="muted">Hidden (${hiddenNamesPresent.length}):</span>
-         ${hiddenNamesPresent
-            .map((n) => {
-              // n 是 session tile id;pill label 显示 "ws / session"(默认只 ws)。
-              const { ws, sessionKey } = parseSessionTileId(n);
-              const lbl = sessionKey === `pwa-${ws}` ? ws : `${ws}/${sessionChipLabel(ws, sessionKey)}`;
-              return `<button class="ws-restore-btn" type="button" data-ws="${esc(n)}" title="Restore to overview">${esc(lbl)}</button>`;
-            })
-            .join('')}
-       </div>`
-    : '';
-
-  // Patch path: if .ws-layout is already in DOM AND the set of rendered
-  // workspace names matches the set we want to render, skip the full
-  // innerHTML rewrite and just diff-update each column's timeline.
-  // The set-match check catches "no workspaces added/removed/hidden
-  // since last render"; reordering inside the layout is fine because
-  // _patchWorkspaceCard finds columns by data-ws, not by position.
   const view = $('view');
-  // _patchWorkspaceCard 的 diff 算法只认 .run-row,PC overview 现在也走
-  // turn-streaming(see workspaceColHtml 的注释),容器变了它就 stale 了。
-  // 改全量重画 —— refreshAll 已经做了数据 hash 去重(elapsed_s 被 mask),
-  // 一组卡片同时全量重画 4-8 张的成本可控,跟 PC detail / mobile 一致。
-
-  // 顶部 toolbar:1 行装下 "+ New workspace" 按钮 + 隐藏 workspace pills。
-  //   - h1 砍掉(topbar tab 高亮已经标明"Workspaces"段,h1 冗余)
-  //   - "+ New" 不再展开成全宽 inline 表单,改弹 <dialog> modal
-  //   - hidden strip 从底部挪上来跟 + New 同行(没有 hidden 时只剩 + New)
-  // 总省 ~100px 永久竖直空间。
   view.innerHTML = `
-    <div class="ws-toolbar">
-      <button class="ws-new-btn" type="button" id="ws-new-btn">
-        + New workspace
-      </button>
-      ${hiddenHtml}
+    <div class="pc-sidebar-layout">
+      <nav class="pc-sidebar" aria-label="Workspaces">
+        <div class="pc-sidebar-toolbar">
+          <button class="ws-new-btn" type="button" id="ws-new-btn">
+            + 新建 workspace
+          </button>
+        </div>
+        <div class="pc-sidebar-tree">${_pcSidebarHtml(tree)}</div>
+      </nav>
+      <div class="pc-main">${_pcMainHtml(groups)}</div>
     </div>
-    ${layoutHtml
-      ? `<div class="ws-layout">${layoutHtml}</div>`
-      : `<p class="muted">No workspaces yet. Click "+ New workspace" above,
-         or create <code>~/workspaces/&lt;name&gt;/.git</code> on the server.</p>`}
     <dialog class="ws-new-dialog" id="ws-new-dialog">
       <form data-form-id="new-ws" class="ws-new-form">
         <h3>New workspace</h3>
@@ -1160,18 +1079,9 @@ function renderDesktopOverview() {
     </dialog>
   `;
 
-  bindOverviewHandlers();
-  for (const gap of $('view').querySelectorAll('.ws-row-gap')) {
-    gap.addEventListener('dragover', onRowGapDragOver);
-    gap.addEventListener('dragleave', onRowGapDragLeave);
-    gap.addEventListener('drop', onRowGapDrop);
-  }
-  for (const b of $('view').querySelectorAll('.ws-hide-btn')) {
-    b.addEventListener('click', onHideBtnClick);
-  }
-  for (const b of $('view').querySelectorAll('.ws-restore-btn')) {
-    b.addEventListener('click', onRestoreBtnClick);
-  }
+  // new-ws form 提交绑定(复用现有 onAddWorkspace)。
+  $('view').querySelector('form[data-form-id="new-ws"]')
+    ?.addEventListener('submit', onAddWorkspace);
   // Wire dialog open/close。原生 <dialog> 自带 backdrop / ESC,我们只
   // 管 open(showModal) + cancel(close) + submit-after-success(close)。
   const dlg = $('ws-new-dialog');
@@ -1183,35 +1093,123 @@ function renderDesktopOverview() {
     });
     dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
   }
+
+  // 侧边栏导航事件(点击 / 拖拽 / ⇲ / 塌缩 / + 新对话)。
+  bindOverviewHandlers();
+  // 主区 pane 内的 trigger / provider / trust / approval / attach / turn 交互
+  // (复用 detail / mobile 共享的 binder)。
+  bindWorkspaceColHandlers($('view').querySelector('.pc-main'));
 }
 
-// ---------- Hide / restore handlers ----------
-function onHideBtnClick(e) {
-  const name = e.currentTarget.dataset.ws;
-  if (!name) return;
-  _wsHidden.add(name);
-  // Also drop the workspace from the saved layout so restore can decide
-  // where to put it back (last row of remaining layout).
-  _removeFromLayout(name);
-  _wsLayout = _wsLayout.filter((row) => row.length > 0);
-  saveWsHidden();
-  saveWsLayout();
-  render();
-}
-
-function onRestoreBtnClick(e) {
-  const name = e.currentTarget.dataset.ws;
-  if (!name) return;
-  _wsHidden.delete(name);
-  // Append to the last row, or start a new row if it'd exceed max.
-  if (_wsLayout.length === 0 || _wsLayout[_wsLayout.length - 1].length >= WS_MAX_PER_ROW) {
-    _wsLayout.push([name]);
-  } else {
-    _wsLayout[_wsLayout.length - 1].push(name);
+// ── 侧边栏 HTML(纯字符串,无副作用;事件在 bindOverviewHandlers 绑)──────
+//
+// tree = _pcSidebarTree() 输出([{ws, tileId, sessionCount, expandable,
+//   sessions:[{sessionKey, label, tileId}]}])。每一行带 data-tile-id +
+//   draggable,点击 = focus,拖拽 = openBeside(决策 5)。
+//
+// active 高亮两级(决策 4):
+//   - tileId 命中 paneState.panes 任一  → .is-open
+//   - tileId === panes[activePaneIdx]   → 再加 .is-active
+//
+// class 名清单(交接 Task 11 CSS):
+//   .pc-sidebar-item        每个可聚焦行的公共 class(repo 行 / session 行都有)
+//   .pc-sidebar-repo        repo 行
+//   .pc-sidebar-session     展开后的 session 子行
+//   .pc-sidebar-new-chat    "+ 新对话" 行(data-new-chat-ws)
+//   .pc-sidebar-toggle      塌缩三角(data-toggle-repo,▸/▾)
+//   .pc-sidebar-label       行内文字
+//   .pc-sidebar-open-beside hover 出的 ⇲ 按钮(data-open-beside)
+//   .pc-sidebar-children    expandable repo 展开后的子行容器
+//   .is-open / .is-active   高亮态(见上)
+// data 钩子:data-tile-id / draggable="true" / data-open-beside /
+//   data-toggle-repo=ws / data-new-chat-ws=ws。
+function _pcSidebarHtml(tree) {
+  if (!tree.length) {
+    return '<p class="pc-sidebar-empty muted">还没有 workspace,点上面 + 新建一个。</p>';
   }
-  saveWsHidden();
-  saveWsLayout();
-  render();
+  const panes = paneState.panes;
+  const activeTile = panes[paneState.activePaneIdx];
+  const expanded = new Set(paneState.expandedRepos || []);
+
+  // 一个可聚焦行(repo 行 / session 子行共用)。leadingHtml 放在 label 前
+  // (repo 行的塌缩三角)。
+  const itemRow = (tileId, label, kind, leadingHtml = '') => {
+    const isOpen = panes.includes(tileId);
+    const isActive = tileId === activeTile;
+    const cls = `pc-sidebar-item pc-sidebar-${kind}`
+      + (isOpen ? ' is-open' : '')
+      + (isActive ? ' is-active' : '');
+    return `
+      <div class="${cls}" data-tile-id="${esc(tileId)}" draggable="true">
+        ${leadingHtml}
+        <span class="pc-sidebar-label">${esc(label)}</span>
+        <button class="pc-sidebar-open-beside" type="button"
+                data-open-beside="${esc(tileId)}" title="并排打开" aria-label="并排打开">${ICONS.maximize}</button>
+      </div>`;
+  };
+
+  return tree.map((node) => {
+    if (!node.expandable) {
+      // 单 session repo:就是一行(label = ws 名)。
+      return itemRow(node.tileId, node.ws, 'repo');
+    }
+    // 多 session repo:repo 行带塌缩三角(不可聚焦本身,点三角 toggle);
+    // 展开后列各 session + "+ 新对话"。
+    const open = expanded.has(node.ws);
+    const tri = `<button class="pc-sidebar-toggle" type="button"
+                   data-toggle-repo="${esc(node.ws)}"
+                   aria-expanded="${open ? 'true' : 'false'}"
+                   aria-label="${open ? '收起' : '展开'}">${open ? '▾' : '▸'}</button>`;
+    // repo 标题行:三角 + repo 名(repo 行自身的 tileId = 默认 tile,可聚焦/拖拽)。
+    const repoRow = itemRow(node.tileId, node.ws, 'repo', tri);
+    const childRows = open
+      ? `<div class="pc-sidebar-children">
+           ${node.sessions.map((s) => {
+             const label = s.sessionKey === `pwa-${node.ws}` ? '默认' : s.label;
+             return itemRow(s.tileId, label, 'session');
+           }).join('')}
+           <button class="pc-sidebar-item pc-sidebar-new-chat" type="button"
+                   data-new-chat-ws="${esc(node.ws)}">+ 新对话</button>
+         </div>`
+      : '';
+    return repoRow + childRows;
+  }).join('');
+}
+
+// ── 主区 pane HTML(1~2 个 pane)──────────────────────────────────────────
+//
+// panes 里每个 tileId → parseSessionTileId → groups[tileId] → 复用
+// workspaceColHtml 的 detail 渲染。带 noSessionBar(决策 7:侧边栏即切换器,
+// pane 内不再放 chip 条)+ tileId(让 colKey/scroll/draft/queue 按 tileId
+// 索引,同 ws 两 pane 不串台,决策 3)。
+//
+// × 关闭按钮(data-close-pane=idx)仅 panes.length===2 时渲染(§3.3:至少留
+// 1 个 pane)。空 panes → 空态文字。
+// class 名(交接 Task 11):.pc-pane / .pc-pane-close / .pc-main-empty。
+function _pcMainHtml(groups) {
+  const panes = paneState.panes;
+  if (!panes.length) {
+    return '<div class="pc-main-empty muted">左侧选一个 workspace 开始对话。</div>';
+  }
+  const showClose = panes.length === 2;
+  return panes.map((tileId, idx) => {
+    const { ws, sessionKey } = parseSessionTileId(tileId);
+    // groups[tileId] 可能不存在:loadPcLayout 只在进 app 时 prune 一次。
+    // 本 session 内若 repo/session 被删,失效 tileId 会留在 paneState.panes
+    // 直到下次进 app 才被清 —— poll 时不重 prune(那样会有"poll 抢 active
+    // pane"副作用)。失效 tile 命中下面的空桶兜底,渲染成"no runs yet"空态,
+    // 不崩、不丢数据、下次 loadPcLayout 自愈。(fast-follow:poll-time prune,
+    // 见 spec docs/superpowers/specs/2026-06-01-pc-sidebar-layout-design.md §7)
+    const data = groups[tileId] || { ws, sessionKey, active: [], recent: [] };
+    const closeBtn = showClose
+      ? `<button class="pc-pane-close" type="button" data-close-pane="${idx}" aria-label="关闭这个 pane">×</button>`
+      : '';
+    return `
+      <div class="pc-pane" data-pane-idx="${idx}">
+        ${closeBtn}
+        ${workspaceColHtml(ws, data, { detail: true, sessionKey, tileId, noSessionBar: true })}
+      </div>`;
+  }).join('');
 }
 
 // Build the HTML for one workspace card on the mobile overview list.
@@ -1932,14 +1930,115 @@ function _addTapFallback(el, handler) {
   }, { capture: true });
 }
 
-// PC-overview-specific bindings: new-ws form + drag-to-reorder. Always
-// also runs the shared bindWorkspaceColHandlers so every card has its
-// trigger / provider / trust / approval handlers wired.
+// PC 侧边栏 + pane 的导航事件(逐元素绑定,贴 bindWorkspaceColHandlers 风格,
+// 决策 6;不用 document 级委托)。pane 内的 trigger / provider / trust /
+// approval / attach 由 renderDesktopSidebarLayout 单独调 bindWorkspaceColHandlers
+// 绑(只绑主区),这里只管侧边栏导航 + pane 关闭 + 拖拽落点。
+//
+// 交互(决策 5 / Task 9):
+//   点 [data-tile-id]        → focus(聚焦到 active pane)
+//   拖 [data-tile-id] 落主区  → openBeside(开/替换第二 pane)
+//   点 [data-open-beside]    → openBeside(⇲ 点击入口,等价拖拽)
+//   点 [data-close-pane]     → close
+//   点 [data-toggle-repo]    → toggle expandedRepos(不走 reducer,直接重画)
+//   点 [data-new-chat-ws]    → 自动命名新 session → focus(决策 2,不弹框)
 function bindOverviewHandlers() {
-  const newWsForm = $('view').querySelector('form[data-form-id="new-ws"]');
-  newWsForm?.addEventListener('submit', onAddWorkspace);
-  bindWorkspaceColHandlers($('view'));
-  setupDragReorder();
+  const view = $('view');
+
+  // ── 点击 = focus(行内的 ⇲ / 塌缩三角各有自己的 handler,这里要排除)──
+  for (const item of view.querySelectorAll('.pc-sidebar-item[data-tile-id]')) {
+    item.addEventListener('click', (e) => {
+      // 点到行内按钮(⇲ / 三角)交给那些按钮自己处理,不当 focus。
+      if (e.target.closest('.pc-sidebar-open-beside, .pc-sidebar-toggle')) return;
+      dispatchPane({ type: 'focus', tileId: item.dataset.tileId });
+    });
+  }
+
+  // ── 拖拽:dragstart 标记拖拽源(让 click 不误触),drop 落主区 = openBeside ──
+  for (const item of view.querySelectorAll('.pc-sidebar-item[data-tile-id]')) {
+    item.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', item.dataset.tileId);
+      e.dataTransfer.effectAllowed = 'copy';
+    });
+  }
+  const main = view.querySelector('.pc-main');
+  if (main) {
+    main.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+    main.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const tileId = e.dataTransfer.getData('text/plain');
+      if (tileId) dispatchPane({ type: 'openBeside', tileId });
+    });
+  }
+
+  // ── ⇲ 并排打开按钮(决策 5 的点击入口)──
+  for (const btn of view.querySelectorAll('.pc-sidebar-open-beside[data-open-beside]')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dispatchPane({ type: 'openBeside', tileId: btn.dataset.openBeside });
+    });
+  }
+
+  // ── pane × 关闭 ──
+  for (const btn of view.querySelectorAll('.pc-pane-close[data-close-pane]')) {
+    btn.addEventListener('click', () => {
+      dispatchPane({ type: 'close', idx: Number(btn.dataset.closePane) });
+    });
+  }
+
+  // ── 塌缩三角:toggle expandedRepos(只是侧边栏展开态,不动 panes,
+  //    所以直接改 paneState.expandedRepos + savePcLayout + 重画,不走 reducer)──
+  for (const btn of view.querySelectorAll('.pc-sidebar-toggle[data-toggle-repo]')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _togglePcRepo(btn.dataset.toggleRepo);
+    });
+  }
+
+  // ── + 新对话:自动命名一条新 session(决策 2)→ focus,不弹框 ──
+  for (const btn of view.querySelectorAll('.pc-sidebar-new-chat[data-new-chat-ws]')) {
+    btn.addEventListener('click', () => _onPcNewChatClick(btn.dataset.newChatWs));
+  }
+}
+
+// 塌缩三角 toggle:翻转某 repo 在 expandedRepos 里的存在性 → 持久化 → 重画
+// (snapshot/restore 包裹,保 pane 草稿/scroll,跟 dispatchPane 同理)。
+function _togglePcRepo(ws) {
+  if (!paneState) loadPcLayout();
+  const set = new Set(paneState.expandedRepos || []);
+  if (set.has(ws)) set.delete(ws); else set.add(ws);
+  paneState = { ...paneState, expandedRepos: Array.from(set) };
+  savePcLayout();
+  snapshotDrafts();
+  renderDesktopSidebarLayout();
+  restoreDrafts();
+}
+
+// + 新对话(决策 2):给 ws 声明一条自动命名的新 session(<ws>--2 起,取与该
+// ws 当前树里所有 session 都不撞的最小整数序号)→ 注入 _declaredEmptySessions
+// (复用现有空 session 机制,无后端改动)→ focus 到 active pane。
+function _onPcNewChatClick(ws) {
+  if (!ws) return;
+  // 该 ws 现有的全部 session_key(默认 + 用户建的),用来找不撞的序号。
+  const tree = _pcSidebarTree();
+  const node = tree.find((n) => n.ws === ws);
+  const existing = new Set();
+  if (node) {
+    // node.sessions 仅 expandable(≥2)时有;单 session repo 只有默认 tile。
+    if (node.sessions.length) {
+      for (const s of node.sessions) existing.add(s.sessionKey);
+    } else {
+      const { sessionKey } = parseSessionTileId(node.tileId);
+      existing.add(sessionKey);
+    }
+  }
+  // <ws>--2 起递增,找第一个不撞的。
+  let n = 2;
+  while (existing.has(`${ws}--${n}`)) n += 1;
+  const newKey = `${ws}--${n}`;
+  const tileId = sessionTileId(ws, newKey);
+  _declaredEmptySessions.add(tileId);
+  dispatchPane({ type: 'focus', tileId });
 }
 
 // Build the provider <option> list for the new-workspace form +
@@ -2141,163 +2240,6 @@ function _providerRadioRowHtml(name, value, label, selected) {
     <span class="${dotClass}"></span>
     <span class="ws-radio-label">${label}</span>
   </button>`;
-}
-
-// ---------- PC drag-to-reorder ----------
-// Mobile: drag handles are display:none via CSS, so the handlers below are
-// no-ops there. Strategy:
-//   - dragstart on .ws-drag-handle stores the source workspace name
-//   - dragover on .ws-col allows drop; visual marker via .drop-target
-//   - drop on .ws-col reorders: insert source before/after the target
-//     depending on whether the cursor is left or right of the target's
-//     horizontal midpoint
-// HTML5 drag API does the heavy lifting (momentum, drag image, etc).
-function setupDragReorder() {
-  // Bind from #view directly — PC overview puts .ws-col under
-  // .ws-layout > .ws-row. (Mobile single-ws detail also has a .ws-col
-  // but inside .ws-mobile-body, where drag is irrelevant because
-  // there's only one card; the .ws-drag-handle is emitted only in
-  // non-detail mode, so handle binding naturally skips it.)
-  for (const col of $('view').querySelectorAll('.ws-col')) {
-    col.addEventListener('dragover', onColDragOver);
-    col.addEventListener('dragleave', onColDragLeave);
-    col.addEventListener('drop', onColDrop);
-  }
-  for (const h of $('view').querySelectorAll('.ws-drag-handle')) {
-    h.addEventListener('dragstart', onHandleDragStart);
-    h.addEventListener('dragend', onHandleDragEnd);
-  }
-}
-
-function onHandleDragStart(e) {
-  const col = e.target.closest('.ws-col');
-  if (!col) return;
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', col.dataset.ws);
-  // Use the entire column as the drag preview, not just the handle icon.
-  // Offset slightly so the preview's top-left sits a bit below the cursor.
-  e.dataTransfer.setDragImage(col, Math.min(80, col.offsetWidth / 2), 20);
-  col.classList.add('dragging');
-  // Global drag flag — CSS uses body.is-dragging to "wake up" row-gap
-  // drop zones and add a subtle lift to non-source cards.
-  document.body.classList.add('is-dragging');
-}
-
-function onHandleDragEnd(e) {
-  e.target.closest('.ws-col')?.classList.remove('dragging');
-  document.body.classList.remove('is-dragging');
-  // Clear any lingering target classes (defensive — should already be
-  // gone via the per-element drop / dragleave handlers).
-  for (const el of document.querySelectorAll('.drop-target, .drop-target-left, .drop-target-right')) {
-    el.classList.remove('drop-target', 'drop-target-left', 'drop-target-right');
-  }
-}
-
-function onColDragOver(e) {
-  // preventDefault is what enables dropping; without it the browser refuses
-  // to fire drop events.
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  const target = e.currentTarget;
-  // Insertion-line side based on cursor horizontal position relative to
-  // the target's midpoint. CSS renders the line on the matching edge so
-  // the user sees exactly where the drop will land.
-  const rect = target.getBoundingClientRect();
-  const insertBefore = e.clientX < rect.left + rect.width / 2;
-  target.classList.toggle('drop-target-left', insertBefore);
-  target.classList.toggle('drop-target-right', !insertBefore);
-}
-
-function onColDragLeave(e) {
-  e.currentTarget.classList.remove('drop-target-left', 'drop-target-right');
-}
-
-function onColDrop(e) {
-  e.preventDefault();
-  const target = e.currentTarget;
-  const insertBefore = target.classList.contains('drop-target-left');
-  target.classList.remove('drop-target-left', 'drop-target-right');
-  const sourceName = e.dataTransfer.getData('text/plain');
-  const targetName = target.dataset.ws;
-  if (!sourceName || !targetName || sourceName === targetName) return;
-  reorderWorkspaceTo(sourceName, targetName, insertBefore);
-}
-
-function reorderWorkspaceTo(sourceName, targetName, insertBefore) {
-  // Layout-aware: target card lives in some row; insert source into
-  // that row at the right position. If source comes from a different
-  // row and target's row is at max-per-row, reject and tell the user.
-  const targetCoord = _findLayoutCoord(targetName);
-  if (!targetCoord) return;
-  const sourceCoord = _findLayoutCoord(sourceName);
-
-  if (
-    sourceCoord &&
-    sourceCoord.row !== targetCoord.row &&
-    _wsLayout[targetCoord.row].length >= WS_MAX_PER_ROW
-  ) {
-    showToast(
-      'warning',
-      `Row already at max ${WS_MAX_PER_ROW}. Drop to a row gap (between rows) to create a new row instead.`,
-      { ttl: 3000 },
-    );
-    return;
-  }
-
-  _removeFromLayout(sourceName);
-  // Recompute target position — splicing source out might have shifted
-  // indices when source was in the same row.
-  const fresh = _findLayoutCoord(targetName);
-  if (!fresh) return;
-  const insertCol = insertBefore ? fresh.col : fresh.col + 1;
-  _wsLayout[fresh.row].splice(insertCol, 0, sourceName);
-  // Drop any rows we just emptied.
-  _wsLayout = _wsLayout.filter((row) => row.length > 0);
-  saveWsLayout();
-  render();
-}
-
-// ---------- Row-gap drop zone (create a new row at this position) ----------
-function onRowGapDragOver(e) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  e.currentTarget.classList.add('drop-target');
-}
-
-function onRowGapDragLeave(e) {
-  e.currentTarget.classList.remove('drop-target');
-}
-
-function onRowGapDrop(e) {
-  e.preventDefault();
-  e.currentTarget.classList.remove('drop-target');
-  const sourceName = e.dataTransfer.getData('text/plain');
-  if (!sourceName) return;
-  const gapBefore = parseInt(e.currentTarget.dataset.gapBefore, 10);
-  if (isNaN(gapBefore)) return;
-
-  // Reject no-op: if source is alone in its row AND we're dropping into
-  // a gap adjacent to that row, the result would be identical.
-  const src = _findLayoutCoord(sourceName);
-  if (
-    src && _wsLayout[src.row].length === 1 &&
-    (gapBefore === src.row || gapBefore === src.row + 1)
-  ) {
-    return;
-  }
-
-  _removeFromLayout(sourceName);
-  // Recompute insert position — removal may have shifted things if the
-  // source's row collapsed.
-  let insertAt = gapBefore;
-  if (src && src.row < gapBefore && _wsLayout.length < gapBefore + 1) {
-    // source's row collapsed → indices shift left
-    insertAt = Math.max(0, gapBefore - 1);
-  }
-  _wsLayout.splice(insertAt, 0, [sourceName]);
-  _wsLayout = _wsLayout.filter((row) => row.length > 0);
-  saveWsLayout();
-  render();
 }
 
 // setupCarousel() + _carouselObserver removed 2026-05-15 alongside the
@@ -2740,6 +2682,17 @@ function workspaceColHtml(name, data, opts = {}) {
   //     避免同 ws 多 tile 串台)
   //   - run 投到这个 sessionKey(form data-session-key),不是 activeSessionKey
   //   - header 显示 ws / <session 名>,跳过 detail 的 chip 切换条
+  // opts.noSessionBar(PC pane 专用,2026-06-01 侧边栏布局):detail 分支
+  //   不渲染 _sessionBarHtml。新布局里侧边栏本身就是 session 切换器,pane
+  //   内再放一条 chip 条 = 重复 chrome + 会让同 repo 两 pane 状态串台
+  //   (_sessionBarHtml / workspaceActiveSession 按裸 ws 名索引)。mobile
+  //   detail / run-detail 等不传这个 opt → 行为零变化。
+  // 已知 trade-off(fast-follow,见 spec §7):附件队列 _pendingUploads 仍按
+  //   裸 ws 名索引(下面 attach-* 的 data-ws=name,不是 colKey),所以同 repo
+  //   两 pane 共享同一附件队列。窄场景(双 pane 且两边都挂附件)、不影响正确性
+  //   (提交时按 ws 取队列);正确修法是把整条上传链改成按 tileId 索引,留作
+  //   fast-follow。其余状态(timeline / 草稿 / scroll / form 投递)已按 colKey
+  //   隔离,不串台。
   const sessionKey = opts.sessionKey || null;
   const colKey = opts.tileId || name;   // 布局 / 状态键(tile 模式 = tileId)
   const skAttr = sessionKey ? ` data-session-key="${esc(sessionKey)}"` : '';
@@ -2774,10 +2727,8 @@ function workspaceColHtml(name, data, opts = {}) {
   // can clear the per-ws override.
   const providerOptions = _providerOptionsHtml(wsProvider, true);
 
-  // Overview: h2 wraps in a link so clicking it drills into detail; also
-  // gets a drag handle for PC drag-to-reorder.
+  // Overview: h2 wraps in a link so clicking it drills into detail.
   // Detail: plain h2 (we're already in detail; the back-link handles exit).
-  // No drag handle either — we're focused on one workspace.
   // session tile:标题显示 "ws / <session 名>"(默认 session 只显示 ws)。
   // session 名 = 去掉 <ws>-- 前缀;默认 pwa-<ws> 显示"默认"。
   const sessLabel = sessionKey
@@ -2789,16 +2740,6 @@ function workspaceColHtml(name, data, opts = {}) {
   const headerTitle = detail
     ? `<h2>${esc(name)}</h2>`
     : `<h2><a class="ws-name-link" href="#workspaces/${encodeURIComponent(name)}">${titleInner}</a></h2>`;
-
-  const dragHandle = detail
-    ? ''
-    : `<span class="ws-drag-handle" draggable="true" title="Drag to reorder / move to another row" aria-label="Drag to reorder">${ICONS.grip}</span>`;
-
-  const hideBtn = detail
-    ? ''
-    : `<button class="ws-hide-btn" type="button" data-ws="${esc(colKey)}"
-               title="Hide from overview (restore via the strip at bottom)"
-               aria-label="Hide">${ICONS.eyeOff}</button>`;
 
   // Provider+engine: read-only state label (mobile) vs interactive
   // dropdown row (PC). Mobile collapses the 4 action buttons into a
@@ -2881,8 +2822,8 @@ function workspaceColHtml(name, data, opts = {}) {
     </div>
   `;
 
-  // .ws-col data-ws = colKey:drag/hide/layout 用它当 id(tile 模式 = tileId,
-  // 同 ws 多 tile 不串)。timeline data-ws 同样用 colKey(scroll/stream 状态键)。
+  // .ws-col data-ws = colKey:scroll/stream 状态键(tile 模式 = tileId,
+  // 同 ws 多 tile 不串)。timeline data-ws 同样用 colKey。
   // form data-workspace=真实 ws(workspace 级动作),data-session-key=本 tile
   // 的 session(run 投递目标);老路径 sessionKey=null 时 onTriggerSubmit 退回
   // activeSessionKey(ws)。skAttr 在函数顶部已声明(providerEngineBlock 也用)。
@@ -2890,13 +2831,11 @@ function workspaceColHtml(name, data, opts = {}) {
     <div class="ws-col ${extraClass}" data-ws="${esc(colKey)}" data-tile-ws="${esc(name)}">
       <div class="ws-head">
         <div class="ws-head-row">
-          ${dragHandle}
           ${headerTitle}
-          ${hideBtn}
         </div>
         ${providerEngineBlock}
       </div>
-      ${detail ? _sessionBarHtml(name) : ''}
+      ${detail && !opts.noSessionBar ? _sessionBarHtml(name) : ''}
       <div class="ws-timeline" data-ws="${esc(colKey)}">${timelineHtml}</div>
       ${_queueListHtml(name, sessionKey)}
       <form class="trigger-form" data-workspace="${esc(name)}"${skAttr} data-form-id="ws-${esc(colKey)}">
@@ -3141,9 +3080,11 @@ function _rescrollAfterKeyboardSettles(ws) {
 }
 
 // ---------- Workspace detail view (#workspaces/<name>) ----------
-// Drilled-into-one-workspace mode. Renders differently on PC vs mobile:
-//   PC      : single .ws-col centered, wider, more history rows (30 vs 10).
-//             Trigger form is still at the bottom of the column.
+// 深链 / 钻进单个 workspace 的入口(飞书 / cron 通知点进来)。PC vs mobile
+// 行为不同:
+//   PC      : 不再有独立 detail 页 —— 把该 repo 的默认 session 聚焦成单 pane,
+//             走统一的侧边栏布局 renderDesktopSidebarLayout(2026-06-01,
+//             spec §3.6)。
 //   Mobile  : header arrow bar [‹] <name> [›] + the same single .ws-col
 //             below. Arrows replaceState to the prev/next workspace (no
 //             history pollution). Replaced the earlier swipe-carousel
@@ -3157,8 +3098,30 @@ function renderWorkspaceDetailView(startName, opts = {}) {
   if (isMobile) {
     renderMobileWorkspaceDetail(startName, opts);
   } else {
-    renderDesktopWorkspaceDetail(startName);
+    // PC 深链 #workspaces/<name>(飞书 / cron 通知点进来):把该 repo 的默认
+    // session 聚焦到单 pane,展开它在侧边栏的塌缩态,再走统一的侧边栏布局。
+    // (spec §3.6:不强制保留旧 pane;name 不存在 → 回落无 name 行为)。
+    _focusWorkspaceDeepLink(startName);
+    renderDesktopSidebarLayout();
   }
+}
+
+// PC 深链落点:把 startName 的默认 tileId 设成单 pane。
+//   - 默认 tileId 从侧边栏树取(决策 2:不裸拼 sessionTileId,无默认 tile 时
+//     裸拼会指向不存在的 tile)。name 不在树里 → 不改 pane,回落 loadPcLayout
+//     的"恢复上次 / 聚焦第一个 repo"行为,不崩。
+//   - expandedRepos = 并集(决策 3):保留用户上次展开态 + 额外展开这个 repo。
+function _focusWorkspaceDeepLink(name) {
+  if (!paneState) loadPcLayout();
+  const tree = _pcSidebarTree();
+  const node = tree.find((n) => n.ws === name);
+  if (!node) return;                                // name 不存在 → 回落无 name 行为
+  paneState = {
+    panes: [node.tileId],
+    activePaneIdx: 0,
+    expandedRepos: [...new Set([...(paneState.expandedRepos || []), name])],
+  };
+  savePcLayout();
 }
 
 // 拉 session 列表 → 缓存 → 重画 chip 条。force=true 时强拉(新建 / 关闭后)。
@@ -3770,31 +3733,6 @@ function _onWorkspaceNewEventsClick(e) {
   _syncWorkspaceNewEventsButton(ws);
 }
 
-
-function renderDesktopWorkspaceDetail(name) {
-  const groups = groupByWorkspace(lastData.workspaces, lastData.sessions);
-  if (!Object.prototype.hasOwnProperty.call(groups, name)) {
-    $('view').innerHTML = `
-      <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
-      <p class="muted">Workspace <code>${esc(name)}</code> not found.</p>
-    `;
-    return;
-  }
-  const data = groups[name];
-  const view = $('view');
-
-  // PC detail 现在用 turn-streaming UI(详见 workspaceColHtml 的 detail
-  // 分支),内部容器是 .turn 而不是 .run-row,_patchWorkspaceCard 的
-  // diff 算法不再适用。每次主 poll 触发的 render() 全量重画 —— refreshAll
-  // 已经做了数据 hash 去重(elapsed_s 被 mask),空跑成本可控。
-  // mobile 路径(renderMobileWorkspaceDetail)同样是全量重画,体验一致。
-  view.innerHTML = `
-    <p><a href="#workspaces" class="back-link">← Workspaces</a></p>
-    ${workspaceColHtml(name, data, { maxRows: 30, detail: true, extraClass: 'ws-col-detail' })}
-  `;
-
-  bindWorkspaceColHandlers(view);
-}
 
 // ---------- Run detail view (#runs/<id>) ----------
 // Standalone page: full prompt + full output of a single run. Two callers:

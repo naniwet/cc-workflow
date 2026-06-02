@@ -79,6 +79,10 @@
   /* transition */
   --t-fast: 100ms ease-out;
   --t-base: 150ms ease-out;
+
+  /* PC 侧边栏布局(min-width:769px)的固定左栏宽度。布局常量,不属于
+     8px 间距节奏,所以单列一个变量而非硬编码 magic number。 */
+  --pc-sidebar-w: 220px;
 }
 
 /* ============================================================================
@@ -100,8 +104,8 @@ html, body {
 
 /* Body is a column flex container so <main> can flex-grow to fill the
    remaining viewport space below the sticky topbar. This is what lets
-   .ws-layout (a child of main) shrink-to-fit single-viewport, no
-   page scroll, regardless of how many rows there are. */
+   .pc-sidebar-layout (a child of main) claim full height so the pane's
+   timeline scrolls internally with no outer page scroll. */
 body {
   display: flex;
   flex-direction: column;
@@ -216,10 +220,10 @@ main {
 }
 
 /* ============================================================================
- *  Workspaces grid — used ONLY by the mobile carousel detail view now.
- *  PC overview uses .ws-layout > .ws-row (row-based, defined further down).
- *  Layout rules below cover PC (.ws-row containers in renderDesktopOverview)
- *  and the mobile single-card detail view (.ws-mobile-body).
+ *  .ws-col — 单个 workspace/session 卡。三处共用:PC 侧边栏布局的 pane
+ *  (.pc-pane > .ws-col)、PC/mobile detail(.ws-col-detail)、mobile
+ *  overview/carousel(.ws-mobile-body)。卡本体样式在这,撑高/滚动由各
+ *  容器(.pc-pane / .ws-col-detail)补。
  * ============================================================================ */
 .ws-col {
   background: var(--bg-surface);
@@ -456,113 +460,9 @@ main {
 .ws-card-trust { display: inline-flex; align-items: center; }
 .ws-card-trust svg { width: 12px; height: 12px; color: var(--accent-amber); vertical-align: middle; }
 
-/* PC drag-to-reorder handle — larger hit area + clearer hover state
-   so it's easy to target with a mouse. Hidden on mobile. */
-.ws-drag-handle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: grab;
-  color: var(--text-tertiary);
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
-  user-select: none;
-  transition: color var(--t-base), background var(--t-base);
-  flex-shrink: 0;
-  min-width: 32px;
-  min-height: 32px;
-}
-.ws-drag-handle svg { width: 16px; height: 16px; display: block; }
-.ws-drag-handle:hover {
-  color: var(--accent-blue);
-  background: var(--accent-blue-faint);
-}
-.ws-drag-handle:active { cursor: grabbing; }
-
-/* Row-based PC overview layout. Each row is its own flex container so
-   cards share the row's width equally; row count is implicit (= # of
-   inner arrays in _wsLayout). The layout itself flex-grows to fill
-   whatever vertical space <main> has left after h1 + add-form. */
-.ws-layout {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.ws-row {
-  display: flex;
-  gap: var(--space-3);
-  flex: 1 1 0;               /* every row gets an equal slice of vertical space */
-  min-height: 200px;         /* below this each card becomes unusable */
-  /* No max-height: with fewer rows, each row expands to fill the viewport
-     so there's no "reserved empty space" feel at the bottom. With many
-     rows, each row hits min-height and the page scrolls. */
-}
-.ws-row .ws-col {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;             /* override the 240px default so flex can shrink */
-}
-.ws-row .ws-col .ws-timeline {
-  flex: 1 1 auto;
-  max-height: none;          /* let timeline use whatever's left after head + form */
-  min-height: 0;
-}
-
-/* Slim drop zone between rows. Expands + highlights when a card is
-   dragged over it. Dropping here splits/creates a row. */
-.ws-row-gap {
-  height: 8px;
-  flex: 0 0 auto;
-  margin: 0;
-  border-radius: var(--radius-md);
-  transition: height var(--t-base), background var(--t-base), border-color var(--t-base);
-  border: 2px dashed transparent;
-}
-.ws-row-gap.drop-target {
-  height: 56px;
-  background: var(--accent-blue-faint);
-  border-color: var(--accent-blue);
-}
-
-/* Hide button — small "eye-off" icon at the right of .ws-head-row, only
-   on PC overview (mobile overview uses card list, no head row). */
-.ws-hide-btn {
-  display: inline-flex;
-  align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-tertiary);
-  padding: var(--space-1);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
-  flex-shrink: 0;
-  font: inherit;
-  margin-left: auto;
-}
-.ws-hide-btn svg { width: 14px; height: 14px; display: block; }
-.ws-hide-btn:hover { color: var(--text-primary); background: var(--bg-elevated); border-color: var(--border-subtle); }
-.ws-hide-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
-
-/* Hidden strip — slim row of pills, each restores a workspace back to
-   the layout. Only rendered when _wsHidden is non-empty.
-   2026-05-16 起 hidden strip 跟 "+ New" 同行(在 .ws-toolbar 里),不再
-   单独占一条 —— 去掉了独立的 background / border / padding 装饰,让它
-   inline 融进 toolbar。 */
-.ws-hidden-strip {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  font-size: var(--text-sm);
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-/* PC overview top toolbar:1 行装下 "+ New workspace" + hidden pills,
-   省掉之前 h1 + 全宽 add-form summary 那 ~100px。 */
+/* PC 顶部 toolbar:Tasks / Roundtable / Settings 各 tab 复用(workspace
+   侧边栏布局自己用 .pc-sidebar-toolbar,不走这条)。1 行装下 "+ New xxx"
+   + 可选的辅助链接。 */
 .ws-toolbar {
   display: flex;
   align-items: center;
@@ -622,83 +522,6 @@ main {
   color: var(--text-secondary);
   border: 1px solid var(--border-subtle);
 }
-.ws-new-cancel:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
-.ws-restore-btn {
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px dashed var(--border-strong);
-  padding: 2px var(--space-2);
-  font-size: var(--text-sm);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font: inherit;
-  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
-}
-.ws-restore-btn:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  border-color: var(--accent-blue);
-  border-style: solid;
-}
-
-/* Visual state during drag */
-.ws-col.dragging {
-  opacity: 0.35;
-  transform: scale(0.98);
-  box-shadow: none;
-}
-.ws-col {
-  position: relative;            /* anchor for ::before / ::after insertion lines */
-  transition: box-shadow var(--t-base);
-}
-
-/* Drop-target hover: render a vertical insertion line on the left OR right
-   edge of the target card, depending on which side of the midline the
-   cursor is on. Trello-style — tells the user EXACTLY where the source
-   card will land before they commit. */
-.ws-col.drop-target-left::before,
-.ws-col.drop-target-right::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  background: var(--accent-blue);
-  border-radius: 2px;
-  box-shadow: 0 0 12px var(--accent-blue);
-  z-index: 5;
-}
-.ws-col.drop-target-left::before {
-  left: calc(-1 * var(--space-2));
-}
-.ws-col.drop-target-right::after {
-  right: calc(-1 * var(--space-2));
-}
-
-/* Global drag-state class on <body>. While ANY card is being dragged,
-   make every potential drop zone discoverable — slim row-gaps puff up
-   to 36px with dashed outlines so the user sees "you can drop here too,
-   not just on a card". */
-body.is-dragging {
-  cursor: grabbing;
-}
-body.is-dragging .ws-row-gap {
-  height: 36px;
-  border: 2px dashed rgba(47, 126, 255, 0.45);
-  background: rgba(47, 126, 255, 0.05);
-}
-body.is-dragging .ws-row-gap.drop-target {
-  height: 56px;
-  border-color: var(--accent-blue);
-  background: var(--accent-blue-faint);
-}
-body.is-dragging .ws-col:not(.dragging) {
-  box-shadow: var(--shadow-2);     /* slight lift so non-source cards look "ready to receive" */
-}
-
 .provider-inline {
   width: auto;
   padding: 2px var(--space-2);
@@ -1687,6 +1510,235 @@ pre {
 .ws-timeline > * { flex-shrink: 0; }
 
 /* ============================================================================
+ *  PC 侧边栏布局(min-width:769px)— 左固定侧边栏 + 右主区(≤2 pane)。
+ *  取代旧卡片墙(spec: 2026-06-01-pc-sidebar-layout-design.md §3.1)。
+ *
+ *  比旧墙轻的核心:焦点感来自 sidebar 的 .is-active 高亮,而不是每张卡
+ *  满 chrome(border + shadow + 圆角)怼脸。pane 之间只靠 gap 分隔,不再
+ *  N 份重复边框叠加。
+ *
+ *  高度链路(同 .ws-col-detail,让 pane timeline 内滚、无外层页面滚动):
+ *      body                flex column, min-height 100vh
+ *      main                flex 1 1 auto, min-height 0, flex column
+ *      ↳ .pc-sidebar-layout  flex 1, min-height 0 — claims the rest
+ *        ↳ .pc-main          flex 1, min-height 0
+ *          ↳ .pc-pane        flex column, min-height 0
+ *            ↳ .ws-col       height 100%, min-height 0
+ *              ↳ .ws-timeline  flex 1, overflow-y auto — 内部滚动
+ * ============================================================================ */
+@media (min-width: 769px) {
+  .pc-sidebar-layout {
+    display: flex;
+    gap: var(--space-4);
+    flex: 1 1 0;
+    min-height: 0;            /* 让子项能 shrink,timeline 才会内滚 */
+  }
+
+  /* ── 左侧固定侧边栏 ─────────────────────────────────────────── */
+  .pc-sidebar {
+    flex: 0 0 var(--pc-sidebar-w);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-height: 0;
+    overflow-y: auto;        /* repo 多时纵向滚动 */
+    padding-right: var(--space-3);
+    border-right: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+  }
+  .pc-sidebar-toolbar {
+    flex: 0 0 auto;
+  }
+  .pc-sidebar-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+  }
+  .pc-sidebar-empty {
+    font-size: var(--text-sm);
+    padding: var(--space-2);
+  }
+
+  /* ── 侧边栏行(repo / session / + 新对话 公共样式)──────────── */
+  .pc-sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    transition: background var(--t-base), color var(--t-base);
+    border: none;
+    background: transparent;
+    text-align: left;
+    width: 100%;
+    font: inherit;
+  }
+  .pc-sidebar-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .pc-sidebar-session {
+    color: var(--text-tertiary);   /* 子行比 repo 行弱一档 */
+  }
+  .pc-sidebar-new-chat {
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);     /* 弱化:这是个动作行,不是导航行 */
+  }
+  .pc-sidebar-new-chat:hover {
+    color: var(--accent-blue);
+  }
+
+  /* 塌缩三角 ▸/▾ */
+  .pc-sidebar-toggle {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-4);
+    height: var(--space-4);
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--text-sm);
+    border-radius: var(--radius-sm);
+  }
+  .pc-sidebar-toggle:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+  }
+
+  /* 行内文字:省略号截断,占满剩余宽度 */
+  .pc-sidebar-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ⇲ 并排打开:默认隐藏,父行 hover 才显现 */
+  .pc-sidebar-open-beside {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-4);
+    height: var(--space-4);
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    opacity: 0;
+    transition: opacity var(--t-base), color var(--t-base), background var(--t-base);
+  }
+  .pc-sidebar-open-beside svg { width: 14px; height: 14px; display: block; }
+  .pc-sidebar-item:hover .pc-sidebar-open-beside {
+    opacity: 1;
+  }
+  .pc-sidebar-open-beside:hover {
+    color: var(--accent-blue);
+    background: var(--bg-elevated);
+  }
+
+  /* 展开后的 session 子行容器:缩进一档 */
+  .pc-sidebar-children {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-left: var(--space-4);
+  }
+
+  /* ── active 高亮两级(决策 4)──────────────────────────────────
+     .is-open  = 该 tile 当前开着的某个 pane(弱:左 accent 边条 + 浅底)
+     .is-active = 该 tile 是 active pane(强一档:实底 + 主色文字) */
+  .pc-sidebar-item.is-open {
+    background: var(--bg-elevated);
+    box-shadow: inset 2px 0 0 var(--accent-blue-faint);
+  }
+  .pc-sidebar-item.is-active {
+    background: var(--accent-blue-faint);
+    color: var(--text-primary);
+    box-shadow: inset 2px 0 0 var(--accent-blue);
+  }
+
+  /* ── 右侧主区(横向放 1~2 pane)─────────────────────────────── */
+  .pc-main {
+    display: flex;
+    flex: 1 1 0;
+    gap: var(--space-4);
+    min-width: 0;
+    min-height: 0;
+  }
+  .pc-main-empty {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--text-md);
+  }
+
+  /* 1 pane 全宽;2 pane 各 flex:1 等宽并排(gap 由 .pc-main 给) */
+  .pc-pane {
+    position: relative;        /* anchor for .pc-pane-close 定位 */
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  /* pane 内的 .ws-col 撑满 pane 高度,timeline 内部滚动(同 .ws-col-detail) */
+  .pc-pane .ws-col {
+    flex: 1 1 0;
+    height: 100%;
+    min-height: 0;
+  }
+  .pc-pane .ws-timeline {
+    flex: 1 1 0;
+    max-height: none;
+    min-height: 0;
+    overflow-y: auto;
+    gap: var(--space-3);
+    padding: var(--space-3);
+  }
+
+  /* × 关闭按钮:pane 右上角定位(仅 2 pane 时渲染) */
+  .pc-pane-close {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-5);
+    height: var(--space-5);
+    padding: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--text-lg);
+    line-height: 1;
+  }
+  .pc-pane-close:hover {
+    color: var(--text-primary);
+    border-color: var(--accent-red);
+    background: var(--bg-hover);
+  }
+}
+
+/* ============================================================================
  *  Bottom nav — desktop hides
  * ============================================================================ */
 .bottom-nav { display: none; }
@@ -2369,11 +2421,6 @@ pre {
     flex: 0 0 auto;
     min-width: 70px;
   }
-
-  /* Drag-to-reorder + hide button are PC-only —
-     mobile uses overview-card-list, no grid to rearrange. */
-  .ws-drag-handle,
-  .ws-hide-btn { display: none; }
 
   /* ---------------------------------------------------------------
    *  Add-form on mobile, layered behavior:
