@@ -68,7 +68,7 @@
 | 容器 | 一个圆角容器(`--bg-surface` + `--border-strong`),聚焦时蓝光描边(`box-shadow` accent-faint) | 一体感,不是裸 textarea |
 | textarea | **自增高**(min ~38px,按内容长到上限再内滚) | 现在固定 min 60 占地大 |
 | 工具栏(底部一行) | `📎 附件` · `/`(slash 提示,功能已有)· **model chip**(只读显示当前 provider/engine)· `⌘↵ 发送` 提示 · `Run` | 信息收在一条,不散 |
-| 跑动时 | `Run` → `Stop`(若有取消 run 能力则接;**无则保持 Run 禁用 + "运行中"**,见 §7 Q1) | happier 的 steer 感,但不擅自加后端 |
+| 跑动时 | `Run` → `Stop`(**已查:后端 `POST /runs/{id}/cancel`(SIGTERM 进程组)+ 前端 `.run-cancel-btn` 已存在,直接复用**,不写新后端) | happier 的 steer 感,复用现成 cancel |
 | 附件 chips | 在 composer 容器内顶部一行(沿用现有 `_pendingUploads` 渲染) | 不动上传逻辑 |
 
 ### 3.4 侧边栏完整样式 + 收起
@@ -180,7 +180,7 @@
 
 ## 7. Open Questions(给倾向,plan 阶段定)
 
-1. **composer 的 Stop**:现有有没有"取消运行中 run"的能力?有 → Run 跑动时变 Stop;**没有 → 本次不擅自加后端取消,Run 跑动时禁用 + 显"运行中",Stop 留 fast-follow**。倾向:先不加后端,查现状再定。
+1. ~~composer 的 Stop~~ **已定**:后端 `runner.cancel()`(`POST /runs/{id}/cancel`,SIGTERM 进程组)+ 前端 `.run-cancel-btn` 已存在 → composer 跑动时 `Run`→`Stop` 直接复用现成 cancel,不写新后端。
 2. **diff 精度**:MVP **全删旧 + 全增新**(Edit 的 old_string/new_string 直接红/绿两块)够不够?还是要行级 LCS 精确 diff?倾向:MVP 全删全增,够看;精确 diff 留迭代。
 3. **markdown 渲染器**:vendor `marked.min.js`(推荐,健壮)vs 手写极简。倾向:**vendor marked**(无 build step 直接引,XSS 按不可信处理)。
 4. **Phase 1 / Phase 2 是否同一个 PR**:倾向**分开** —— P1(去卡片+收起,CSS+小JS)先上、立竿见影、风险低;P2(报文流,较大 JS)单独 plan + review。本 spec 一份覆盖,plan 拆成两批。
