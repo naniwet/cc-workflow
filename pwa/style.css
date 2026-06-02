@@ -80,9 +80,10 @@
   --t-fast: 100ms ease-out;
   --t-base: 150ms ease-out;
 
-  /* PC 侧边栏布局(min-width:769px)的固定左栏宽度。布局常量,不属于
-     8px 间距节奏,所以单列一个变量而非硬编码 magic number。 */
-  --pc-sidebar-w: 220px;
+  /* 通用 app shell(min-width:769px)的固定左栏宽度 + 收起态 rail 宽度。
+     布局常量,不属于 8px 间距节奏,所以单列变量而非硬编码 magic number。 */
+  --shell-nav-w: 220px;
+  --shell-rail-w: 52px;
 }
 
 /* ============================================================================
@@ -104,7 +105,7 @@ html, body {
 
 /* Body is a column flex container so <main> can flex-grow to fill the
    remaining viewport space below the sticky topbar. This is what lets
-   .pc-sidebar-layout (a child of main) claim full height so the pane's
+   .shell (a child of main) claim full height so the pane's
    timeline scrolls internally with no outer page scroll. */
 body {
   display: flex;
@@ -461,7 +462,7 @@ main {
 .ws-card-trust svg { width: 12px; height: 12px; color: var(--accent-amber); vertical-align: middle; }
 
 /* PC 顶部 toolbar:Tasks / Roundtable / Settings 各 tab 复用(workspace
-   侧边栏布局自己用 .pc-sidebar-toolbar,不走这条)。1 行装下 "+ New xxx"
+   shell nav 自己用 .shell-nav-toolbar,不走这条)。1 行装下 "+ New xxx"
    + 可选的辅助链接。 */
 .ws-toolbar {
   display: flex;
@@ -1510,61 +1511,110 @@ pre {
 .ws-timeline > * { flex-shrink: 0; }
 
 /* ============================================================================
- *  PC 侧边栏布局(min-width:769px)— 左固定侧边栏 + 右主区(≤4 pane)。
- *  取代旧卡片墙(spec: 2026-06-01-pc-sidebar-layout-design.md §3.1)。
+ *  通用 app shell(min-width:769px)— 左固定 nav + 右主区(≤4 pane)。
+ *  spec: 2026-06-02-pwa-unified-shell-program-design.md §4.2。重构自旧
+ *  .pc-sidebar-* 布局(baf81ea),class 统一到 .shell-* / .shell-nav-* 供
+ *  4 tab 复用。
  *
- *  比旧墙轻的核心:焦点感来自 sidebar 的 .is-active 高亮,而不是每张卡
- *  满 chrome(border + shadow + 圆角)怼脸。pane 之间只靠 gap 分隔,不再
- *  N 份重复边框叠加。
+ *  比旧卡片墙轻的核心:焦点感来自 nav 的 .is-active 高亮,而不是每张卡
+ *  满 chrome(border + shadow + 圆角)怼脸。pane 之间只靠 gap 分隔。
  *
- *  主区布局阶梯(.pc-main grid 按 data-pane-count 切,spec §3.3):
+ *  主区布局阶梯(.pc-main grid 按 data-pane-count 切,保留不变):
  *      1 = 全屏;2 = 左右等宽;3 = 左大(pane1 跨两行)+ 右上下;4 = 2×2。
  *
  *  高度链路(同 .ws-col-detail,让 pane timeline 内滚、无外层页面滚动):
  *      body                flex column, min-height 100vh
  *      main                flex 1 1 auto, min-height 0, flex column
- *      ↳ .pc-sidebar-layout  flex 1, min-height 0 — claims the rest
- *        ↳ .pc-main          grid 1~2 列, min-height 0
- *          ↳ .pc-pane        grid cell → flex column, min-height 0
- *            ↳ .ws-col       height 100%, min-height 0
- *              ↳ .ws-timeline  flex 1, overflow-y auto — 内部滚动
+ *      ↳ .shell            flex row, flex 1, min-height 0 — claims the rest
+ *        ↳ .shell-main     flex column, min-height 0(包 .pc-main)
+ *          ↳ .pc-main      grid 1~4 格, min-height 0
+ *            ↳ .pc-pane    grid cell → flex column, min-height 0
+ *              ↳ .ws-col       height 100%, min-height 0
+ *                ↳ .ws-timeline  flex 1, overflow-y auto — 内部滚动
+ *
+ *  collapsed(PC 收起态):.shell-nav.is-rail 宽度收成 --shell-rail-w(52px),
+ *  只显图标条;展开/收起靠 chrome 里的 « / » 按钮(data-shell-collapse)。
  * ============================================================================ */
 @media (min-width: 769px) {
-  .pc-sidebar-layout {
+  .shell {
     display: flex;
     gap: var(--space-4);
     flex: 1 1 0;
     min-height: 0;            /* 让子项能 shrink,timeline 才会内滚 */
   }
 
-  /* ── 左侧固定侧边栏 ─────────────────────────────────────────── */
-  .pc-sidebar {
-    flex: 0 0 var(--pc-sidebar-w);
+  /* ── 左侧固定 nav(展开态)─────────────────────────────────── */
+  .shell-nav {
+    flex: 0 0 var(--shell-nav-w);
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: var(--space-2);
     min-height: 0;
     overflow-y: auto;        /* repo 多时纵向滚动 */
     padding-right: var(--space-3);
     border-right: 1px solid var(--border-subtle);
     background: var(--bg-surface);
+    transition: flex-basis var(--t-base);
   }
-  .pc-sidebar-toolbar {
+  /* 收起态 rail:52px 图标条 */
+  .shell-nav.is-rail {
+    flex: 0 0 var(--shell-rail-w);
+    align-items: stretch;
+    padding-right: 0;
+  }
+
+  /* nav 顶部 chrome:« / » 收起按钮 */
+  .shell-nav-chrome {
     flex: 0 0 auto;
+    display: flex;
+    justify-content: flex-end;
+    padding: var(--space-1) var(--space-1) 0;
   }
-  .pc-sidebar-tree {
+  .shell-nav.is-rail .shell-nav-chrome {
+    justify-content: center;
+  }
+  .shell-collapse-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-5);
+    height: var(--space-5);
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--text-lg);
+    line-height: 1;
+    border-radius: var(--radius-sm);
+  }
+  .shell-collapse-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+  }
+  /* nav body 容纳 toolbar + tree(展开)或 rail items(收起)*/
+  .shell-nav-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .shell-nav-toolbar { flex: 0 0 auto; }
+  .shell-nav-tree {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-height: 0;
   }
-  .pc-sidebar-empty {
+  .shell-nav-empty {
     font-size: var(--text-sm);
     padding: var(--space-2);
   }
 
-  /* ── 侧边栏行(repo / session / + 新对话 公共样式)──────────── */
-  .pc-sidebar-item {
+  /* ── nav 行(repo / session / + 新对话 公共样式)──────────── */
+  .shell-nav-item {
     display: flex;
     align-items: center;
     gap: var(--space-1);
@@ -1580,23 +1630,23 @@ pre {
     width: 100%;
     font: inherit;
   }
-  .pc-sidebar-item:hover {
+  .shell-nav-item:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
   }
-  .pc-sidebar-session {
+  .shell-nav-session {
     color: var(--text-tertiary);   /* 子行比 repo 行弱一档 */
   }
-  .pc-sidebar-new-chat {
+  .shell-nav-new-chat {
     color: var(--text-tertiary);
     font-size: var(--text-sm);     /* 弱化:这是个动作行,不是导航行 */
   }
-  .pc-sidebar-new-chat:hover {
+  .shell-nav-new-chat:hover {
     color: var(--accent-blue);
   }
 
   /* 塌缩三角 ▸/▾ */
-  .pc-sidebar-toggle {
+  .shell-nav-toggle {
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
@@ -1612,13 +1662,13 @@ pre {
     font-size: var(--text-sm);
     border-radius: var(--radius-sm);
   }
-  .pc-sidebar-toggle:hover {
+  .shell-nav-toggle:hover {
     color: var(--text-primary);
     background: var(--bg-elevated);
   }
 
   /* 行内文字:省略号截断,占满剩余宽度 */
-  .pc-sidebar-label {
+  .shell-nav-label {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
@@ -1626,8 +1676,22 @@ pre {
     white-space: nowrap;
   }
 
+  /* running 青色脉冲点(spec §4.2)。full 态在 label 后、⇲ 前 */
+  .shell-nav-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    background: var(--accent-cyan);
+    animation: shell-nav-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes shell-nav-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+
   /* ⇲ 并排打开:默认隐藏,父行 hover 才显现 */
-  .pc-sidebar-open-beside {
+  .shell-nav-open-beside {
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
@@ -1643,17 +1707,17 @@ pre {
     opacity: 0;
     transition: opacity var(--t-base), color var(--t-base), background var(--t-base);
   }
-  .pc-sidebar-open-beside svg { width: 14px; height: 14px; display: block; }
-  .pc-sidebar-item:hover .pc-sidebar-open-beside {
+  .shell-nav-open-beside svg { width: 14px; height: 14px; display: block; }
+  .shell-nav-item:hover .shell-nav-open-beside {
     opacity: 1;
   }
-  .pc-sidebar-open-beside:hover {
+  .shell-nav-open-beside:hover {
     color: var(--accent-blue);
     background: var(--bg-elevated);
   }
 
   /* 展开后的 session 子行容器:缩进一档 */
-  .pc-sidebar-children {
+  .shell-nav-children {
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -1663,15 +1727,68 @@ pre {
   /* ── active 高亮两级(决策 4)──────────────────────────────────
      .is-open  = 该 tile 当前开着的某个 pane(弱:左 accent 边条 + 浅底)
      .is-active = 该 tile 是 active pane(强一档:实底 + 主色文字) */
-  .pc-sidebar-item.is-open {
+  .shell-nav-item.is-open {
     background: var(--bg-elevated);
     box-shadow: inset 2px 0 0 var(--accent-blue-faint);
   }
-  .pc-sidebar-item.is-active {
+  .shell-nav-item.is-active {
     background: var(--accent-blue-faint);
     color: var(--text-primary);
     box-shadow: inset 2px 0 0 var(--accent-blue);
   }
+
+  /* ── rail 态 item(52px 图标条)─────────────────────────────────
+     每个顶层 item 一个方块:glyph(icon / label 首字)+ badge 角标 +
+     running 点。children 不在 rail 展开。 */
+  .shell-nav-rail-item {
+    position: relative;        /* anchor badge / dot */
+    flex-direction: column;
+    justify-content: center;
+    gap: 0;
+    width: 100%;
+    padding: var(--space-2) 0;
+    border-radius: var(--radius-sm);
+  }
+  .shell-nav-rail-glyph {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: -0.02em;
+  }
+  /* rail 角标(多 session 数):右上角小圆 */
+  .shell-nav-rail-badge {
+    position: absolute;
+    top: 2px;
+    right: 6px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: var(--radius-full);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-size: 9px;
+    line-height: 14px;
+    text-align: center;
+  }
+  /* rail 态 running 点:左上角 */
+  .shell-nav-rail-item .shell-nav-dot {
+    position: absolute;
+    top: 4px;
+    left: 6px;
+  }
+
+  /* ── shell-main:nav 右侧的内容容器(包 .pc-main 网格)──────────
+     flex column 让 .pc-main grid 撑满剩余高度;min-*:0 保内滚链路。 */
+  .shell-main {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* PC 不显示 ☰(那是移动端 drawer 入口);收起/展开走 nav 里的 « / »。 */
+  .shell-main-chrome { display: none; }
 
   /* ── 右侧主区(网格放 1~4 pane,布局阶梯 spec §3.3)──────────────
      一套 grid 按 data-pane-count 切模板(MAX_PANES=4):
@@ -1731,13 +1848,23 @@ pre {
     flex: 1 1 0;
     height: 100%;
     min-height: 0;
+    /* 去卡片(spec §4.1):pane 内 .ws-col 不要 border+shadow+radius+surface
+       三件套 —— pane 网格本身已经分隔了多块,再加卡片框是重复 chrome。
+       透明底色融进 pane;层级靠间距 + 下面 .ws-head 的极弱 hairline。
+       只覆盖 PC pane,detail / mobile 的 .ws-col 本体保持卡片(共用)。 */
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
   .pc-pane .ws-timeline {
     flex: 1 1 0;
     max-height: none;
     min-height: 0;
     overflow-y: auto;
-    gap: var(--space-3);
+    /* 去卡片后 turn 没框,12px gap 偏空 → 收紧到 8px(spec §4.1
+       "层级靠间距"，但去框后间距也要相应收紧避免松散)。 */
+    gap: var(--space-2);
     padding: var(--space-3);
   }
 
@@ -1766,6 +1893,127 @@ pre {
     color: var(--text-primary);
     border-color: var(--accent-red);
     background: var(--bg-hover);
+  }
+}
+
+/* ============================================================================
+ *  shell backdrop — 默认隐藏(只移动端 drawer 打开时出现,见下移动端段)。
+ *  放在 media query 外是为了 PC + 移动端都默认隐藏,避免 PC 误显遮罩。
+ * ============================================================================ */
+.shell-backdrop { display: none; }
+
+/* ============================================================================
+ *  通用 app shell — 移动端 drawer(≤768px,spec §4.2)
+ *
+ *  移动端无 collapsed 概念:main 全宽 + ☰(.shell-main-chrome);点 ☰ →
+ *  .shell.is-drawer-open,nav 以覆盖层从左滑出 + .shell-backdrop 遮罩。
+ *  drawer 里始终是 nav full 态(rail 只 PC 用)。点 backdrop / 选中一项收起。
+ * ============================================================================ */
+@media (max-width: 768px) {
+  .shell {
+    display: block;          /* 移动端 main 全宽,nav 脱离文档流做覆盖层 */
+    position: relative;
+  }
+  .shell-main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  /* ☰ 抽屉入口:移动端可见 */
+  .shell-main-chrome {
+    display: flex;
+    flex: 0 0 auto;
+    padding: var(--space-2);
+  }
+  .shell-drawer-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-6);
+    height: var(--space-6);
+    padding: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--text-h3);
+    line-height: 1;
+  }
+
+  /* nav = 左侧滑出覆盖层。默认移出屏幕(-100%),drawer 打开时滑入。 */
+  .shell-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 60;
+    width: 80vw;
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border-strong);
+    overflow-y: auto;
+    transform: translateX(-100%);
+    transition: transform var(--t-base);
+  }
+  .shell.is-drawer-open .shell-nav {
+    transform: translateX(0);
+  }
+  /* 移动端 nav body 不需要额外 flex 装饰,沿用 full 渲染 */
+  .shell-nav-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .shell-nav-chrome { display: none; }   /* 移动端无 « / »(无 collapsed) */
+  .shell-nav-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .shell-nav-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    border: none;
+    background: transparent;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+  }
+  .shell-nav-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .shell-nav-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    background: var(--accent-cyan);
+  }
+  /* 移动端 drawer 里不需要 ⇲(无多 pane)/ 三角缩进沿用,但弱化显示 */
+  .shell-nav-open-beside { display: none; }
+  .shell-nav-children { padding-left: var(--space-4); }
+
+  /* backdrop:drawer 打开时半透明遮罩,点它收起 */
+  .shell.is-drawer-open .shell-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -1813,25 +2061,28 @@ pre {
  *   .workspace-new-events(浮动 fab)
  * —— 这些只在手机端有意义。
  * ──────────────────────────────────────────────────────────────────── */
+/* 去卡片(spec §4.1):turn 不再是 border+radius+surface 的小卡。
+   收起态 = 轻量块(透明底,无框),层级靠间距(stream/timeline 的 gap)。
+   展开态 = 只留一条极弱左色条(2px hairline)标状态,不整块框 —— 比旧版
+   inset 3px 更克制。彩色仅用于状态(running=青 / done=绿 / error=红)。
+   overflow:hidden 保留,免得 .turn-head:hover 的圆角外溢(虽已去 radius,
+   保留无害且 turn-events 内部块仍可能用到)。 */
 .turn {
   position: relative;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
 }
 .turn-expanded {
-  border-color: rgba(6, 182, 212, 0.35);
-  box-shadow: inset 3px 0 0 var(--accent-cyan);
+  box-shadow: inset 2px 0 0 var(--accent-cyan);
 }
 .turn-status-done.turn-expanded {
-  border-color: rgba(34, 197, 94, 0.30);
-  box-shadow: inset 3px 0 0 var(--accent-green);
+  box-shadow: inset 2px 0 0 var(--accent-green);
 }
 .turn-status-failed.turn-expanded,
 .turn-status-error.turn-expanded {
-  border-color: rgba(239, 68, 68, 0.35);
-  box-shadow: inset 3px 0 0 var(--accent-red);
+  box-shadow: inset 2px 0 0 var(--accent-red);
 }
 .turn-head {
   /* 设计图 §3.2:收起态可以 1 行 prompt 或 2 行(prompt + reply preview),
@@ -2072,6 +2323,14 @@ pre {
 }
 
 .event-user   .event-label { color: var(--text-secondary); }
+/* User prompt 弱气泡(spec §4.1):用户输入跟 assistant text 区分 —— 轻
+   --bg-elevated 底 + radius,不叠阴影。气泡只包 prompt 文本块,不动
+   event grid 布局。assistant 的 .event-text 保持透明(无气泡)。 */
+.event-user .event-text-block {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
 /* Reply 之前是 green 跟 done 同色,用户误以为"运行完成"。改 accent-blue ——
    "对话进行中的回复",跟 done 的 green 区分开。 */
 .event-text   .event-label { color: var(--accent-blue); }
@@ -2420,37 +2679,16 @@ pre {
     border-radius: var(--radius-full);
     box-shadow: var(--shadow-2);
   }
-  .workspace-input {
+  /* mobile composer:sticky 输入条(取代旧 .workspace-input —— composer
+     重构后 mobile 这个 form 也走 .trigger-form.composer,不再带
+     workspace-input class)。只补 mobile 专属的定位 / 安全区 padding;
+     圆角卡片外观 + 内部三段布局由通用 .composer 规则给。 */
+  .workspace-session .trigger-form.composer {
     position: sticky;
     bottom: 0;
     z-index: 25;
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    align-items: flex-end;
-    padding: var(--space-2) var(--space-3);
+    margin: var(--space-2) var(--space-2) 0;
     padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
-    background: rgba(20, 22, 27, 0.96);
-    border-top: 1px solid var(--border-subtle);
-  }
-  /* 跟桌面一致:chips 单独一行在上;[textarea] [📎][Run] 一行,📎 挨 Run。 */
-  .workspace-input .attach-chips { order: -1; flex: 0 0 100%; }
-  .workspace-input textarea { order: 0; }
-  .workspace-input .attach-btn { order: 1; }
-  .workspace-input .run-btn { order: 2; }
-  .workspace-input textarea {
-    /* basis 0 而不是 auto:flex-wrap 容器里 basis: auto 会按 textarea 默认
-       cols (~200px) 算自然宽度,加上 attach-btn / run-btn 容易撑过容器宽度
-       触发 wrap → 三个元素各占一行(用户报告:Run 跑去了下一行)。basis 0
-       让 textarea 从 0 开始 grow,只占剩余空间,不会把自己撑出 wrap。 */
-    flex: 1 1 0;
-    min-width: 0;     /* basis 0 + min-width 0 双保险,极窄屏也不溢出 */
-    min-height: 44px;
-    max-height: 140px;
-  }
-  .workspace-input .run-btn {
-    flex: 0 0 auto;
-    min-width: 70px;
   }
 
   /* ---------------------------------------------------------------
@@ -3625,8 +3863,7 @@ pre {
  *  后面的 [📎] [textarea] [Run] 自然 wrap 到第二行,跟原有 align-items:flex-end
  *  兼容(空 chips 时 :empty display:none,form 看起来跟改之前一样)。
  * ============================================================================ */
-.ws-col .trigger-form,
-.workspace-input { flex-wrap: wrap; }
+.ws-col .trigger-form { flex-wrap: wrap; }
 
 .attach-chips {
   display: flex;
@@ -3710,3 +3947,92 @@ pre {
   white-space: nowrap;
   flex-shrink: 0;
 }
+
+/* ============================================================================
+ *  composer(spec §4.4)— 圆角容器 + 聚焦蓝光 + 自增高 textarea + 底部工具栏。
+ *  取代旧的 .trigger-form 平铺盒(textarea + 📎 + Run 一行)。PC pane + mobile
+ *  workspace-input 共用同一份(.trigger-form.composer),响应式只差 ⌘↵ 提示。
+ *
+ *  布局(竖排三段,DOM 顺序即视觉顺序):
+ *    [.attach-chips]          ← 有附件时占顶部(空则 :empty 隐藏)
+ *    [textarea.composer-input] ← 自增高,JS 按 scrollHeight 调(P2:不用
+ *                                CSS field-sizing,国产 ROM WebView 不稳)
+ *    [.composer-toolbar]      ← 一行:📎 · model chip · (spacer) · ⌘↵ · Run/Stop
+ *
+ *  特异性:.trigger-form.composer(0,2,0)定义在文件最后,压过靠前的
+ *  .ws-col .trigger-form / .workspace-input 旧 flex 规则。
+ * ============================================================================ */
+.trigger-form.composer {
+  margin-top: auto;             /* 沉到 .ws-col 底部(同旧 trigger-form) */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: stretch;         /* 覆盖旧 align-items:flex-end */
+  flex-wrap: nowrap;            /* 覆盖旧 flex-wrap:wrap */
+  padding: var(--space-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: box-shadow var(--t-base), border-color var(--t-base);
+}
+/* 聚焦蓝光描边(spec §4.4):textarea 聚焦时整个容器外发光。 */
+.trigger-form.composer:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--accent-blue-faint);
+}
+.trigger-form.composer .composer-input {
+  order: 0;
+  flex: none;                   /* 高度由 JS scrollHeight 控,不被 flex 拉伸 */
+  width: 100%;
+  min-width: 0;
+  /* 从约 1 行起(JS 自增到 40vh 再内滚)。min-height 覆盖旧的 60px/44px;
+     max-height:none 让 JS 全权控上限(覆盖旧 .workspace-input 的 140px cap,
+     否则 JS 设的 inline height 会被 CSS max-height 裁掉)。 */
+  min-height: 38px;
+  max-height: none;
+  overflow-y: auto;             /* 到 40vh 上限后内滚 */
+  resize: none;                 /* 自增高接管,禁手动拖拽角(否则跟 JS 打架) */
+  background: transparent;
+  border: 0;
+  padding: var(--space-2);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: var(--lh-normal);
+}
+.trigger-form.composer .composer-input:focus {
+  outline: none;                /* 容器 :focus-within 已给蓝光,内框不再重复 */
+}
+/* 附件 chips:容器内顶部(order -1 保险,DOM 也在最前)。 */
+.trigger-form.composer .attach-chips { order: -1; }
+.composer-toolbar {
+  order: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.composer-spacer { flex: 1 1 auto; }
+/* model chip:只读,显示 provider(此处不可改,改走 ⋯ 菜单)。 */
+.composer-model-chip {
+  flex: 0 0 auto;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.composer-hint {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+  white-space: nowrap;
+}
+/* composer 里的 Run / Stop 按钮(覆盖旧 .ws-col .trigger-form button 的
+   flex 规则,但样式继承全局 button —— 蓝底 Run / 红字 Stop 走 .run-cancel-btn)。 */
+.composer-send,
+.composer .composer-stop {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+/* composer 里的 📎:沿用 .attach-btn 视觉,只重置可能被旧 order 规则影响的项。 */
+.trigger-form.composer .attach-btn { order: 0; }

@@ -405,12 +405,14 @@ export function paneStateReducer(state, action) {
 //   groups 插入序(= 墙的顺序,天然一致)。顶层 tileId = 该 ws 默认 tile
 //   (pwa-<ws>);groups 里没有默认 tile 时退到该 ws 第一个 tile。
 export function buildSidebarTree(groups) {
-  // ws → 该 ws 的 {sessionKey, tileId} 列表(按 groups 插入序累积)
+  // ws → 该 ws 的 {sessionKey, tileId, running} 列表(按 groups 插入序累积)。
+  // session child 的 running = 该 tile 有 active run(groups[tileId].active.length > 0)。
   const byWs = new Map();
   for (const tileId of Object.keys(groups || {})) {
-    const { ws, sessionKey } = groups[tileId];
+    const { ws, sessionKey, active } = groups[tileId];
+    const running = Array.isArray(active) && active.length > 0;
     if (!byWs.has(ws)) byWs.set(ws, []);
-    byWs.get(ws).push({ sessionKey, tileId });
+    byWs.get(ws).push({ sessionKey, tileId, running });
   }
 
   return Array.from(byWs.entries()).map(([ws, tiles]) => {
@@ -418,16 +420,20 @@ export function buildSidebarTree(groups) {
     const expandable = sessionCount >= 2;
     const defaultTileId = sessionTileId(ws, `pwa-${ws}`);
     const hasDefault = tiles.some((t) => t.tileId === defaultTileId);
+    // repo node 的 running = 该 ws 任一 session(含默认)有 active run。
+    const running = tiles.some((t) => t.running);
     return {
       ws,
       tileId: hasDefault ? defaultTileId : tiles[0].tileId,
       sessionCount,
       expandable,
+      running,
       sessions: expandable
-        ? tiles.map(({ sessionKey, tileId }) => ({
+        ? tiles.map(({ sessionKey, tileId, running: sessionRunning }) => ({
             sessionKey,
             label: sessionChipLabel(ws, sessionKey),
             tileId,
+            running: sessionRunning,
           }))
         : [],
     };
@@ -441,4 +447,52 @@ export function buildSidebarTree(groups) {
 export function _prunePanes(panes, validTileIds) {
   const valid = validTileIds instanceof Set ? validTileIds : new Set(validTileIds || []);
   return (panes || []).filter((tileId) => valid.has(tileId));
+}
+
+// ---------------------------------------------------------------------------
+// shell 状态校验 + NavModel 适配器(spec §4.2)—— 纯函数,0 IO。
+// localStorage 的实际读写(key cc.shell.<tab>)归 app.js,不进这里
+// (跟 cc.pcLayout 同纪律)。
+// ---------------------------------------------------------------------------
+
+// shell 收起态校验。raw = 从 localStorage 读出的字符串,或已 parse 的对象。
+// 内部容错 parse;null / 坏 JSON / 非对象 → {collapsed:false};collapsed 非
+// bool(如 "yes"/1)→ 归一成 false。不变量:返回永远 {collapsed:bool}。
+export function loadShellState(raw) {
+  let obj = raw;
+  if (typeof raw === 'string') {
+    try { obj = JSON.parse(raw); } catch { return { collapsed: false }; }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { collapsed: false };
+  return { collapsed: obj.collapsed === true };
+}
+
+// buildSidebarTree 输出(带 running)→ spec §4.2 NavModel。纯函数,形状由 tree
+// 决定。NavItem.active 留 undefined(纯函数不知道谁 active,由调用方按
+// paneState 填);icon 不填(nav 组件取 label 首字)。
+//   repo node → NavItem{ id:tileId, label:ws, running, data:{tileId},
+//                        badge:(sessionCount>1?sessionCount:undefined),
+//                        children:(expandable?sessions.map(child):undefined) }
+//   session child → NavItem{ id:tileId, label:(默认线?'默认':sessionChipLabel),
+//                            running, data:{tileId} }
+export function navModelFromTree(tree) {
+  const items = (tree || []).map((node) => ({
+    id: node.tileId,
+    label: node.ws,
+    running: node.running,
+    data: { tileId: node.tileId },
+    badge: node.sessionCount > 1 ? node.sessionCount : undefined,
+    children: node.expandable
+      ? node.sessions.map((s) => ({
+          id: s.tileId,
+          label: s.sessionKey === `pwa-${node.ws}` ? '默认' : s.label,
+          running: s.running,
+          data: { tileId: s.tileId },
+        }))
+      : undefined,
+  }));
+  return {
+    newAction: { label: '+ 新建 workspace', data: {} },
+    sections: [{ items }],
+  };
 }

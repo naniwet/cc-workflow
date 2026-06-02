@@ -22,6 +22,8 @@ import {
   paneStateReducer,
   buildSidebarTree,
   _prunePanes,
+  loadShellState,
+  navModelFromTree,
 } from '../pwa/ui_contract.mjs';
 
 test('status accent mapping follows the mobile overview design', () => {
@@ -514,8 +516,8 @@ test('paneStateReducer: 未知 action type 原样返回(不破坏不变量)', ()
 // 每个 entry 用 sessionTileId 当 key,value 至少含 {ws, sessionKey}。
 function groups(...tiles) {
   const g = {};
-  for (const { ws, sessionKey } of tiles) {
-    g[sessionTileId(ws, sessionKey)] = { ws, sessionKey, active: [], recent: [] };
+  for (const { ws, sessionKey, active } of tiles) {
+    g[sessionTileId(ws, sessionKey)] = { ws, sessionKey, active: active || [], recent: [] };
   }
   return g;
 }
@@ -530,6 +532,7 @@ test('buildSidebarTree: 单 session repo → expandable:false, sessions:[]', () 
     tileId: sessionTileId('notes', 'pwa-notes'),
     sessionCount: 1,
     expandable: false,
+    running: false,
     sessions: [],
   });
 });
@@ -563,9 +566,9 @@ test('buildSidebarTree: 多 session(≥2)repo → expandable:true + 正确 child
   assert.equal(entry.expandable, true);
   // children 顺序 = groups 插入序(信任 groups,不重排)
   assert.deepEqual(entry.sessions, [
-    { sessionKey: 'pwa-cc-workflow', label: 'pwa-cc-workflow', tileId: sessionTileId('cc-workflow', 'pwa-cc-workflow') },
-    { sessionKey: 'cc-workflow--feat-x', label: 'feat-x', tileId: sessionTileId('cc-workflow', 'cc-workflow--feat-x') },
-    { sessionKey: 'cc-workflow--fix-bug', label: 'fix-bug', tileId: sessionTileId('cc-workflow', 'cc-workflow--fix-bug') },
+    { sessionKey: 'pwa-cc-workflow', label: 'pwa-cc-workflow', tileId: sessionTileId('cc-workflow', 'pwa-cc-workflow'), running: false },
+    { sessionKey: 'cc-workflow--feat-x', label: 'feat-x', tileId: sessionTileId('cc-workflow', 'cc-workflow--feat-x'), running: false },
+    { sessionKey: 'cc-workflow--fix-bug', label: 'fix-bug', tileId: sessionTileId('cc-workflow', 'cc-workflow--fix-bug'), running: false },
   ]);
 });
 
@@ -627,6 +630,45 @@ test('buildSidebarTree: 顶层 tileId 默认 tile 缺失时退到该 ws 第一�
   assert.equal(tree[0].expandable, false);
 });
 
+// ---------- buildSidebarTree.running 派生(spec §4.2:running 来自 active run)----------
+// node 的 running = 该 ws 任一 session 有 active run;session child 的 running =
+// 该 child 的 groups[tileId].active.length > 0。纯函数,只读传入 groups。
+
+test('buildSidebarTree.running: 全无 active → repo node + 所有 child running:false', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc-workflow', sessionKey: 'pwa-cc-workflow' },
+    { ws: 'cc-workflow', sessionKey: 'cc-workflow--feat-x' },
+  ));
+  assert.equal(tree[0].running, false);
+  assert.deepEqual(tree[0].sessions.map((s) => s.running), [false, false]);
+});
+
+test('buildSidebarTree.running: 某 session 有 active run → 该 child + 其 repo node running:true', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc-workflow', sessionKey: 'pwa-cc-workflow' },
+    { ws: 'cc-workflow', sessionKey: 'cc-workflow--feat-x', active: [{ run_id: 'r1' }] },
+  ));
+  // 用户线在跑 → 该 child running:true,默认线 running:false,repo node running:true
+  assert.equal(tree[0].running, true);
+  assert.deepEqual(tree[0].sessions.map((s) => s.running), [false, true]);
+});
+
+test('buildSidebarTree.running: 默认 tile 有 active、用户 session 无 → repo true、用户 child false', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc-workflow', sessionKey: 'pwa-cc-workflow', active: [{ run_id: 'r0' }] },
+    { ws: 'cc-workflow', sessionKey: 'cc-workflow--feat-x' },
+  ));
+  assert.equal(tree[0].running, true);
+  assert.deepEqual(tree[0].sessions.map((s) => s.running), [true, false]);
+});
+
+test('buildSidebarTree.running: 单 session repo 有 active → repo node running:true', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes', active: [{ run_id: 'r2' }] },
+  ));
+  assert.equal(tree[0].running, true);
+});
+
 // _prunePanes —— 持久化 pane 清洗(spec §3.5):repo / session 被删后,
 // localStorage 里残留的 tileId 要丢掉。validTileIds 可为 Set 或 array。
 test('_prunePanes: 丢掉已不存在的 tileId,保留存在的(保序)', () => {
@@ -644,4 +686,123 @@ test('_prunePanes: 全部失效 → []', () => {
 
 test('_prunePanes: validTileIds 传 array 也行', () => {
   assert.deepEqual(_prunePanes(['a', 'gone'], ['a', 'b']), ['a']);
+});
+
+// ---------- loadShellState(shell 状态校验,spec §4.2)----------
+// 纯函数,0 IO,不碰 localStorage 本身。吃 localStorage 已读出的字符串或对象,
+// 内部容错 parse → 永远返回 {collapsed:bool}。坏数据回 {collapsed:false}。
+
+test('loadShellState: null → {collapsed:false}', () => {
+  assert.deepEqual(loadShellState(null), { collapsed: false });
+});
+
+test('loadShellState: undefined → {collapsed:false}', () => {
+  assert.deepEqual(loadShellState(undefined), { collapsed: false });
+});
+
+test('loadShellState: 坏 JSON 字符串 → {collapsed:false}', () => {
+  assert.deepEqual(loadShellState('{not json'), { collapsed: false });
+});
+
+test('loadShellState: 非对象(JSON 数字/数组/字符串)→ {collapsed:false}', () => {
+  assert.deepEqual(loadShellState('42'), { collapsed: false });
+  assert.deepEqual(loadShellState('[1,2]'), { collapsed: false });
+  assert.deepEqual(loadShellState('"hi"'), { collapsed: false });
+});
+
+test('loadShellState: {collapsed:true} 字符串 → 原样 {collapsed:true}', () => {
+  assert.deepEqual(loadShellState('{"collapsed":true}'), { collapsed: true });
+});
+
+test('loadShellState: 已 parse 的对象也接受', () => {
+  assert.deepEqual(loadShellState({ collapsed: true }), { collapsed: true });
+  assert.deepEqual(loadShellState({ collapsed: false }), { collapsed: false });
+});
+
+test('loadShellState: collapsed 非 bool(字符串/数字)→ 归一成 false', () => {
+  assert.deepEqual(loadShellState({ collapsed: 'yes' }), { collapsed: false });
+  assert.deepEqual(loadShellState({ collapsed: 1 }), { collapsed: false });
+  assert.deepEqual(loadShellState('{"collapsed":"true"}'), { collapsed: false });
+});
+
+test('loadShellState: 不变量 —— collapsed 永远是布尔', () => {
+  for (const raw of [null, '{}', '{"x":1}', { collapsed: 0 }, '{"collapsed":true}']) {
+    const out = loadShellState(raw);
+    assert.equal(typeof out.collapsed, 'boolean');
+  }
+});
+
+// ---------- navModelFromTree(buildSidebarTree → NavModel 适配器,spec §4.2)----------
+// 纯函数,形状由 tree 决定。NavItem.active 留 undefined(由调用方按 paneState 填)。
+
+test('navModelFromTree: newAction 形状 + sections 单组', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes' },
+  ));
+  const model = navModelFromTree(tree);
+  assert.deepEqual(model.newAction, { label: '+ 新建 workspace', data: {} });
+  assert.equal(model.sections.length, 1);
+  assert.equal(model.sections[0].items.length, 1);
+});
+
+test('navModelFromTree: 单 session repo → 平铺 item 无 children 无 badge', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes' },
+  ));
+  const item = navModelFromTree(tree).sections[0].items[0];
+  assert.equal(item.id, sessionTileId('notes', 'pwa-notes'));
+  assert.equal(item.label, 'notes');
+  assert.equal(item.running, false);
+  assert.equal(item.children, undefined);
+  assert.equal(item.badge, undefined);
+  assert.equal(item.active, undefined);   // 调用方填
+  assert.deepEqual(item.data, { tileId: sessionTileId('notes', 'pwa-notes') });
+});
+
+test('navModelFromTree: 多 session repo → item 带 children + badge=sessionCount', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc-workflow', sessionKey: 'pwa-cc-workflow' },
+    { ws: 'cc-workflow', sessionKey: 'cc-workflow--feat-x' },
+  ));
+  const item = navModelFromTree(tree).sections[0].items[0];
+  assert.equal(item.label, 'cc-workflow');
+  assert.equal(item.badge, 2);            // sessionCount > 1
+  assert.equal(item.children.length, 2);
+  // 默认 session child label = '默认'(sessionKey === pwa-<ws>)
+  assert.equal(item.children[0].label, '默认');
+  assert.equal(item.children[0].id, sessionTileId('cc-workflow', 'pwa-cc-workflow'));
+  assert.deepEqual(item.children[0].data, { tileId: sessionTileId('cc-workflow', 'pwa-cc-workflow') });
+  // 用户线 child label = sessionChipLabel(去前缀)
+  assert.equal(item.children[1].label, 'feat-x');
+});
+
+test('navModelFromTree: 单 session repo badge undefined(sessionCount=1 不出角标)', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes' },
+  ));
+  assert.equal(navModelFromTree(tree).sections[0].items[0].badge, undefined);
+});
+
+test('navModelFromTree: running 透传 —— repo node + session child', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc-workflow', sessionKey: 'pwa-cc-workflow' },
+    { ws: 'cc-workflow', sessionKey: 'cc-workflow--feat-x', active: [{ run_id: 'r1' }] },
+  ));
+  const item = navModelFromTree(tree).sections[0].items[0];
+  assert.equal(item.running, true);                  // repo node 任一在跑
+  assert.equal(item.children[0].running, false);     // 默认线没跑
+  assert.equal(item.children[1].running, true);      // 用户线在跑
+});
+
+test('navModelFromTree: icon 不填(nav 组件取 label 首字)', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes' },
+  ));
+  assert.equal(navModelFromTree(tree).sections[0].items[0].icon, undefined);
+});
+
+test('navModelFromTree: 空 tree → newAction 仍在,items 空', () => {
+  const model = navModelFromTree([]);
+  assert.deepEqual(model.newAction, { label: '+ 新建 workspace', data: {} });
+  assert.deepEqual(model.sections[0].items, []);
 });
