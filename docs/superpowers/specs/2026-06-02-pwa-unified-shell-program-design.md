@@ -254,3 +254,22 @@ v2 真机后两条:报文 doc-flow 半拉子(turn 外壳没动 → 提示词显�
 - **保持 esc-before-replace 纪律**(先全文 esc 再正则,防 XSS —— code-review 已确认现有实现安全,增强时不破坏)。
 
 **验证**:render harness 真渲染,死盯"一句问答只出现一次 + 像 Claude 文档流 + 侧边栏一块不割裂"。
+
+---
+
+## 14. v4 迭代(2026-06-02,v3 真机后用户反馈)
+
+### 14.1 去掉单条折叠(turn collapse)
+- 对话里"点击收起单条 turn"无意义;且现状气泡 = 可点 `.turn-head` button → 被点/聚焦后整条变全宽高亮蓝条(丑)。
+- **去掉 turn 折叠**:删 chevron + 可点 turn-head;turn **永远展开**。`.turn-user` 气泡改成**普通右对齐块(非 button)**,无全宽点击区、无 focus 蓝条。turn-events 一律加载(PC pane 现状本就 expandAll)。
+
+### 14.2 显示内部执行过程(= 激活 §4.3 coding 报文流 / 原 1b)
+- 用户反馈"内部执行过程看不到":现状默认过滤掉 `tool_use`/`tool_result`(只显 text/result),agent 读了啥文件、跑了啥命令、改了啥全看不到。
+- **把工具调用显出来,做成结构化块**(参照早前 coding-stream mockup):
+  - `formatToolUse(name, input)`(纯函数,TDD)→ `{verb, target, glyph}`:Bash→`$ command` / Edit·Write→`✎ file_path` / Read→`▢ file_path` / Grep·Glob→`⌕ pattern` / 其它→name + 首个 string 参数。
+  - `pairToolEvents(events)`(纯函数,TDD)→ 把 `tool_use` 跟紧跟的 `tool_result` 配成一个 block(call 行 + 折叠的 output/diff)。
+  - **默认显示**(改现有"默认隐藏 tool 事件"为"默认紧凑显示"):tool block 单行 call(glyph+verb+target),output/diff 折叠点开;`tool_result.isError` 红 + 默认展开。一连串动作左侧细 rail 串联(可选)。
+  - Edit diff:MVP 全删旧 + 全增新两块(精确 LCS 留后);Bash:命令 + 输出;Read:单行。
+  - 保留"全部隐藏"开关(给嫌吵的人),但默认开。
+- 作用域 PC pane + mobile 共享(同 `_renderTurnEvent`)。
+- 这是 v4 较大的一块(纯函数 TDD + 渲染 + CSS),用 render harness 喂 tool_use/tool_result mock 真渲染验。
