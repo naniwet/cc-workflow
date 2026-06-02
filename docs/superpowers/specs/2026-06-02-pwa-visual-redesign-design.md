@@ -1,7 +1,7 @@
 # PWA PC 视觉重构 — 去卡片化 + coding 工具报文流 + 侧边栏收起 — Design
 
 **Date:** 2026-06-02
-**Status:** Drafted for user review
+**Status:** ⚠️ SUPERSEDED — 已升级为程序级 `2026-06-02-pwa-unified-shell-program-design.md`(本文档内容并入其阶段 1 = Workspaces 接入)。保留作历史草稿,以程序级 spec 为准。
 **Scope:** PC Workspaces tab 的视觉 / 交互重构。**只动 PC 前端,后端零改动,移动端 carousel 不碰。** 分两阶段:
 - **Phase 1(CSS + 小 JS,快速上)**:pane 去卡片(flat)、turn 去卡片、composer 重做、侧边栏完整样式 + **收起成 52px 图标条**。
 - **Phase 2(JS 渲染,较大)**:coding 工具报文流 —— 工具调用按类型出结构化块(Edit→diff / Bash→命令+输出 / Read→单行)、`tool_use`+`tool_result` 配对、默认显示但紧凑、回复渲染 markdown。
