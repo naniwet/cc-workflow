@@ -207,6 +207,13 @@ a:hover { color: var(--accent-blue-hover); }
 }
 
 /* ============================================================================
+ *  app-rail — 全局应用级导航(desktop ≥769px only)。区别于 shell-nav
+ *  (= 当前 tab 的上下文导航,坐 app-rail 右边)。术语见 spec §12.1。
+ *  mobile-first 默认隐藏;desktop 规则在下面 @media (min-width:769px) 块。
+ * ============================================================================ */
+.app-rail { display: none; }
+
+/* ============================================================================
  *  Main / views
  * ============================================================================ */
 main {
@@ -1536,6 +1543,68 @@ pre {
  *  只显图标条;展开/收起靠 chrome 里的 « / » 按钮(data-shell-collapse)。
  * ============================================================================ */
 @media (min-width: 769px) {
+  /* ── app-rail 布局(spec §12.1)──────────────────────────────────────
+     desktop:body 横排 [app-rail][main],topbar 整条隐藏(tab 行已搬进
+     app-rail,brand + 状态点也在 app-rail 里)。main flex:1 占满右侧。 */
+  body { flex-direction: row; }
+  .topbar { display: none; }
+  .app-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 0 0 52px;
+    width: 52px;
+    align-self: stretch;            /* 撑满视口高度 */
+    gap: var(--space-2);
+    padding: var(--space-3) 0;
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border-subtle);
+  }
+  .app-rail-brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    color: var(--accent-blue);
+    margin-bottom: var(--space-2);
+  }
+  .app-rail-brand svg { width: 24px; height: 24px; }
+  .app-rail-tab {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: 100%;
+    padding: var(--space-2) 0;
+    color: var(--text-tertiary);
+    text-decoration: none;
+    font-size: 9px;
+    letter-spacing: 0.02em;
+    transition: color var(--t-base), background var(--t-base);
+  }
+  .app-rail-tab svg { width: 22px; height: 22px; display: block; }
+  .app-rail-tab:hover { color: var(--text-primary); background: var(--bg-elevated); }
+  .app-rail-tab.active { color: var(--accent-blue); }
+  .app-rail-tab.active::before {
+    content: ''; position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 2px;
+    background: var(--accent-blue);
+    border-radius: var(--radius-full);
+  }
+  .app-rail-spacer { flex: 1 1 auto; }
+  .app-rail-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-2) 0;
+  }
+  /* 待审批角标:复用 .pending-badge 视觉(红描边 + 数字),app-rail 里收窄。 */
+  .app-rail-pending { padding: 2px 6px; cursor: pointer; }
+
   .shell {
     display: flex;
     gap: var(--space-4);
@@ -2061,28 +2130,17 @@ pre {
  *   .workspace-new-events(浮动 fab)
  * —— 这些只在手机端有意义。
  * ──────────────────────────────────────────────────────────────────── */
-/* 去卡片(spec §4.1):turn 不再是 border+radius+surface 的小卡。
-   收起态 = 轻量块(透明底,无框),层级靠间距(stream/timeline 的 gap)。
-   展开态 = 只留一条极弱左色条(2px hairline)标状态,不整块框 —— 比旧版
-   inset 3px 更克制。彩色仅用于状态(running=青 / done=绿 / error=红)。
-   overflow:hidden 保留,免得 .turn-head:hover 的圆角外溢(虽已去 radius,
-   保留无害且 turn-events 内部块仍可能用到)。 */
+/* 去卡片(spec §4.1)+ doc-flow(spec §12.2):turn 不再是 border+radius+
+   surface 的小卡,也不再有整条彩色左色条 —— 彻底文档流。收起态/展开态
+   都只靠间距(stream/timeline 的 gap)分层。状态收进 head 的 status-icon
+   + result 的脚注小 ✓。overflow:hidden 保留(turn-head:hover 圆角兜底 +
+   turn-events 内部块)。 */
 .turn {
   position: relative;
   border: 0;
   border-radius: 0;
   background: transparent;
   overflow: hidden;
-}
-.turn-expanded {
-  box-shadow: inset 2px 0 0 var(--accent-cyan);
-}
-.turn-status-done.turn-expanded {
-  box-shadow: inset 2px 0 0 var(--accent-green);
-}
-.turn-status-failed.turn-expanded,
-.turn-status-error.turn-expanded {
-  box-shadow: inset 2px 0 0 var(--accent-red);
 }
 .turn-head {
   /* 设计图 §3.2:收起态可以 1 行 prompt 或 2 行(prompt + reply preview),
@@ -2233,10 +2291,10 @@ pre {
   color: inherit;
 }
 .event {
-  /* 设计图 §4:每个 event 一行,左侧 72px 给 label,右侧 1fr 给 body。
-     :not(:first-child) 给上下两条 event 之间一条细分隔,但 body
-     的第一条 event(USER prompt)紧贴 turn-body 自己的 border-top,
-     不重复画线。 */
+  /* doc-flow 后,.event 只剩 thinking / tool_use / tool_result 在用
+     (user → .turn-user,assistant text → .event-asst-md,result →
+     .turn-done-foot,都不再走 .event)。这些 meta event 默认隐藏(事件
+     过滤),展开时仍走 72px label + 1fr body 的两列网格。 */
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   gap: var(--space-3);
@@ -2264,10 +2322,6 @@ pre {
 .event-text-block {
   white-space: pre-wrap;
   line-height: var(--lh-normal);
-}
-.event-meta {
-  color: var(--text-tertiary);
-  font-size: var(--text-micro);
 }
 /* ---------- Prompt queue(workspace 有 run 在跑时,继续发的 prompt 排队
               在 input form 上方显示,等当前 run 完成自动 dispatch。)---- */
@@ -2322,24 +2376,80 @@ pre {
   background: rgba(239, 68, 68, 0.08);
 }
 
-.event-user   .event-label { color: var(--text-secondary); }
-/* User prompt 弱气泡(spec §4.1):用户输入跟 assistant text 区分 —— 轻
-   --bg-elevated 底 + radius,不叠阴影。气泡只包 prompt 文本块,不动
-   event grid 布局。assistant 的 .event-text 保持透明(无气泡)。 */
-.event-user .event-text-block {
-  background: var(--bg-elevated);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
-}
-/* Reply 之前是 green 跟 done 同色,用户误以为"运行完成"。改 accent-blue ——
-   "对话进行中的回复",跟 done 的 green 区分开。 */
-.event-text   .event-label { color: var(--accent-blue); }
 .event-thinking .event-label { color: var(--accent-purple); }
 .event-tool   .event-label { color: var(--accent-cyan); }
 .event-tool-result .event-label { color: var(--text-tertiary); }
 .event-tool-result-error .event-label { color: var(--accent-red); }
-/* event-final = Done 状态总结,green 跟 status icon 一致语义对得上。 */
-.event-final  .event-label { color: var(--accent-green); }
+
+/* ── doc-flow turn(spec §12.2)──────────────────────────────────────────
+   去标签栏 + 整条彩色左 border,改文档流:
+     · 用户 prompt = 弱前缀块(你 › + 弱色文本,弱底)
+     · CLAUDE = turn 顶一个轻量小指示,取代每条 Reply 左标签
+     · assistant text = 全宽流动正文(markdown)
+     · result = 小字脚注(✓ 完成 · tokens),result.text 放下方极小字
+*/
+.turn-user {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+}
+.turn-user-prefix {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.turn-user-text {
+  min-width: 0;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: var(--lh-normal);
+}
+.turn-asst-indicator {
+  color: var(--accent-blue);
+  font-size: var(--text-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+/* assistant 全宽流动正文。renderMarkdown 已输出安全 HTML(自带 esc)。
+   段落 / 标题 / 列表 / code 都按文档排版,无气泡无标签。 */
+.event-asst-md {
+  color: var(--text-primary);
+  line-height: var(--lh-normal);
+  word-break: break-word;
+}
+.event-asst-md > :first-child { margin-top: 0; }
+.event-asst-md > :last-child { margin-bottom: 0; }
+.event-asst-md p { margin: var(--space-2) 0; }
+.event-asst-md ul { margin: var(--space-2) 0; padding-left: var(--space-4); }
+.event-asst-md code { font-size: 0.92em; }
+.event-asst-md pre.md-code {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  overflow-x: auto;
+}
+/* result 脚注:视觉最弱的一行小字 ✓ 完成 · tokens。 */
+.turn-done-foot {
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+}
+.turn-done-mark { color: var(--accent-green); }
+.turn-done-tokens { font-variant-numeric: tabular-nums; }
+/* result.text 不丢信息,但视觉压到最弱(更小 + 更淡)。 */
+.turn-done-foot-text {
+  margin-top: 4px;
+  color: var(--text-disabled);
+  font-size: var(--text-micro);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 /* tool_use:一行 code,name 高亮 + args 暗灰,等宽,可换行(长 path 不
    被裁断)。 */
 .tool-call {

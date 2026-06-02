@@ -153,21 +153,35 @@ function _globalPendingCount() {
 }
 
 function _updateTopbarStatus() {
-  const status = $('status');
-  if (!status) return;
   const pending = _globalPendingCount();
-  status.innerHTML = `
-    ${pending > 0
-      ? `<button type="button" class="pending-badge" id="pending-global-badge"
-                 title="${esc(pending)} 待审批">${ICONS.warning}<span>${esc(pending)}</span></button>`
-      : ''}
-    <span class="status-online"><span class="status-dot"></span>在线</span>
-    <span class="status-time">· ${esc(new Date().toLocaleTimeString())}</span>
-  `;
+  const status = $('status');
+  if (status) {
+    status.innerHTML = `
+      ${pending > 0
+        ? `<button type="button" class="pending-badge" id="pending-global-badge"
+                   title="${esc(pending)} 待审批">${ICONS.warning}<span>${esc(pending)}</span></button>`
+        : ''}
+      <span class="status-online"><span class="status-dot"></span>在线</span>
+      <span class="status-time">· ${esc(new Date().toLocaleTimeString())}</span>
+    `;
+  }
+  // app-rail 状态点(desktop):topbar desktop 隐藏 → 这里同步反映在线 +
+  // 待审批。有 pending 时点变红 + 角标数字,无 pending 时常驻绿点 = 在线。
+  const railStatus = $('app-rail-status');
+  if (railStatus) {
+    railStatus.classList.toggle('has-pending', pending > 0);
+    railStatus.title = pending > 0 ? `${pending} 待审批` : '在线';
+    railStatus.innerHTML = pending > 0
+      ? `<button type="button" class="pending-badge app-rail-pending"
+                 id="pending-rail-badge" title="${esc(pending)} 待审批">${ICONS.warning}<span>${esc(pending)}</span></button>`
+      : `<span class="status-dot"></span>`;
+  }
 }
 
 document.addEventListener('click', (e) => {
-  const btn = e.target.closest('#pending-global-badge');
+  // 两处 pending badge(topbar + app-rail)共用同一跳转逻辑 —— 用 class
+  // .pending-badge 匹配,id 各异(#pending-global-badge / #pending-rail-badge)。
+  const btn = e.target.closest('.pending-badge');
   if (!btn) return;
   const first = (lastData.pendingApprovals || [])[0];
   if (first?.workspace) location.hash = `#workspaces/${encodeURIComponent(first.workspace)}`;
@@ -3569,15 +3583,16 @@ function _workspaceTurnHtml(turn) {
   const approvals = pendingApprovalsFor(turn.id || '').map(approvalBlockHtml).join('');
   const startedRel = turn.started_at ? timeAgo(turn.started_at) : '';
   const startedAbs = turn.started_at ? new Date(turn.started_at * 1000).toLocaleString() : '';
-  // USER 事件:始终是 expanded body 的第一条,展示完整 prompt。
-  // 起始时间已挪到 head meta,这里不再重复显示。
+  // doc-flow(spec §12.2):用户 prompt = 弱前缀块(`你 ›` + 文本,弱色/弱底),
+  // 不再 User 标签 + 边框盒。始终是 expanded body 的第一块。起始时间已挪到
+  // head meta,这里不重复。
   const userHeaderHtml = `
-    <div class="event event-user">
-      <div class="event-label">User</div>
-      <div class="event-body">
-        <div class="event-text-block">${esc(prompt)}</div>
-      </div>
+    <div class="turn-user">
+      <span class="turn-user-prefix">你 ›</span>
+      <span class="turn-user-text">${esc(prompt)}</span>
     </div>`;
+  // turn 顶 CLAUDE 轻指示:取代每条 Reply 左标签,整 turn 只一个。
+  const asstIndicatorHtml = `<div class="turn-asst-indicator">CLAUDE</div>`;
   // turn-events 容器:expanded 时 _bindWorkspaceSessionHandlers 会触发
   // 一次 _loadTurnEvents 把 /runs/{id}/tail 的 stream-jsonl 解析渲染进来。
   // 同一 runId 二次 mount 时(主 poll 触发的 view rerender),容器会被
@@ -3609,6 +3624,7 @@ function _workspaceTurnHtml(turn) {
       ${cancelBtn}
       <div class="turn-body">
         ${userHeaderHtml}
+        ${asstIndicatorHtml}
         ${eventsHtml}
         ${approvals}
         <button class="turn-collapse-foot turn-toggle" type="button"
@@ -3819,12 +3835,10 @@ function _renderTurnEvent(ev) {
       </div>`;
   }
   if (ev.kind === 'text') {
-    // assistant 文本回复:跟 thinking 同样的折叠规则,保持一致。
-    return `
-      <div class="event event-text">
-        <div class="event-label">Reply</div>
-        <div class="event-body">${_foldedTextHtml(ev.text)}</div>
-      </div>`;
+    // doc-flow(spec §12.2):assistant 文本 = 全宽流动正文(markdown),
+    // 不再 Reply 左标签 + event 内 5 行 fold(turn 级折叠已管整体长度)。
+    // turn 顶有一个轻量 CLAUDE 指示(见 _workspaceTurnHtml),这里不重复。
+    return `<div class="event-asst-md">${renderMarkdown(ev.text || '')}</div>`;
   }
   if (ev.kind === 'tool_use') {
     let preview = '';
@@ -3847,14 +3861,16 @@ function _renderTurnEvent(ev) {
       </div>`;
   }
   if (ev.kind === 'result') {
-    const usage = `${ev.subtype || ''} · ${ev.inTokens} in · ${ev.outTokens} out`;
+    // doc-flow(spec §12.2):去 Done 标签 + 大块,收成小字脚注 ——
+    //   ✓ 完成 · <in>→<out> tokens
+    // 用时不放(turn-head 已有 elapsed,不重复)。result.text 不丢,放脚注
+    // 下方极小字(视觉最弱)。
+    const tokens = `${ev.inTokens}→${ev.outTokens} tokens`;
     return `
-      <div class="event event-final">
-        <div class="event-label">Done</div>
-        <div class="event-body">
-          <div class="event-meta">${esc(usage)}</div>
-          ${ev.text ? `<div class="event-text-block">${esc(ev.text)}</div>` : ''}
-        </div>
+      <div class="turn-done-foot">
+        <span class="turn-done-mark">✓ 完成</span>
+        <span class="turn-done-tokens">· ${esc(tokens)}</span>
+        ${ev.text ? `<div class="turn-done-foot-text">${esc(ev.text)}</div>` : ''}
       </div>`;
   }
   return '';
