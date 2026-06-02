@@ -33,6 +33,7 @@ import {
   buildSidebarTree,
   navModelFromTree,
   navModelFromRoundtables,
+  navModelFromLoops,
   loadShellState,
   paneStateReducer,
   _prunePanes,
@@ -1030,6 +1031,15 @@ function render() {
   if (isDesktop && (route.name === 'roundtables' || route.name === 'roundtable-detail')) {
     const activeId = route.name === 'roundtable-detail' ? route.id : null;
     renderRoundtableSidebarNav(activeId);
+  }
+
+  // Tasks(cron loops)接统一侧栏(spec §161):desktop 下裸 #tasks 和
+  // #tasks/<name> 都把 loop 列表填进 #sidebar-ctx,active = 当前 detail name
+  // (裸列表无 active)。mobile 保持 list + dialog 进 #view(ctx 留空)。
+  // 跟 Roundtable 同款(renderRoundtableSidebarNav 镜像)。
+  if (isDesktop && (route.name === 'tasks' || route.name === 'task-detail')) {
+    const activeName = route.name === 'task-detail' ? route.id : null;
+    renderTaskSidebarNav(activeName);
   }
 
   if (route.name === 'runs' && route.id) {
@@ -4187,10 +4197,155 @@ function paintRunDetail(id, row) {
 // "this row didn't change" and skip the DOM write.
 const _loopRowCache = new Map();
 
+// desktop 统一侧栏:Tasks 路由下把 loop 列表填进 #sidebar-ctx,跟 Workspaces 的
+// repo 树 / Settings 的 section 链 / Roundtable 的评议列表占同一槽位(spec §161)。
+// 仿 renderRoundtableSidebarNav:复用 .shell-nav-item 视觉,但 **不带 data-tile-id**
+// —— 否则 _bindSidebarNavHandlers 的 `.shell-nav-item[data-tile-id]` 选择器会误命中
+// (workspace 拖拽 / focus)。列表项纯 <a href> 靠 hashchange → render() 跳转,不绑
+// 自定义 handler;activeName 对应当前 detail 项加 .is-active。顶部 toolbar 的 `+New`
+// 钮触发全局唯一的 #task-new-dialog —— dialog 由 _ensureTaskNewDialog() 挂在
+// document.body 上(不在 #view 里),所以 list / detail 两路由下它都在,#view innerHTML
+// 的生灭不影响它。收起态(.sidebar.is-rail)由 CSS 把整块 .task-sidebar-nav 隐掉。
+function renderTaskSidebarNav(activeName) {
+  const ctx = $('sidebar-ctx');
+  if (!ctx) return;
+  const items = navModelFromLoops(lastData.loops).sections[0].items;
+  const links = items.length
+    ? items.map((it) => {
+        const cls = 'shell-nav-item shell-nav-repo'
+          + (it.id === activeName ? ' is-active' : '');
+        const dot = it.running ? '<span class="rt-running-dot"></span>' : '';
+        return `<a class="${cls}" href="#tasks/${encodeURIComponent(it.id)}">`
+          + `<span class="shell-nav-label">${esc(it.label)}</span>${dot}</a>`;
+      }).join('')
+    : '<p class="muted" style="padding:var(--space-2);font-size:12px;margin:0">还没有 cron loop</p>';
+  ctx.innerHTML = `
+    <div class="ws-toolbar rt-sidebar-toolbar">
+      <button class="ws-new-btn" type="button" id="task-sidebar-new-btn">+ New</button>
+    </div>
+    <div class="task-sidebar-nav">${links}</div>`;
+  // detail 路由下 #view 是单 loop 详情、不渲 dialog,所以这里确保全局 dialog 在。
+  _ensureTaskNewDialog();
+  // `+New` 钮:打开全局唯一 dialog。sidebar 每次重渲后重新绑(钮是新 DOM)。
+  $('task-sidebar-new-btn')?.addEventListener('click', _openTaskNewDialog);
+}
+
+// 新建 cron loop dialog 的 HTML —— 唯一调用方是 _ensureTaskNewDialog(),它把这段挂到
+// document.body 上(全局唯一,只渲一次)。原生 <dialog> 是 top-layer 浮层,挂哪都行;
+// desktop sidebar 的 `+New` 钮(#task-sidebar-new-btn)和 mobile #view toolbar 的
+// `+New` 钮(#task-new-btn)都通过 _openTaskNewDialog showModal 同一个 dialog。
+// 表单内容是从 renderTasksView 原内联 <dialog> 抽出的单一来源。workspace 下拉用
+// lastData.workspaces 现拉(_openTaskNewDialog 每次打开重建保证最新)。
+function _taskNewDialogHtml() {
+  const workspaces = lastData.workspaces || [];
+  return `
+    <dialog class="ws-new-dialog" id="task-new-dialog">
+      <form data-form-id="new-loop" class="ws-new-form">
+        <h3>New cron loop</h3>
+        <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
+          placeholder="daily-digest" required autofocus></label>
+        <label>workspace
+          ${_renderFormPicker({
+            name: 'workspace',
+            options: workspaces.map((w) => ({ value: w, label: w })),
+            value: workspaces[0] || '',
+          })}
+        </label>
+        <label>自然语言(可选,LLM 同时填 cron 和 prompt)
+          <div class="parse-row">
+            <input name="nl" placeholder="每天早上 9 点 拉一下最新代码" autocomplete="off">
+            <button type="button" class="secondary parse-btn">Parse</button>
+          </div>
+        </label>
+        <label>cron 表达式 (5 字段)
+          <input name="schedule" pattern="[^\\s]+\\s+[^\\s]+\\s+[^\\s]+\\s+[^\\s]+\\s+[^\\s]+.*"
+            placeholder="0 9 * * *" required></label>
+        <label>prompt
+          <textarea name="prompt" placeholder="summarize yesterday's commits" required></textarea>
+        </label>
+        <p class="muted" style="font-size:11px;margin:0">
+          Engine 跟 workspace 设置走。State 落在 <code>~/.cc-state/jobs/&lt;name&gt;.json</code>;cron 行写 <code>/etc/cron.d/cc-loops</code>。
+        </p>
+        <div class="ws-new-actions">
+          <button type="button" class="ws-new-cancel">Cancel</button>
+          <button type="submit">Add</button>
+        </div>
+      </form>
+    </dialog>`;
+}
+
+// 把全局唯一的 #task-new-dialog 挂到 document.body 上 —— 与 #view innerHTML 的生灭
+// 彻底解耦(同 _ensureRtNewDialog 套路)。这样:list / detail 两路由下它都在,轮询
+// render 重画 #view 不会销毁开着的 dialog,detail 页 `+New` 也能弹。
+// **幂等**:已存在直接 return(不重渲 → 开着的 dialog 状态不被重置;不重绑 → submit
+// 只触发一次)。workspace 下拉的"按当前数据刷新"放 _openTaskNewDialog(每次打开重建)。
+function _ensureTaskNewDialog() {
+  if (document.getElementById('task-new-dialog')) return;
+  document.body.insertAdjacentHTML('beforeend', _taskNewDialogHtml());
+  _bindTaskNewDialog();
+}
+
+// 打开 dialog 的统一入口(sidebar / mobile 的 `+New` 钮都走它):
+//   ① ensure(保证 dialog 在 body 上、已绑好)
+//   ② 若 workspace 列表变了(新增 / 删 ws),重建 dialog 让下拉反映最新 —— dialog 只在
+//      首次 ensure 时按当时 workspaces 渲,之后 workspaces 可能变,故打开前比对重建。
+//   ③ showModal(已开则不重复开)
+function _openTaskNewDialog() {
+  _ensureTaskNewDialog();
+  let dlg = document.getElementById('task-new-dialog');
+  if (!dlg) return;
+  // workspace 下拉用建 dialog 那刻的 lastData.workspaces 快照;若现在 ws 列表已变,
+  // 重建 dialog(只在没开着时重建,避免吞掉用户正在填的内容)。
+  if (!dlg.open) {
+    const want = (lastData.workspaces || []).join('\n');
+    if (dlg.dataset.wsSnapshot !== want) {
+      dlg.remove();
+      document.body.insertAdjacentHTML('beforeend', _taskNewDialogHtml());
+      dlg = document.getElementById('task-new-dialog');
+      dlg.dataset.wsSnapshot = want;
+      _bindTaskNewDialog();
+    }
+  }
+  if (!dlg.open) dlg.showModal();
+}
+
+// 绑 dialog 表单逻辑 —— submit=onAddLoop / cancel / parse-btn=onParseNl。只在
+// _ensureTaskNewDialog / _openTaskNewDialog 重建时调(dialog 全局唯一,绑一次即可)。
+// 所有选择器锚定 dialog 自身(#task-new-dialog),不锚 #view —— dialog 已搬到
+// document.body,不在 #view 里。workspace 的 form-picker 点击由 _onFormPickerClick
+// (绑在 document 上)处理,无需在此绑。
+function _bindTaskNewDialog() {
+  const dlg = document.getElementById('task-new-dialog');
+  if (!dlg) return;
+  dlg.querySelector('form[data-form-id="new-loop"]')
+    ?.addEventListener('submit', onAddLoop);
+  dlg.querySelector('.parse-btn')
+    ?.addEventListener('click', onParseNl);
+  dlg.querySelector('.ws-new-cancel')
+    ?.addEventListener('click', () => dlg.close());
+}
+
 function renderTasksView() {
   const loops = lastData.loops || [];
-  const workspaces = lastData.workspaces || [];
   const view = $('view');
+
+  // desktop(spec §161):loop 列表已搬去 sidebar(renderTaskSidebarNav),#view
+  // 只渲空态提示。dialog 不再渲进 #view —— 由 _ensureTaskNewDialog 挂在 body 上
+  // (全局唯一,与 #view 生灭解耦)。幂等:已渲过空态就不重画(避免轮询 render
+  // 重写 #view),但每次都调 _ensureTaskNewDialog(它幂等)保证 dialog 在。mobile
+  // 走下面老逻辑(list + diff-patch + foldout turns),一字不动。跟 Roundtable 同款。
+  if (!window.matchMedia('(max-width: 768px)').matches) {
+    if (view.querySelector('.task-desktop-empty')) { _ensureTaskNewDialog(); return; }
+    view.innerHTML = `
+      <p class="muted task-desktop-empty">
+        左侧选一个 task 查看,或点侧栏 <strong>+ New</strong> 建一个。<br>
+        cron loop = 一条定时触发的 prompt。State 落在 <code>~/.cc-state/jobs/&lt;name&gt;.json</code>,
+        cron 行写 <code>/etc/cron.d/cc-loops</code>;Engine 跟 workspace 设置走。
+      </p>`;
+    _ensureTaskNewDialog();
+    return;
+  }
+
   const existingList = view.querySelector('.task-list');
 
   // Patch path: .task-list already rendered → diff loops by name.
@@ -4254,51 +4409,15 @@ function renderTasksView() {
       }).join('')
     : '<p class="muted">No cron loops yet. Click "+ New cron loop" above.</p>';
   // Toolbar(跟 Workspaces tab 一致):h1 砍掉(topbar tab 已标明),
-  // + New 单独按钮 + 点击弹 dialog modal,创建表单平时不占空间。
+  // + New 单独按钮 + 点击弹 dialog modal,创建表单平时不占空间。dialog 不再渲进
+  // #view —— 由 _ensureTaskNewDialog 挂在 body 上(全局唯一,desktop / mobile 共用)。
   view.innerHTML = `
     <div class="ws-toolbar">
       <button class="ws-new-btn" type="button" id="task-new-btn">+ New cron loop</button>
     </div>
     <div class="task-list">${rows}</div>
-    <dialog class="ws-new-dialog" id="task-new-dialog">
-      <form data-form-id="new-loop" class="ws-new-form">
-        <h3>New cron loop</h3>
-        <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
-          placeholder="daily-digest" required autofocus></label>
-        <label>workspace
-          ${_renderFormPicker({
-            name: 'workspace',
-            options: workspaces.map((w) => ({ value: w, label: w })),
-            value: workspaces[0] || '',
-          })}
-        </label>
-        <label>自然语言(可选,LLM 同时填 cron 和 prompt)
-          <div class="parse-row">
-            <input name="nl" placeholder="每天早上 9 点 拉一下最新代码" autocomplete="off">
-            <button type="button" class="secondary parse-btn">Parse</button>
-          </div>
-        </label>
-        <label>cron 表达式 (5 字段)
-          <input name="schedule" pattern="[^\\s]+\\s+[^\\s]+\\s+[^\\s]+\\s+[^\\s]+\\s+[^\\s]+.*"
-            placeholder="0 9 * * *" required></label>
-        <label>prompt
-          <textarea name="prompt" placeholder="summarize yesterday's commits" required></textarea>
-        </label>
-        <p class="muted" style="font-size:11px;margin:0">
-          Engine 跟 workspace 设置走。State 落在 <code>~/.cc-state/jobs/&lt;name&gt;.json</code>;cron 行写 <code>/etc/cron.d/cc-loops</code>。
-        </p>
-        <div class="ws-new-actions">
-          <button type="button" class="ws-new-cancel">Cancel</button>
-          <button type="submit">Add</button>
-        </div>
-      </form>
-    </dialog>
   `;
 
-  $('view').querySelector('form[data-form-id="new-loop"]')
-    ?.addEventListener('submit', onAddLoop);
-  $('view').querySelector('.parse-btn')
-    ?.addEventListener('click', onParseNl);
   for (const b of $('view').querySelectorAll('.run-now-btn, .pause-btn, .resume-btn, .delete-btn')) {
     b.addEventListener('click', onLoopAction);
   }
@@ -4306,15 +4425,9 @@ function renderTasksView() {
   // tool-result-fold + 停 poll + bootstrap 已展开 turn 的 event load
   // (turn 永远展开,无 turn-toggle)。bindWorkspaceColHandlers 已封装好,复用。
   bindWorkspaceColHandlers($('view'));
-  // Dialog open/close。原生 <dialog> 自带 backdrop / ESC,只 wire open
-  // 按钮 + cancel。form submit 成功后 onAddLoop 里 form.closest('dialog')?
-  // .close() 就关掉(下面把 onAddLoop 也改了)。
-  const dlg = $('task-new-dialog');
-  const openBtn = $('task-new-btn');
-  if (dlg && openBtn) {
-    openBtn.addEventListener('click', () => { if (!dlg.open) dlg.showModal(); });
-    dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
-  }
+  // mobile `+New` 钮走全局 dialog(ensure + 重建按当前 ws + showModal),同 rt。
+  $('task-new-btn')?.addEventListener('click', _openTaskNewDialog);
+  _ensureTaskNewDialog();
 }
 
 // Render the cron job's "recent runs" foldout. Hidden when there's
@@ -4440,7 +4553,7 @@ function renderTaskDetailView(name) {
   const view = $('view');
   if (!loop) {
     view.innerHTML = `
-      <p><a href="#tasks" class="back-link">← Tasks</a></p>
+      <p><a href="#tasks" class="back-link task-back-link">← Tasks</a></p>
       <p class="muted">Task <code>${esc(name)}</code> not found.</p>
     `;
     return;
@@ -4515,7 +4628,7 @@ function renderTaskDetailView(name) {
   view.innerHTML = `
     <div class="task-detail ${loopStatus}" data-task-name="${esc(name)}">
       <div class="task-topbar">
-        <a class="workspace-back" href="#tasks" aria-label="Back to tasks">←</a>
+        <a class="workspace-back task-back-link" href="#tasks" aria-label="Back to tasks">←</a>
         <div class="workspace-title">
           <strong>${esc(name)}</strong>
           <span>${esc(loopStatus)}${nextLabel ? ` · ${esc(nextLabel)}` : ''}</span>

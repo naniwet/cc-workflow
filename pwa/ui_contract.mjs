@@ -561,3 +561,39 @@ export function navModelFromRoundtables(roundtables) {
   });
   return { sections: [{ items }] };
 }
+
+// cron loop 列表(lastData.loops 的行形状)→ spec §161 NavModel。纯函数。
+//   loop → NavItem{ id:name, label:(name||'(未命名)' 截断 40), running }
+// 严格对齐 navModelFromRoundtables 的输出形状(同 { id, label, running } 三字段 +
+// 不带 data.tileId / 任何 tile 字段 —— 否则被 _bindSidebarNavHandlers 的
+// `.shell-nav-item[data-tile-id]` 误绑)。NavItem.active 留调用方按 activeName 比对填。
+// label 空名回落 (未命名),跟 rt 的 (无标题) 对称。
+//
+// running 判定:**loop enabled** 且最新 recent_run(recent_runs[0],后端最新在前)
+// 的 status ∈ {queued, running} → true;否则(paused / 终态 / 缺 status / 空
+// recent_runs / 无字段)→ false。
+// 这与 app.js:_loopComputedStatus 返回 'running' **严格等价**:那段先 `if (!enabled)
+// return 'paused'`、再 `if (latestRunning) return 'running'` —— 即 running ⟺
+// enabled && latestRunning。**enabled 这一项不能漏**,否则一个被 pause 但恰有 in-flight
+// run 的 loop,侧栏点会亮 running 而 detail badge 显 paused,口径打架(code-review 抓到)。
+// _loopComputedStatus 读 DOM globals 不便在纯函数测试里 import,故此处内联同一判定,
+// 两边语义必须一致 —— 改 running 定义时同步改 _loopComputedStatus。其余状态
+// (paused/failed/done)侧栏 nav 都映射到 running=false,只关心"是否进行中"这一位。
+const _LOOP_LABEL_MAX = 40;
+const _LOOP_RUNNING = new Set(['queued', 'running']);
+export function navModelFromLoops(loops) {
+  const items = (loops || []).map((loop) => {
+    const raw = loop.name || '(未命名)';
+    const label = raw.length > _LOOP_LABEL_MAX
+      ? raw.slice(0, _LOOP_LABEL_MAX) + '…'
+      : raw;
+    const recentRuns = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
+    const latest = recentRuns[0] || null;
+    return {
+      id: loop.name,
+      label,
+      running: !!loop.enabled && !!latest && _LOOP_RUNNING.has(latest.status),
+    };
+  });
+  return { sections: [{ items }] };
+}

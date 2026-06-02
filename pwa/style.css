@@ -1113,6 +1113,15 @@ label {
    * 替代(spec §160),隐掉页内返回链;mobile 走全局 .back-link mobile-hide +
    * bottom-nav 回列表。不动全局 .back-link 规则。 */
   .rt-back-link { display: none; }
+  /* Task detail 的"←/← Tasks"页内返回链:desktop 下用 sidebar 的 loop 列表
+   * 替代(spec §161),隐掉页内返回链;mobile 走 bottom-nav 回列表。只给
+   * task detail 这两处加的 .task-back-link 加规则,不动 .workspace-back / .back-link
+   * 全局(它们 workspace detail / run detail 也用)。 */
+  .task-back-link { display: none; }
+  /* 返回链 desktop 隐掉后,task-topbar 不再留左侧 44px 空槽(sidebar 已管
+     导航)—— grid 从 [44px 1fr 44px] 收成 [1fr 44px],title 回到左边缘、
+     gear 仍右对齐。只 desktop 收,mobile 保留 ← 圆钮 + 三列。 */
+  .task-detail .task-topbar { grid-template-columns: minmax(0, 1fr) 44px; }
 }
 
 /* Markdown rendering for run-detail Output section. Style headings,
@@ -1705,14 +1714,17 @@ pre {
     min-height: 0;
   }
   .settings-sidebar-nav .shell-nav-item { text-decoration: none; }
-  /* 评议列表容器:同款 flex column + 2px 间距(spec §160) */
-  .rt-sidebar-nav {
+  /* 评议列表容器 + Tasks loop 列表容器:同款 flex column + 2px 间距
+   * (spec §160 评议 / §161 Tasks)。两者视觉一致,合用一组选择器 DRY。 */
+  .rt-sidebar-nav,
+  .task-sidebar-nav {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-height: 0;
   }
-  .rt-sidebar-nav .shell-nav-item { text-decoration: none; }
+  .rt-sidebar-nav .shell-nav-item,
+  .task-sidebar-nav .shell-nav-item { text-decoration: none; }
   /* 评议 running 指示点 —— 跟 repo 树 .shell-nav-dot 同款青色脉冲,label 后 */
   .rt-running-dot {
     flex: 0 0 auto;
@@ -1723,9 +1735,10 @@ pre {
     background: var(--accent-cyan);
     animation: shell-nav-pulse 1.4s ease-in-out infinite;
   }
-  /* 收起态:评议列表整块隐掉(跟 settings 同款,列表项太多没 rail glyph 设计) */
+  /* 收起态:评议 / Tasks 列表整块隐掉(跟 settings 同款,列表项太多没 rail glyph 设计) */
   .sidebar.is-rail .rt-sidebar-nav,
-  .sidebar.is-rail .rt-sidebar-toolbar { display: none; }
+  .sidebar.is-rail .rt-sidebar-toolbar,
+  .sidebar.is-rail .task-sidebar-nav { display: none; }
   .shell-nav-empty {
     font-size: var(--text-sm);
     padding: var(--space-2);

@@ -26,6 +26,7 @@ import {
   loadShellState,
   navModelFromTree,
   navModelFromRoundtables,
+  navModelFromLoops,
 } from '../pwa/ui_contract.mjs';
 
 test('status accent mapping follows the mobile overview design', () => {
@@ -966,6 +967,115 @@ test('navModelFromRoundtables: id 直接取 r.id,不带 data.tileId / tile 字�
   const item = navModelFromRoundtables([{ id: 'rt-123', question: 'Q', status: 'done' }])
     .sections[0].items[0];
   assert.equal(item.id, 'rt-123');
+  assert.equal(item.data, undefined);               // 不带 data 钩子
+  assert.equal(item.active, undefined);             // 调用方填
+});
+
+// ---------- navModelFromLoops(cron loop 列表 → NavModel 适配器,spec §161 / §107-108)----------
+// 纯函数:输入 lastData.loops 数组,输出 NavModel = { sections:[{ items:[{ id, label,
+// running }] }] }。严格对齐 navModelFromRoundtables 的输出形状(同 NavItem 三字段 + 不带
+// data.tileId)。NavItem.active 留调用方按 activeName 比对填。
+//   id = loop.name;label = loop.name(40 char 截断,空名 → (未命名),与 rt 的
+//   (无标题) 对称)。
+// running 判定:最新 recent_run.status ∈ {queued, running} → true(其它 / 缺 status /
+// 无 recent_runs → false)。这是 app.js:_loopComputedStatus 返回 'running' 的等价条件
+// (该函数读 DOM globals 不便在纯函数测试里 import,故此处内联同一判定,见 ui_contract.mjs
+// navModelFromLoops 注释)。
+
+test('navModelFromLoops: 空列表 → 空 items', () => {
+  const model = navModelFromLoops([]);
+  assert.equal(model.sections.length, 1);
+  assert.deepEqual(model.sections[0].items, []);
+});
+
+test('navModelFromLoops: 缺省 / null 输入 → 空 items(容错)', () => {
+  assert.deepEqual(navModelFromLoops(undefined).sections[0].items, []);
+  assert.deepEqual(navModelFromLoops(null).sections[0].items, []);
+});
+
+test('navModelFromLoops: 多条 → 按输入顺序,每条 { id, label, running }', () => {
+  const items = navModelFromLoops([
+    { name: 'daily-digest' },
+    { name: 'weekly-report' },
+  ]).sections[0].items;
+  assert.equal(items.length, 2);
+  assert.deepEqual(items.map((i) => i.id), ['daily-digest', 'weekly-report']);   // 顺序 = 输入顺序
+  assert.deepEqual(items.map((i) => i.label), ['daily-digest', 'weekly-report']);
+});
+
+test('navModelFromLoops: id / label 都取 loop.name', () => {
+  const item = navModelFromLoops([{ name: 'nightly-sync' }]).sections[0].items[0];
+  assert.equal(item.id, 'nightly-sync');
+  assert.equal(item.label, 'nightly-sync');
+});
+
+test('navModelFromLoops: running 判定 —— enabled 且最新 recent_run queued / running → true', () => {
+  const items = navModelFromLoops([
+    { name: 'a', enabled: true, recent_runs: [{ status: 'running' }] },
+    { name: 'b', enabled: true, recent_runs: [{ status: 'queued' }] },
+  ]).sections[0].items;
+  assert.equal(items[0].running, true);
+  assert.equal(items[1].running, true);
+});
+
+test('navModelFromLoops: running 判定 —— paused(enabled=false)即便有 in-flight run 也 false', () => {
+  // 与 _loopComputedStatus 一致:!enabled → paused 优先于 running。侧栏点不能跟
+  // detail badge 打架(code-review 抓到的 paused×in-flight 边界)。
+  const items = navModelFromLoops([
+    { name: 'a', enabled: false, recent_runs: [{ status: 'running' }] },
+    { name: 'b', recent_runs: [{ status: 'running' }] },   // 缺 enabled 视同未启用
+  ]).sections[0].items;
+  assert.equal(items[0].running, false);
+  assert.equal(items[1].running, false);
+});
+
+test('navModelFromLoops: running 判定 —— 终态 / 无 recent_runs → false', () => {
+  const items = navModelFromLoops([
+    { name: 'a', recent_runs: [{ status: 'done' }] },
+    { name: 'b', recent_runs: [{ status: 'failed' }] },
+    { name: 'c', recent_runs: [] },
+    { name: 'd' },                                    // 缺 recent_runs
+  ]).sections[0].items;
+  assert.equal(items[0].running, false);
+  assert.equal(items[1].running, false);
+  assert.equal(items[2].running, false);
+  assert.equal(items[3].running, false);
+});
+
+test('navModelFromLoops: running 只看最新一条(recent_runs[0])', () => {
+  // recent_runs 最新在前;最新 done 即便老的 running 也算非进行中。
+  const item = navModelFromLoops([
+    { name: 'a', recent_runs: [{ status: 'done' }, { status: 'running' }] },
+  ]).sections[0].items[0];
+  assert.equal(item.running, false);
+});
+
+test('navModelFromLoops: label 截断 40 字符(超长加省略号)', () => {
+  const long = 'x'.repeat(50);
+  const item = navModelFromLoops([{ name: long }]).sections[0].items[0];
+  assert.equal(item.label, 'x'.repeat(40) + '…');
+  assert.equal(item.label.length, 41);              // 40 char + 1 省略号
+});
+
+test('navModelFromLoops: 恰好 40 字符不截断', () => {
+  const exact = 'y'.repeat(40);
+  const item = navModelFromLoops([{ name: exact }]).sections[0].items[0];
+  assert.equal(item.label, exact);                  // 无省略号
+});
+
+test('navModelFromLoops: name 为空字符串 → (未命名)', () => {
+  const item = navModelFromLoops([{ name: '' }]).sections[0].items[0];
+  assert.equal(item.label, '(未命名)');
+});
+
+test('navModelFromLoops: name 字段缺失 → (未命名)', () => {
+  const item = navModelFromLoops([{ recent_runs: [] }]).sections[0].items[0];
+  assert.equal(item.label, '(未命名)');
+});
+
+test('navModelFromLoops: id 直接取 loop.name,不带 data.tileId / tile 字段', () => {
+  const item = navModelFromLoops([{ name: 'loop-1' }]).sections[0].items[0];
+  assert.equal(item.id, 'loop-1');
   assert.equal(item.data, undefined);               // 不带 data 钩子
   assert.equal(item.active, undefined);             // 调用方填
 });
