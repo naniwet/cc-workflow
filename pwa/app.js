@@ -1033,7 +1033,14 @@ function renderWorkspacesView() {
 // loadPcLayout 管(§3.5,reducer / 阶梯 / 深链不变)。shell 收起态走独立
 // key cc.shell.workspaces(跟 cc.pcLayout 不混)。
 function renderDesktopSidebarLayout() {
-  if (!paneState) loadPcLayout();
+  // paneState 初始化 / 自愈:首次进入(null)要 load;另外 boot 的第一次
+  // render() 跑在 refreshAll() 之前(lastData 还空),此时 _pcDefaultPanes()
+  // 拿不到 repo → panes 被锁成空。等数据到了再 render 时,若 panes 仍空但
+  // tree 已非空(= 当时数据没就绪锁的空,不是真的没 repo),重新 load 自愈,
+  // 否则首屏主区会永远停在"左侧选一个 workspace"空态。
+  if (!paneState || (paneState.panes.length === 0 && _pcSidebarTree().length > 0)) {
+    loadPcLayout();
+  }
   const navModel = navModelFromTree(_pcSidebarTree());
   const groups = groupBySession(lastData.workspaces, lastData.sessions);
 
