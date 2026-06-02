@@ -172,22 +172,22 @@ function _updateTopbarStatus() {
       <span class="status-time">· ${esc(new Date().toLocaleTimeString())}</span>
     `;
   }
-  // app-rail 状态点(desktop):topbar desktop 隐藏 → 这里同步反映在线 +
-  // 待审批。有 pending 时点变红 + 角标数字,无 pending 时常驻绿点 = 在线。
-  const railStatus = $('app-rail-status');
-  if (railStatus) {
-    railStatus.classList.toggle('has-pending', pending > 0);
-    railStatus.title = pending > 0 ? `${pending} 待审批` : '在线';
-    railStatus.innerHTML = pending > 0
-      ? `<button type="button" class="pending-badge app-rail-pending"
-                 id="pending-rail-badge" title="${esc(pending)} 待审批">${ICONS.warning}<span>${esc(pending)}</span></button>`
+  // 侧边栏状态点(desktop):topbar desktop 隐藏 → 这里同步反映在线 + 待审批。
+  // 有 pending 时点变红 + 角标数字(可点跳转),无 pending 时常驻绿点 = 在线。
+  const sbStatus = $('sidebar-status');
+  if (sbStatus) {
+    sbStatus.classList.toggle('has-pending', pending > 0);
+    sbStatus.title = pending > 0 ? `${pending} 待审批` : '在线';
+    sbStatus.innerHTML = pending > 0
+      ? `<button type="button" class="pending-badge sidebar-pending"
+                 id="pending-sidebar-badge" title="${esc(pending)} 待审批">${ICONS.warning}<span>${esc(pending)}</span></button>`
       : `<span class="status-dot"></span>`;
   }
 }
 
 document.addEventListener('click', (e) => {
-  // 两处 pending badge(topbar + app-rail)共用同一跳转逻辑 —— 用 class
-  // .pending-badge 匹配,id 各异(#pending-global-badge / #pending-rail-badge)。
+  // 两处 pending badge(topbar + sidebar)共用同一跳转逻辑 —— 用 class
+  // .pending-badge 匹配,id 各异(#pending-global-badge / #pending-sidebar-badge)。
   const btn = e.target.closest('.pending-badge');
   if (!btn) return;
   const first = (lastData.pendingApprovals || [])[0];
@@ -1002,6 +1002,16 @@ function render() {
   const isFreshNav = location.hash !== _lastRenderedHash;
   _lastRenderedHash = location.hash;
 
+  // 统一侧栏(spec §13.2):#sidebar-ctx 默认清空 + 解除收起 rail 态,只有
+  // Workspaces desktop 的 renderDesktopSidebarLayout 会重填 repo 树 + 按
+  // cc.shell.workspaces.collapsed 设回 is-rail。这样切到 Tasks / 评议 /
+  // Settings / 各 detail / mobile overview 既不残留 repo 树,也不会卡在 workspaces
+  // 的收起态(那些 tab 的 ctx 为空,rail 无意义 → 全宽显示 app 导航)。单一
+  // 接线点,不漏路由。
+  const ctx = $('sidebar-ctx');
+  if (ctx) ctx.innerHTML = '';
+  $('sidebar')?.classList.remove('is-rail');
+
   if (route.name === 'runs' && route.id) {
     setActiveTab(null);                            // no tab is active for detail page
     renderRunDetailView(route.id);
@@ -1043,15 +1053,14 @@ function renderWorkspacesView() {
 }
 
 // PC = 左侧固定侧边栏(两级 workspace ▸ session 导航 + 新建)+ 右侧主区
-// (≤4 个聚焦 pane)。2026-06-02 重构成跑在通用 app shell 上(spec
-// 2026-06-02-pwa-unified-shell §5):布局 chrome(收起/抽屉)由 renderShell
-// 提供,nav 由 renderNavFull/renderNavRail 按 NavModel 渲染,Workspaces 只
-// 负责"喂 nav + main 给 shell"。
+// (≤4 个聚焦 pane)。2026-06-02 §13.2 统一侧栏后:repo 树(navFull/navRail)
+// 渲染进常驻 #sidebar 的 #sidebar-ctx,主区 pane 网格直接进 #view(不再经
+// renderShell 包壳)。收起态 .sidebar.is-rail + 收起钮 « / » 见 #sidebar-head。
 //
 // 数据流:_pcSidebarTree()(= groupBySession + buildSidebarTree 纯函数)→
 // navModelFromTree → NavModel 给 nav;同一份 groups 给主区 pane(panes 里
 // 的 tileId 直接索引 groups)。pane 状态(paneState)仍由 dispatchPane /
-// loadPcLayout 管(§3.5,reducer / 阶梯 / 深链不变)。shell 收起态走独立
+// loadPcLayout 管(§3.5,reducer / 阶梯 / 深链不变)。收起态走独立
 // key cc.shell.workspaces(跟 cc.pcLayout 不混)。
 function renderDesktopSidebarLayout() {
   // paneState 初始化 / 自愈:首次进入(null)要 load;另外 boot 的第一次
@@ -1071,23 +1080,37 @@ function renderDesktopSidebarLayout() {
   const expandedRepos = new Set(paneState.expandedRepos || []);
   const navOpts = { activeId, activeIds, expandedRepos };
 
-  // 主区 = pane 网格(布局阶梯 .pc-main[data-pane-count] 不变,只是被 shell
-  // 的 .shell-main 包起来)。
-  const mainHtml = `<div class="pc-main" data-pane-count="${paneState.panes.length}">${_pcMainHtml(groups)}</div>`;
-
+  // 主区 = pane 网格(布局阶梯 .pc-main[data-pane-count] 不变)。统一侧栏后
+  // (spec §13.2)nav 进 #sidebar-ctx,主区直接进 #view(#view 接管原
+  // .shell-main 的 flex column 角色 —— 见 style.css #view 规则)。
+  //
   // Provider picker — uses the unified form-picker component so dark
   // theming matches the workspace ⋯ menu / roundtable model picker.
   const newWsProviderPicker = _newWsProviderPickerHtml();
 
+  // 侧栏上下文区(#sidebar-ctx):repo 树。收起态(.sidebar.is-rail)用 rail
+  // (图标 + repo 首字母),展开态用 full(两级树 + 新建)。收起态由 sidebar
+  // 顶部的 « / »(data-shell-collapse,全局绑定)翻 cc.shell.workspaces.collapsed。
+  const collapsed = loadShellCollapsed('workspaces');
+  const sidebar = $('sidebar');
+  if (sidebar) {
+    sidebar.classList.toggle('is-rail', collapsed);
+    // 收起钮 glyph:展开态显 «(收起),收起态显 »(展开)。aria-label 同步。
+    const collapseBtn = sidebar.querySelector('[data-shell-collapse]');
+    if (collapseBtn) {
+      collapseBtn.textContent = collapsed ? '»' : '«';
+      collapseBtn.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
+    }
+  }
+  const ctx = $('sidebar-ctx');
+  ctx.innerHTML = collapsed
+    ? renderNavRail(navModel, navOpts)
+    : renderNavFull(navModel, navOpts);
+
+  // 主区 = pane 网格,直接进 #view(不再走 renderShell 的 .shell-main 包裹)。
+  // new-ws dialog 跟在主区后面(原生 <dialog> 浮层,位置无所谓)。
   const view = $('view');
-  view.innerHTML = renderShell({
-    tab: 'workspaces',
-    navFull: renderNavFull(navModel, navOpts),
-    navRail: renderNavRail(navModel, navOpts),
-    mainHtml,
-    collapsed: loadShellCollapsed('workspaces'),
-    drawerOpen: shellDrawerOpen,
-  }) + `
+  view.innerHTML = `<div class="pc-main" data-pane-count="${paneState.panes.length}">${_pcMainHtml(groups)}</div>` + `
     <dialog class="ws-new-dialog" id="ws-new-dialog">
       <form data-form-id="new-ws" class="ws-new-form">
         <h3>New workspace</h3>
@@ -1134,9 +1157,10 @@ function renderDesktopSidebarLayout() {
     dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
   }
 
-  // shell chrome 事件(« 收起 / ☰ 抽屉 / backdrop)。翻态后重画整个 Workspaces。
-  bindShellChrome('workspaces', renderDesktopSidebarLayout);
-  // 侧边栏导航事件(点击 / 拖拽 / ⇲ / 塌缩 / + 新对话)。
+  // 侧边栏导航事件(点击 / 拖拽 / ⇲ / 塌缩 / + 新对话)。统一侧栏后 nav 在
+  // #sidebar-ctx,主区 drop 落点在 #view —— 选择器分离见 bindOverviewHandlers。
+  // 收起钮 « / »(data-shell-collapse)由 boot 全局绑定(见 bindSidebarCollapse),
+  // 不在这里逐次绑(它在常驻 #sidebar 里,不随重画重建)。
   bindOverviewHandlers();
   // 主区 pane 内的 trigger / provider / trust / approval / attach / turn 交互
   // (复用 detail / mobile 共享的 binder)。
@@ -1310,6 +1334,10 @@ function renderNavRail(navModel, opts = {}) {
   }).join('');
 }
 
+// 弃用(2026-06-02 §13.2 统一侧栏):nav→#sidebar-ctx / main→#view,不再调用;
+// 内含的移动端 drawer(.shell-backdrop/.shell-main-chrome)是死代码(Task 12
+// 未接),留待清理。
+//
 // ── shell 容器(布局 + 收起/抽屉机制)────────────────────────────────────
 //
 // PC 展开:[.shell-nav(navFull) | .shell-main(mainHtml)]
@@ -1350,15 +1378,9 @@ function renderShell({ tab, navFull, navRail, mainHtml, collapsed = false, drawe
     </div>`;
 }
 
-// shell chrome 事件接线(« 收起 / ☰ 抽屉 / backdrop 收起)。在 shell 渲染后调。
-// tab = 当前 tab(收起记忆 key);rerender = 翻态后重画该 tab 的回调
-// (Workspaces 传 renderDesktopSidebarLayout)。
-//
-// « / »(data-shell-collapse)→ 翻转 cc.shell.<tab>.collapsed → rerender。
-// ☰(data-shell-drawer,main chrome 里)→ drawerOpen=true → rerender。
-// backdrop(data-shell-drawer)→ drawerOpen=false → rerender。
-// 移动端"选中一项就收 drawer"由各 tab 的 nav 点击 handler 负责(它们重画后
-// drawerOpen 已是 false —— 见下面 Workspaces focus handler 里 closeShellDrawer)。
+// 弃用(2026-06-02 §13.2 统一侧栏):配套 renderShell 一起弃用 —— shell chrome
+// (« 收起 / ☰ 抽屉 / backdrop)已不渲染进 #view;收起钮改由常驻 #sidebar 里的
+// 全局接线 bindSidebarCollapse 处理。本函数已无调用方,留待清理。
 function bindShellChrome(tab, rerender) {
   const view = $('view');
   const collapseBtn = view.querySelector('[data-shell-collapse]');
@@ -1376,6 +1398,22 @@ function bindShellChrome(tab, rerender) {
       rerender();
     });
   }
+}
+
+// 统一侧栏收起钮全局接线(spec §13.2)。« / »(data-shell-collapse)在常驻
+// #sidebar 里(不随 render 重建)→ boot 时绑一次,翻 cc.shell.workspaces.collapsed
+// → 重画当前 view(render 会按收起态重填 #sidebar-ctx + 翻 .sidebar.is-rail)。
+// 当前只有 Workspaces tab 有收起态(其它 tab 的 #sidebar-ctx 为空,rail 态无意义)
+// —— 故 key 固定 'workspaces'。
+function bindSidebarCollapse() {
+  const sidebar = $('sidebar');
+  if (!sidebar) return;
+  const btn = sidebar.querySelector('[data-shell-collapse]');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    saveShellCollapsed('workspaces', !loadShellCollapsed('workspaces'));
+    render();
+  });
 }
 
 // 移动端选中一项后收起 drawer(供 nav focus handler 调)。只在 drawer 开着时
@@ -2169,12 +2207,17 @@ function _addTapFallback(el, handler) {
 //   点 [data-toggle-repo]    → toggle expandedRepos(不走 reducer,直接重画)
 //   点 [data-new-chat-ws]    → 自动命名新 session → focus(决策 2,不弹框)
 function bindOverviewHandlers() {
+  // 统一侧栏(spec §13.2):nav 项(focus / 拖拽源 / ⇲ / 塌缩三角 / + 新对话)
+  // 渲染在常驻 #sidebar-ctx 里;主区 pane(drop 落点 / × 关闭)在 #view 里。
+  // 两个根分开找,不再统一在 #view 下。
+  const ctx = $('sidebar-ctx');
   const view = $('view');
+  if (!ctx) return;
 
   // ── 点击 = focus(行内的 ⇲ / 塌缩三角各有自己的 handler,这里要排除)──
   //    full 态 .shell-nav-item 和 rail 态 .shell-nav-rail-item 都带
   //    [data-tile-id] + 公共 .shell-nav-item class,一条选择器同时命中。
-  for (const item of view.querySelectorAll('.shell-nav-item[data-tile-id]')) {
+  for (const item of ctx.querySelectorAll('.shell-nav-item[data-tile-id]')) {
     item.addEventListener('click', (e) => {
       // 点到行内按钮(⇲ / 三角)交给那些按钮自己处理,不当 focus。
       if (e.target.closest('.shell-nav-open-beside, .shell-nav-toggle')) return;
@@ -2185,7 +2228,7 @@ function bindOverviewHandlers() {
   }
 
   // ── 拖拽:dragstart 标记拖拽源(让 click 不误触),drop 落主区 = openBeside ──
-  for (const item of view.querySelectorAll('.shell-nav-item[data-tile-id]')) {
+  for (const item of ctx.querySelectorAll('.shell-nav-item[data-tile-id]')) {
     item.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', item.dataset.tileId);
       e.dataTransfer.effectAllowed = 'copy';
@@ -2202,14 +2245,14 @@ function bindOverviewHandlers() {
   }
 
   // ── ⇲ 并排打开按钮(决策 5 的点击入口)──
-  for (const btn of view.querySelectorAll('.shell-nav-open-beside[data-open-beside]')) {
+  for (const btn of ctx.querySelectorAll('.shell-nav-open-beside[data-open-beside]')) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       dispatchPane({ type: 'openBeside', tileId: btn.dataset.openBeside });
     });
   }
 
-  // ── pane × 关闭 ──
+  // ── pane × 关闭(在主区 #view)──
   for (const btn of view.querySelectorAll('.pc-pane-close[data-close-pane]')) {
     btn.addEventListener('click', () => {
       dispatchPane({ type: 'close', idx: Number(btn.dataset.closePane) });
@@ -2218,7 +2261,7 @@ function bindOverviewHandlers() {
 
   // ── 塌缩三角:toggle expandedRepos(只是侧边栏展开态,不动 panes,
   //    所以直接改 paneState.expandedRepos + savePcLayout + 重画,不走 reducer)──
-  for (const btn of view.querySelectorAll('.shell-nav-toggle[data-toggle-repo]')) {
+  for (const btn of ctx.querySelectorAll('.shell-nav-toggle[data-toggle-repo]')) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       _togglePcRepo(btn.dataset.toggleRepo);
@@ -2226,7 +2269,7 @@ function bindOverviewHandlers() {
   }
 
   // ── + 新对话:自动命名一条新 session(决策 2)→ focus,不弹框 ──
-  for (const btn of view.querySelectorAll('.shell-nav-new-chat[data-new-chat-ws]')) {
+  for (const btn of ctx.querySelectorAll('.shell-nav-new-chat[data-new-chat-ws]')) {
     btn.addEventListener('click', () => _onPcNewChatClick(btn.dataset.newChatWs));
   }
 }
@@ -6247,6 +6290,7 @@ async function _onProviderTestClick(e) {
 }
 
 // ---------- boot ----------
+bindSidebarCollapse();   // 常驻 #sidebar 收起钮,绑一次(不随 render 重建)
 render();
 refreshAll();
 setInterval(refreshAll, 3000);

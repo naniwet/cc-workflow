@@ -80,10 +80,10 @@
   --t-fast: 100ms ease-out;
   --t-base: 150ms ease-out;
 
-  /* 通用 app shell(min-width:769px)的固定左栏宽度 + 收起态 rail 宽度。
+  /* 统一侧栏(min-width:769px,spec §13.2)的展开宽度 + 收起态 rail 宽度。
      布局常量,不属于 8px 间距节奏,所以单列变量而非硬编码 magic number。 */
-  --shell-nav-w: 220px;
-  --shell-rail-w: 52px;
+  --sidebar-w: 230px;
+  --sidebar-rail-w: 52px;
 }
 
 /* ============================================================================
@@ -207,11 +207,13 @@ a:hover { color: var(--accent-blue-hover); }
 }
 
 /* ============================================================================
- *  app-rail — 全局应用级导航(desktop ≥769px only)。区别于 shell-nav
- *  (= 当前 tab 的上下文导航,坐 app-rail 右边)。术语见 spec §12.1。
- *  mobile-first 默认隐藏;desktop 规则在下面 @media (min-width:769px) 块。
+ *  统一侧边栏 — 一条竖栏(desktop ≥769px only,spec §13.2)。合并了旧
+ *  [app-rail 52px][workspace 栏] 两条竖条:顶部 app 导航(.sidebar-apps)+
+ *  下方当前 tab 上下文(.sidebar-ctx,Workspaces=repo 树)。同一块底色,
+ *  无两栏中缝。mobile-first 默认隐藏;desktop 规则在下面 @media 块。
+ *  mobile 仍用 .topbar + .bottom-nav。
  * ============================================================================ */
-.app-rail { display: none; }
+.sidebar { display: none; }
 
 /* ============================================================================
  *  Main / views
@@ -1517,10 +1519,10 @@ pre {
 .ws-timeline > * { flex-shrink: 0; }
 
 /* ============================================================================
- *  通用 app shell(min-width:769px)— 左固定 nav + 右主区(≤4 pane)。
- *  spec: 2026-06-02-pwa-unified-shell-program-design.md §4.2。重构自旧
- *  .pc-sidebar-* 布局(baf81ea),class 统一到 .shell-* / .shell-nav-* 供
- *  4 tab 复用。
+ *  统一侧栏布局(min-width:769px)— 一条 sidebar + 右主区 #view(≤4 pane)。
+ *  spec: 2026-06-02-pwa-unified-shell-program-design.md §13.2。合并了旧
+ *  [app-rail 52px][workspace 栏] 两条竖条成一条。.shell-nav-* 内容样式(repo
+ *  树行 / rail item)从旧 shell 沿用,现渲染进 #sidebar-ctx。
  *
  *  比旧卡片墙轻的核心:焦点感来自 nav 的 .is-active 高亮,而不是每张卡
  *  满 chrome(border + shadow + 圆角)怼脸。pane 之间只靠 gap 分隔。
@@ -1528,120 +1530,65 @@ pre {
  *  主区布局阶梯(.pc-main grid 按 data-pane-count 切,保留不变):
  *      1 = 全屏;2 = 左右等宽;3 = 左大(pane1 跨两行)+ 右上下;4 = 2×2。
  *
- *  高度链路(同 .ws-col-detail,让 pane timeline 内滚、无外层页面滚动):
- *      body                flex column, min-height 100vh
- *      main                flex 1 1 auto, min-height 0, flex column
- *      ↳ .shell            flex row, flex 1, min-height 0 — claims the rest
- *        ↳ .shell-main     flex column, min-height 0(包 .pc-main)
- *          ↳ .pc-main      grid 1~4 格, min-height 0
- *            ↳ .pc-pane    grid cell → flex column, min-height 0
- *              ↳ .ws-col       height 100%, min-height 0
- *                ↳ .ws-timeline  flex 1, overflow-y auto — 内部滚动
+ *  高度链路(让 pane timeline 内滚、无外层页面滚动):
+ *      body                flex ROW(desktop), min-height 100vh
+ *      ↳ .sidebar          flex 0 0 230px, align-self stretch — 一条竖栏
+ *      ↳ #view (= <main>)  flex 1 1 0, min-height 0, flex column — 主区
+ *        ↳ .pc-main        grid 1~4 格, flex 1, min-height 0
+ *          ↳ .pc-pane      grid cell → flex column, min-height 0
+ *            ↳ .ws-col       height 100%, min-height 0
+ *              ↳ .ws-timeline  flex 1, overflow-y auto — 内部滚动
  *
- *  collapsed(PC 收起态):.shell-nav.is-rail 宽度收成 --shell-rail-w(52px),
- *  只显图标条;展开/收起靠 chrome 里的 « / » 按钮(data-shell-collapse)。
+ *  collapsed(PC 收起态):.sidebar.is-rail 收成 --sidebar-rail-w(52px),只显
+ *  app 图标 + repo 首字母;收起钮 « / »(data-shell-collapse)在 .sidebar-head。
  * ============================================================================ */
 @media (min-width: 769px) {
-  /* ── app-rail 布局(spec §12.1)──────────────────────────────────────
-     desktop:body 横排 [app-rail][main],topbar 整条隐藏(tab 行已搬进
-     app-rail,brand + 状态点也在 app-rail 里)。main flex:1 占满右侧。 */
+  /* ── 统一侧栏布局(spec §13.2)────────────────────────────────────────
+     desktop:body 横排 [sidebar][#view],topbar 整条隐藏(导航搬进 sidebar)。
+     sidebar 一条竖栏(~230px):head(品牌 + 状态点 + « 收起)/ apps(4 个
+     app tab,竖列)/ ctx(当前 tab 的上下文列表,Workspaces=repo 树)。
+     同一块 --bg-surface 底色,apps 与 ctx 间至多一条极淡 divider,无中缝。 */
   body { flex-direction: row; }
   .topbar { display: none; }
-  .app-rail {
+  .sidebar {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    flex: 0 0 52px;
-    width: 52px;
+    flex: 0 0 var(--sidebar-w);
+    width: var(--sidebar-w);
     align-self: stretch;            /* 撑满视口高度 */
-    gap: var(--space-2);
-    padding: var(--space-3) 0;
+    min-height: 0;
     background: var(--bg-surface);
     border-right: 1px solid var(--border-subtle);
+    transition: flex-basis var(--t-base);
   }
-  .app-rail-brand {
+  /* head:品牌 mark + 在线状态点 + « 收起钮,一行 */
+  .sidebar-head {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    color: var(--accent-blue);
-    margin-bottom: var(--space-2);
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-3) var(--space-2);
   }
-  .app-rail-brand svg { width: 24px; height: 24px; }
-  .app-rail-tab {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
-    width: 100%;
-    padding: var(--space-2) 0;
-    color: var(--text-tertiary);
-    text-decoration: none;
-    font-size: 9px;
-    letter-spacing: 0.02em;
-    transition: color var(--t-base), background var(--t-base);
-  }
-  .app-rail-tab svg { width: 22px; height: 22px; display: block; }
-  .app-rail-tab:hover { color: var(--text-primary); background: var(--bg-elevated); }
-  .app-rail-tab.active { color: var(--accent-blue); }
-  .app-rail-tab.active::before {
-    content: ''; position: absolute;
-    left: 0; top: 8px; bottom: 8px;
-    width: 2px;
-    background: var(--accent-blue);
-    border-radius: var(--radius-full);
-  }
-  .app-rail-spacer { flex: 1 1 auto; }
-  .app-rail-status {
+  .sidebar-brand {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: var(--space-2) 0;
-  }
-  /* 待审批角标:复用 .pending-badge 视觉(红描边 + 数字),app-rail 里收窄。 */
-  .app-rail-pending { padding: 2px 6px; cursor: pointer; }
-
-  .shell {
-    display: flex;
-    gap: var(--space-4);
-    flex: 1 1 0;
-    min-height: 0;            /* 让子项能 shrink,timeline 才会内滚 */
-  }
-
-  /* ── 左侧固定 nav(展开态)─────────────────────────────────── */
-  .shell-nav {
-    flex: 0 0 var(--shell-nav-w);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    min-height: 0;
-    overflow-y: auto;        /* repo 多时纵向滚动 */
-    padding-right: var(--space-3);
-    border-right: 1px solid var(--border-subtle);
-    background: var(--bg-surface);
-    transition: flex-basis var(--t-base);
-  }
-  /* 收起态 rail:52px 图标条 */
-  .shell-nav.is-rail {
-    flex: 0 0 var(--shell-rail-w);
-    align-items: stretch;
-    padding-right: 0;
-  }
-
-  /* nav 顶部 chrome:« / » 收起按钮 */
-  .shell-nav-chrome {
+    width: 28px;
+    height: 28px;
+    color: var(--accent-blue);
     flex: 0 0 auto;
-    display: flex;
-    justify-content: flex-end;
-    padding: var(--space-1) var(--space-1) 0;
   }
-  .shell-nav.is-rail .shell-nav-chrome {
-    justify-content: center;
+  .sidebar-brand svg { width: 22px; height: 22px; }
+  .sidebar-status {
+    flex: 1 1 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
   }
-  .shell-collapse-btn {
+  /* 待审批角标:复用 .pending-badge 视觉(红描边 + 数字),侧栏里收窄。 */
+  .sidebar-pending { padding: 2px 6px; cursor: pointer; }
+  .sidebar-collapse-btn {
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1657,18 +1604,76 @@ pre {
     line-height: 1;
     border-radius: var(--radius-sm);
   }
-  .shell-collapse-btn:hover {
+  .sidebar-collapse-btn:hover {
     color: var(--text-primary);
     background: var(--bg-elevated);
   }
-  /* nav body 容纳 toolbar + tree(展开)或 rail items(收起)*/
-  .shell-nav-body {
+
+  /* ── app 导航区(4 tab,竖列)──────────────────────────────── */
+  .sidebar-apps {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 var(--space-2) var(--space-2);
+  }
+  .sidebar-app {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: var(--text-base);
+    transition: color var(--t-base), background var(--t-base);
+  }
+  .sidebar-app svg { flex: 0 0 auto; width: 18px; height: 18px; display: block; }
+  .sidebar-app span {
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sidebar-app:hover { color: var(--text-primary); background: var(--bg-elevated); }
+  .sidebar-app.active { color: var(--accent-blue); background: var(--accent-blue-faint); }
+
+  /* ── 上下文区(当前 tab 的列表;Workspaces=repo 树)──────────
+     apps 与 ctx 之间一条极淡 divider(border-top),不是两栏中缝。
+     repo 多时纵向滚动。.shell-nav-* 内容样式在下面复用(不改)。 */
+  .sidebar-ctx {
     flex: 1 1 auto;
     min-height: 0;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
+    padding: var(--space-2) var(--space-3) var(--space-3);
+    border-top: 1px solid var(--border-subtle);
   }
+  /* ctx 为空时(Workspaces 外的 tab)不显 divider,免留一条孤零横线。 */
+  .sidebar-ctx:empty { border-top: none; }
+
+  /* ── 收起态 rail(52px:app 图标 + repo 首字母,spec §13.2)──────
+     .sidebar.is-rail 整条收窄;head 只留收起钮、apps 只留图标、ctx 走
+     .shell-nav-rail-* 图标块。 */
+  .sidebar.is-rail {
+    flex: 0 0 var(--sidebar-rail-w);
+    width: var(--sidebar-rail-w);
+  }
+  .sidebar.is-rail .sidebar-head {
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-2) 0;
+  }
+  .sidebar.is-rail .sidebar-status { display: none; }   /* rail 太窄,状态点省略 */
+  .sidebar.is-rail .sidebar-apps { padding: 0 var(--space-1) var(--space-2); }
+  .sidebar.is-rail .sidebar-app {
+    flex-direction: column;
+    justify-content: center;
+    gap: 0;
+  }
+  .sidebar.is-rail .sidebar-app span { display: none; }  /* rail 只留图标 */
+  .sidebar.is-rail .sidebar-ctx { padding: var(--space-2) 0; }
+
   .shell-nav-toolbar { flex: 0 0 auto; }
   .shell-nav-tree {
     display: flex;
@@ -1846,17 +1851,19 @@ pre {
     left: 6px;
   }
 
-  /* ── shell-main:nav 右侧的内容容器(包 .pc-main 网格)──────────
-     flex column 让 .pc-main grid 撑满剩余高度;min-*:0 保内滚链路。 */
-  .shell-main {
+  /* ── #view = sidebar 右侧主区(spec §13.2 统一侧栏后接管原 .shell-main 角色)
+     #view 即 <main> 本身,已有 flex column / flex:1 / min-height:0(mobile-first
+     默认规则)。这里在 desktop 横排布局下重申主区角色 + 补 min-width:0,让
+     .pc-main grid 撑满剩余高度 + timeline 内滚。main 原有 padding / max-width /
+     auto-margin 保留(其它 tab 文档流 + workspaces 主区外边距都依赖它,跟旧
+     .shell 在 main padding 容器内的行为一致)。 */
+  #view {
     flex: 1 1 0;
     min-width: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;
   }
-  /* PC 不显示 ☰(那是移动端 drawer 入口);收起/展开走 nav 里的 « / »。 */
-  .shell-main-chrome { display: none; }
 
   /* ── 右侧主区(网格放 1~4 pane,布局阶梯 spec §3.3)──────────────
      一套 grid 按 data-pane-count 切模板(MAX_PANES=4):

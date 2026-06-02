@@ -14,65 +14,77 @@
 <title>cc-workflow</title>
 </head>
 <body>
-  <!-- Global app-rail (desktop ≥769px only). Left vertical strip: brand mark
-       + 4 tabs + Settings + online-status dot. Replaces the topbar tab row on
-       desktop; topbar itself is hidden on desktop. Mobile keeps .bottom-nav.
-       Same data-tab semantics — setActiveTab() toggles .active across ALL
-       [data-tab] anchors (topbar / bottom-nav / app-rail) in lockstep.
-       SVGs copied from .bottom-nav so there's nothing to fetch. -->
-  <aside class="app-rail" id="app-rail">
-    <a href="#workspaces" class="app-rail-brand" title="cc-workflow" aria-label="cc-workflow">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3" y="3" width="18" height="18" rx="4"/>
-        <path d="M8 9l3 3-3 3"/>
-        <line x1="13" y1="15" x2="16" y2="15"/>
-      </svg>
-    </a>
+  <!-- 统一侧边栏(desktop ≥769px only,spec §13.2)。一条竖栏,不再割裂成
+       [app-rail 52px][workspace 栏] 两条:
+         .sidebar-head  品牌 mark + 在线状态点(#sidebar-status)+ « 收起钮
+         .sidebar-apps  4 个 app tab(Workspaces / Tasks / 评议 / Settings)
+         .sidebar-ctx   当前 tab 的上下文列表(Workspaces = repo 树;
+                        其它 tab 留空)。由 app.js 按路由填充 / 清空。
+       同一块底色(--bg-surface),app-nav 与 ctx 间至多一条极淡 divider,无中缝。
+       收起态 .sidebar.is-rail 收成 52px(app 图标 + repo 首字母)。
+       Mobile 隐藏(.sidebar{display:none}),仍用 .bottom-nav + topbar。
+       data-tab 语义不变:setActiveTab() 跨所有 [data-tab] 锚点联动高亮。
+       SVG 从旧 app-rail / bottom-nav 搬过来,无需 fetch。 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <a href="#workspaces" class="sidebar-brand" title="cc-workflow" aria-label="cc-workflow">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="4"/>
+          <path d="M8 9l3 3-3 3"/>
+          <line x1="13" y1="15" x2="16" y2="15"/>
+        </svg>
+      </a>
+      <span class="sidebar-status" id="sidebar-status" title="在线">
+        <span class="status-dot"></span>
+      </span>
+      <button type="button" class="sidebar-collapse-btn" data-shell-collapse
+              aria-label="收起侧栏">«</button>
+    </div>
 
-    <a href="#workspaces" data-tab="workspaces" class="app-rail-tab" title="Workspaces">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3"  y="3"  width="7" height="7" rx="1"/>
-        <rect x="14" y="3"  width="7" height="7" rx="1"/>
-        <rect x="3"  y="14" width="7" height="7" rx="1"/>
-        <rect x="14" y="14" width="7" height="7" rx="1"/>
-      </svg>
-      <span>Work</span>
-    </a>
-    <a href="#tasks" data-tab="tasks" class="app-rail-tab" title="Tasks">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <polyline points="9 11 12 14 22 4"/>
-        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-      </svg>
-      <span>Tasks</span>
-    </a>
-    <a href="#roundtables" data-tab="roundtables" class="app-rail-tab" title="Roundtable">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="12" cy="12" r="4"/>
-        <circle cx="12" cy="4"  r="1.5"/>
-        <circle cx="12" cy="20" r="1.5"/>
-        <circle cx="4"  cy="12" r="1.5"/>
-        <circle cx="20" cy="12" r="1.5"/>
-      </svg>
-      <span>Table</span>
-    </a>
+    <nav class="sidebar-apps" aria-label="应用导航">
+      <a href="#workspaces" data-tab="workspaces" class="sidebar-app" title="Workspaces">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3"  y="3"  width="7" height="7" rx="1"/>
+          <rect x="14" y="3"  width="7" height="7" rx="1"/>
+          <rect x="3"  y="14" width="7" height="7" rx="1"/>
+          <rect x="14" y="14" width="7" height="7" rx="1"/>
+        </svg>
+        <span>Workspaces</span>
+      </a>
+      <a href="#tasks" data-tab="tasks" class="sidebar-app" title="Tasks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="9 11 12 14 22 4"/>
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+        <span>Tasks</span>
+      </a>
+      <a href="#roundtables" data-tab="roundtables" class="sidebar-app" title="评议">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4"/>
+          <circle cx="12" cy="4"  r="1.5"/>
+          <circle cx="12" cy="20" r="1.5"/>
+          <circle cx="4"  cy="12" r="1.5"/>
+          <circle cx="20" cy="12" r="1.5"/>
+        </svg>
+        <span>评议</span>
+      </a>
+      <a href="#settings" data-tab="settings" class="sidebar-app" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        <span>Settings</span>
+      </a>
+    </nav>
 
-    <span class="app-rail-spacer"></span>
-
-    <a href="#settings" data-tab="settings" class="app-rail-tab" title="Settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-      </svg>
-      <span>Set</span>
-    </a>
-    <span class="app-rail-status" id="app-rail-status" title="在线">
-      <span class="status-dot"></span>
-    </span>
+    <!-- 当前 tab 的上下文列表。Workspaces tab 由 renderDesktopSidebarLayout
+         填充 repo 树;其它 tab / detail 路由由 render() 清空。 -->
+    <div class="sidebar-ctx" id="sidebar-ctx"></div>
   </aside>
 
   <header class="topbar">
@@ -80,7 +92,7 @@
     <nav class="tabs" id="tabs">
       <a href="#workspaces" data-tab="workspaces" class="tab">Workspaces</a>
       <a href="#tasks" data-tab="tasks" class="tab">Tasks</a>
-      <a href="#roundtables" data-tab="roundtables" class="tab">Roundtable</a>
+      <a href="#roundtables" data-tab="roundtables" class="tab">评议</a>
       <a href="#settings" data-tab="settings" class="tab">Settings</a>
     </nav>
     <span class="status" id="status"></span>
@@ -120,7 +132,7 @@
         <circle cx="4"  cy="12" r="1.5"/>
         <circle cx="20" cy="12" r="1.5"/>
       </svg>
-      <span>Roundtable</span>
+      <span>评议</span>
     </a>
     <a href="#settings" data-tab="settings" class="bottom-tab">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
