@@ -1109,6 +1109,10 @@ label {
  * bottom-nav Settings 回 hub。不动全局 .back-link 规则。 */
 @media (min-width: 769px) {
   .settings-back-link { display: none; }
+  /* 评议 detail 的"← Roundtable"页内返回链:desktop 下用 sidebar 的评议列表
+   * 替代(spec §160),隐掉页内返回链;mobile 走全局 .back-link mobile-hide +
+   * bottom-nav 回列表。不动全局 .back-link 规则。 */
+  .rt-back-link { display: none; }
 }
 
 /* Markdown rendering for run-detail Output section. Style headings,
@@ -1701,6 +1705,27 @@ pre {
     min-height: 0;
   }
   .settings-sidebar-nav .shell-nav-item { text-decoration: none; }
+  /* 评议列表容器:同款 flex column + 2px 间距(spec §160) */
+  .rt-sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+  }
+  .rt-sidebar-nav .shell-nav-item { text-decoration: none; }
+  /* 评议 running 指示点 —— 跟 repo 树 .shell-nav-dot 同款青色脉冲,label 后 */
+  .rt-running-dot {
+    flex: 0 0 auto;
+    margin-left: var(--space-2);
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    background: var(--accent-cyan);
+    animation: shell-nav-pulse 1.4s ease-in-out infinite;
+  }
+  /* 收起态:评议列表整块隐掉(跟 settings 同款,列表项太多没 rail glyph 设计) */
+  .sidebar.is-rail .rt-sidebar-nav,
+  .sidebar.is-rail .rt-sidebar-toolbar { display: none; }
   .shell-nav-empty {
     font-size: var(--text-sm);
     padding: var(--space-2);

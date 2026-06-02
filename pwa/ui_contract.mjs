@@ -530,3 +530,34 @@ export function navModelFromTree(tree) {
     sections: [{ items }],
   };
 }
+
+// 评议列表(_roundtable_session_summary 的行形状)→ spec §4.2 NavModel。纯函数。
+//   row → NavItem{ id:r.id, label:(question||'(无标题)' 截断 40),
+//                  running:(status 不在终态集 {done,error}) }
+// NavItem.active 留 undefined(调用方按 activeId 比对填,同 navModelFromTree)。
+// **不带 data.tileId / 任何 tile 字段** —— 否则被 _bindSidebarNavHandlers 的
+// `.shell-nav-item[data-tile-id]` 误绑(workspace 拖拽 / focus handler)。
+// running 语义:done / error 是终态 → false;running / queued / 缺 status 都算
+// 进行中 → true(后端 _roundtable_session_summary 的 status 取值集就这 4 个)。
+//
+// **刻意不带 navModelFromTree 的 newAction** —— 评议的新建动作由
+// renderRoundtableSidebarNav 的 toolbar 直接渲(`+新建` 钮),不走
+// NavModel.newAction(评议没有这个字段的消费者)。两函数形状的差异是有意的。
+// label 只回落到 (无标题):后端 _roundtable_session_summary 只产 question,
+// 从不产 title(main.py:_roundtable_session_summary),所以没有 `|| r.title`。
+const _RT_LABEL_MAX = 40;
+const _RT_TERMINAL = new Set(['done', 'error']);
+export function navModelFromRoundtables(roundtables) {
+  const items = (roundtables || []).map((r) => {
+    const raw = r.question || '(无标题)';
+    const label = raw.length > _RT_LABEL_MAX
+      ? raw.slice(0, _RT_LABEL_MAX) + '…'
+      : raw;
+    return {
+      id: r.id,
+      label,
+      running: !_RT_TERMINAL.has(r.status),
+    };
+  });
+  return { sections: [{ items }] };
+}

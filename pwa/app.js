@@ -32,6 +32,7 @@ import {
   tileKeyFor,
   buildSidebarTree,
   navModelFromTree,
+  navModelFromRoundtables,
   loadShellState,
   paneStateReducer,
   _prunePanes,
@@ -1021,6 +1022,14 @@ function render() {
   if (isDesktop && (route.name === 'settings' || route.name === 'settings-section')) {
     const activeSection = route.name === 'settings-section' ? route.id : 'providers';
     renderSettingsSidebarNav(activeSection);
+  }
+
+  // Roundtable(评议)接统一侧栏(spec §160):desktop 下裸 #roundtables 和
+  // #roundtables/<id> 都把评议列表填进 #sidebar-ctx,active = 当前 detail id
+  // (裸列表无 active)。mobile 保持 list + dialog 进 #view(ctx 留空)。
+  if (isDesktop && (route.name === 'roundtables' || route.name === 'roundtable-detail')) {
+    const activeId = route.name === 'roundtable-detail' ? route.id : null;
+    renderRoundtableSidebarNav(activeId);
   }
 
   if (route.name === 'runs' && route.id) {
@@ -4768,75 +4777,51 @@ function _onRtModelResetAll() {
 // _loopRowCache / _mobileCardCache).
 const _rtRowCache = new Map();
 
-function renderRoundtablesView() {
-  const rows = lastData.roundtables || [];
-  const view = $('view');
-  const existingList = view.querySelector('.rt-list');
-
-  // Patch path: rt-list already in DOM AND we still have rows → diff.
-  if (existingList && rows.length > 0) {
-    const existing = new Map();
-    for (const row of existingList.querySelectorAll('.rt-row[data-rt-id]')) {
-      existing.set(row.dataset.rtId, row);
-    }
-    const wantedSet = new Set(rows.map((r) => r.id));
-    // Remove rows for sessions that got deleted.
-    for (const [id, row] of existing) {
-      if (!wantedSet.has(id)) {
-        row.remove();
-        _rtRowCache.delete(id);
-      }
-    }
-    // Diff each wanted row.
-    for (const r of rows) {
-      const newHtml = _roundtableListRow(r);
-      const cached = _rtRowCache.get(r.id);
-      const existingRow = existing.get(r.id);
-      if (existingRow) {
-        if (cached === newHtml) continue;
-        const tmp = document.createElement('div');
-        tmp.innerHTML = newHtml.trim();
-        const fresh = tmp.firstElementChild;
-        existingRow.replaceWith(fresh);
-        _rtRowCache.set(r.id, newHtml);
-        fresh.querySelector('.rt-delete')?.addEventListener('click', onDeleteRoundtable);
-      } else {
-        // New session appeared (created via PWA form or Feishu /rt)
-        existingList.insertAdjacentHTML('beforeend', newHtml);
-        _rtRowCache.set(r.id, newHtml);
-        const fresh = existingList.querySelector(`.rt-row[data-rt-id="${esc(r.id)}"]`);
-        fresh?.querySelector('.rt-delete')?.addEventListener('click', onDeleteRoundtable);
-      }
-    }
-    return;
-  }
-
-  // Full rewrite path.
-  const list = rows.length
-    ? rows.map((r) => {
-        const html = _roundtableListRow(r);
-        _rtRowCache.set(r.id, html);
-        return html;
+// desktop 统一侧栏:评议路由下把评议列表填进 #sidebar-ctx,跟 Workspaces 的
+// repo 树 / Settings 的 section 链占同一槽位(spec §160)。仿 renderSettingsSidebarNav:
+// 复用 .shell-nav-item 视觉,但 **不带 data-tile-id** —— 否则 _bindSidebarNavHandlers
+// 的 `.shell-nav-item[data-tile-id]` 选择器会误命中(workspace 拖拽 / focus)。
+// 列表项纯 <a href> 靠 hashchange → render() 跳转,不绑自定义 handler;activeId
+// 对应当前 detail 项加 .is-active。顶部 toolbar 的 `+新建` 钮触发全局唯一的
+// #rt-new-dialog —— dialog 由 _ensureRtNewDialog() 挂在 document.body 上(不在
+// #view 里),所以 list / detail 两路由下它都在,#view innerHTML 的生灭不影响它。
+// 收起态(.sidebar.is-rail)由 CSS 把整块 .rt-sidebar-nav 隐掉。
+function renderRoundtableSidebarNav(activeId) {
+  const ctx = $('sidebar-ctx');
+  if (!ctx) return;
+  const items = navModelFromRoundtables(lastData.roundtables).sections[0].items;
+  const links = items.length
+    ? items.map((it) => {
+        const cls = 'shell-nav-item shell-nav-repo'
+          + (it.id === activeId ? ' is-active' : '');
+        const dot = it.running ? '<span class="rt-running-dot"></span>' : '';
+        return `<a class="${cls}" href="#roundtables/${encodeURIComponent(it.id)}">`
+          + `<span class="shell-nav-label">${esc(it.label)}</span>${dot}</a>`;
       }).join('')
-    : '<p class="muted">还没有评议。先写一个问题,4 派评议(广)或 1v1 对抗(深)替你辩论。</p>';
-  // Empty-state blurb:第一次用解释两种 mode,有 session 了就不显示。
-  const blurb = rows.length === 0 ? `
-    <p class="muted" style="margin-top:-8px">
-      <strong>4 派评议</strong>:4 个角色(极简派 / 场景派 / 借鉴派 / 悲观派)对决策问题各抒己见,
-      整理员综合 → <em>共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动</em>。
-      <strong>1v1 对抗</strong>:把二值问题拆成正反两个立场死磕同一分歧轴(做 / 不做 / 用 / 不用)。
-    </p>` : '';
-  // toolbar + dialog 模式,跟 Workspaces / Tasks tab 一致。
-  view.innerHTML = `
-    <div class="ws-toolbar">
-      <button class="ws-new-btn" type="button" id="rt-new-btn">+ 新建</button>
+    : '<p class="muted" style="padding:var(--space-2);font-size:12px;margin:0">还没有评议</p>';
+  ctx.innerHTML = `
+    <div class="ws-toolbar rt-sidebar-toolbar">
+      <button class="ws-new-btn" type="button" id="rt-sidebar-new-btn">+ 新建</button>
       <a href="#settings/roles" class="ws-toolbar-link"
          style="margin-left:12px;font-size:13px;text-decoration:none;color:var(--accent)">
         ⚙ 角色配置
       </a>
     </div>
-    ${blurb}
-    <div class="rt-list">${list}</div>
+    <div class="rt-sidebar-nav">${links}</div>`;
+  // detail 路由下 #view 是 round×role 网格、不渲 dialog,所以这里确保全局 dialog 在。
+  _ensureRtNewDialog();
+  // `+新建` 钮:打开全局唯一 dialog。sidebar 每次重渲后重新绑(钮是新 DOM)。
+  // click 时再 ensure 一次(防御:即便上面没调到也保证 dialog 在),然后按当前
+  // 数据重填 model 下拉再 showModal —— 见 _openRtNewDialog。
+  $('rt-sidebar-new-btn')?.addEventListener('click', _openRtNewDialog);
+}
+
+// 新建评议 dialog 的 HTML —— 唯一调用方是 _ensureRtNewDialog(),它把这段
+// 挂到 document.body 上(全局唯一,只渲一次)。原生 <dialog> 是 top-layer 浮层,
+// 挂哪都行;desktop sidebar 的 `+新建` 钮和 mobile #view toolbar 的 `+新建` 钮
+// 都通过 _openRtNewDialog showModal 同一个 dialog。
+function _rtNewDialogHtml() {
+  return `
     <dialog class="ws-new-dialog" id="rt-new-dialog">
       <form data-form-id="new-roundtable" class="ws-new-form">
         <h3>新建评议</h3>
@@ -4894,30 +4879,153 @@ function renderRoundtablesView() {
           <button type="submit">开始辩论</button>
         </div>
       </form>
-    </dialog>
-  `;
-  $('view').querySelector('form[data-form-id="new-roundtable"]')
-    ?.addEventListener('submit', onCreateRoundtable);
-  for (const b of $('view').querySelectorAll('.rt-delete')) {
-    b.addEventListener('click', onDeleteRoundtable);
-  }
-  const dlg = $('rt-new-dialog');
-  const openBtn = $('rt-new-btn');
-  if (dlg && openBtn) {
-    openBtn.addEventListener('click', () => { if (!dlg.open) dlg.showModal(); });
-    dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
-  }
-  // mode picker change → 切换 form 显示(隐藏轮数 / 改 blurb / 切换 model 列表)
-  $('rt-mode-row')?.addEventListener('click', _onRtModeChange);
-  // Populate the model config block. Cache-hot path is synchronous; cold
-  // path fetches once, then patches the slot only (textarea / open state
-  // stay intact thanks to the existing snapshot/restore + draft system).
-  const currentMode = $('view').querySelector('input[name="mode"]')?.value || 'roundtable';
+    </dialog>`;
+}
+
+// 把全局唯一的 #rt-new-dialog 挂到 document.body 上 —— 与 #view innerHTML 的生灭
+// 彻底解耦。原生 <dialog> 走 top-layer 浮层,挂哪都行;挂 body 上 + 全局唯一 +
+// 只渲一次只绑一次,这样:list / detail 两路由下它都在,轮询 render 重画 #view
+// 不会销毁开着的 dialog,detail 页 `+新建` 也能弹(修的 Block)。
+// **幂等**:已存在直接 return(不重渲 → 开着的 dialog / model 下拉状态不被重置;
+// 不重绑 → submit 只触发一次)。
+function _ensureRtNewDialog() {
+  if (document.getElementById('rt-new-dialog')) return;
+  document.body.insertAdjacentHTML('beforeend', _rtNewDialogHtml());
+  _bindRtNewDialog();
+}
+
+// 打开 dialog 的统一入口(sidebar / mobile 的 `+新建` 钮都走它):
+//   ① ensure(保证 dialog 在 body 上、已绑好)
+//   ② 按当前数据重填 model 下拉 —— dialog 只绑一次,但每次打开都重填,这样
+//      用户两次打开之间改的 role override(localStorage)/ mode 能反映出来,
+//      不会停在第一次打开的快照。model 列表本身来自 _rtModelsCache(独立的
+//      /roundtables/models 一次性缓存,不随 lastData 变),所以"绑一次"对它无害。
+//   ③ showModal(已开则不重复开)
+function _openRtNewDialog() {
+  _ensureRtNewDialog();
+  const dlg = document.getElementById('rt-new-dialog');
+  if (!dlg) return;
+  const currentMode = dlg.querySelector('input[name="mode"]')?.value || 'roundtable';
   if (_rtModelsCache) {
     _populateRtModelConfig(currentMode);
   } else {
     ensureRoundtableModels().then(() => _populateRtModelConfig(currentMode));
   }
+  if (!dlg.open) dlg.showModal();
+}
+
+// 绑 dialog 表单逻辑 —— submit / cancel / mode picker。只在 _ensureRtNewDialog
+// 里调一次(dialog 全局唯一,绑一次即可,不重复绑)。所有选择器锚定 dialog 自身
+// (#rt-new-dialog),不锚 #view —— dialog 已搬到 document.body,不在 #view 里。
+function _bindRtNewDialog() {
+  const dlg = document.getElementById('rt-new-dialog');
+  if (!dlg) return;
+  dlg.querySelector('form[data-form-id="new-roundtable"]')
+    ?.addEventListener('submit', onCreateRoundtable);
+  dlg.querySelector('.ws-new-cancel')
+    ?.addEventListener('click', () => dlg.close());
+  // mode picker change → 切换 form 显示(隐藏轮数 / 改 blurb / 切换 model 列表)
+  $('rt-mode-row')?.addEventListener('click', _onRtModeChange);
+  // model 下拉的填充由 _openRtNewDialog 在每次打开时做(cache-hot 同步 / cold
+  // 异步 fetch 一次),这里不再填 —— 绑一次但数据每次打开都新。
+}
+
+function renderRoundtablesView() {
+  const rows = lastData.roundtables || [];
+  const view = $('view');
+
+  // desktop(spec §160):列表已搬去 sidebar(renderRoundtableSidebarNav),#view
+  // 只渲空态提示。dialog 不再渲进 #view —— 由 _ensureRtNewDialog 挂在 body 上
+  // (全局唯一,与 #view 生灭解耦)。幂等:已渲过空态就不重画(避免轮询 render
+  // 重写 #view),但每次都调 _ensureRtNewDialog(它幂等)保证 dialog 在。mobile
+  // 走下面老逻辑,一字不改。
+  if (!window.matchMedia('(max-width: 768px)').matches) {
+    if (view.querySelector('.rt-desktop-empty')) { _ensureRtNewDialog(); return; }
+    view.innerHTML = `
+      <p class="muted rt-desktop-empty">
+        左侧选一个评议查看,或点侧栏 <strong>+ 新建</strong> 开一场。<br>
+        <strong>4 派评议</strong>:4 个角色(极简派 / 场景派 / 借鉴派 / 悲观派)对决策问题各抒己见,
+        整理员综合 → <em>共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动</em>。
+        <strong>1v1 对抗</strong>:把二值问题拆成正反两个立场死磕同一分歧轴(做 / 不做 / 用 / 不用)。
+      </p>`;
+    _ensureRtNewDialog();
+    return;
+  }
+
+  const existingList = view.querySelector('.rt-list');
+
+  // Patch path: rt-list already in DOM AND we still have rows → diff.
+  if (existingList && rows.length > 0) {
+    const existing = new Map();
+    for (const row of existingList.querySelectorAll('.rt-row[data-rt-id]')) {
+      existing.set(row.dataset.rtId, row);
+    }
+    const wantedSet = new Set(rows.map((r) => r.id));
+    // Remove rows for sessions that got deleted.
+    for (const [id, row] of existing) {
+      if (!wantedSet.has(id)) {
+        row.remove();
+        _rtRowCache.delete(id);
+      }
+    }
+    // Diff each wanted row.
+    for (const r of rows) {
+      const newHtml = _roundtableListRow(r);
+      const cached = _rtRowCache.get(r.id);
+      const existingRow = existing.get(r.id);
+      if (existingRow) {
+        if (cached === newHtml) continue;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = newHtml.trim();
+        const fresh = tmp.firstElementChild;
+        existingRow.replaceWith(fresh);
+        _rtRowCache.set(r.id, newHtml);
+        fresh.querySelector('.rt-delete')?.addEventListener('click', onDeleteRoundtable);
+      } else {
+        // New session appeared (created via PWA form or Feishu /rt)
+        existingList.insertAdjacentHTML('beforeend', newHtml);
+        _rtRowCache.set(r.id, newHtml);
+        const fresh = existingList.querySelector(`.rt-row[data-rt-id="${esc(r.id)}"]`);
+        fresh?.querySelector('.rt-delete')?.addEventListener('click', onDeleteRoundtable);
+      }
+    }
+    return;
+  }
+
+  // Full rewrite path.
+  const list = rows.length
+    ? rows.map((r) => {
+        const html = _roundtableListRow(r);
+        _rtRowCache.set(r.id, html);
+        return html;
+      }).join('')
+    : '<p class="muted">还没有评议。先写一个问题,4 派评议(广)或 1v1 对抗(深)替你辩论。</p>';
+  // Empty-state blurb:第一次用解释两种 mode,有 session 了就不显示。
+  const blurb = rows.length === 0 ? `
+    <p class="muted" style="margin-top:-8px">
+      <strong>4 派评议</strong>:4 个角色(极简派 / 场景派 / 借鉴派 / 悲观派)对决策问题各抒己见,
+      整理员综合 → <em>共识点 / 分歧轴 / 关键判断 / 条件性结论 / 下一步行动</em>。
+      <strong>1v1 对抗</strong>:把二值问题拆成正反两个立场死磕同一分歧轴(做 / 不做 / 用 / 不用)。
+    </p>` : '';
+  // toolbar 模式,跟 Workspaces / Tasks tab 一致。dialog 不再渲进 #view —— 由
+  // _ensureRtNewDialog 挂 body 上(全局唯一,desktop / mobile 共用同一个)。
+  view.innerHTML = `
+    <div class="ws-toolbar">
+      <button class="ws-new-btn" type="button" id="rt-new-btn">+ 新建</button>
+      <a href="#settings/roles" class="ws-toolbar-link"
+         style="margin-left:12px;font-size:13px;text-decoration:none;color:var(--accent)">
+        ⚙ 角色配置
+      </a>
+    </div>
+    ${blurb}
+    <div class="rt-list">${list}</div>
+  `;
+  for (const b of $('view').querySelectorAll('.rt-delete')) {
+    b.addEventListener('click', onDeleteRoundtable);
+  }
+  // mobile `+新建` 钮走全局 dialog(ensure + 重填 model 下拉 + showModal)。
+  $('rt-new-btn')?.addEventListener('click', _openRtNewDialog);
+  _ensureRtNewDialog();
 }
 
 // Mode picker 切换时 触发 form 重排:隐藏 / 显示轮数;改 blurb;切换 placeholder;
@@ -5106,7 +5214,7 @@ async function renderRoundtableDetailView(id, opts = {}) {
     row = await api(`/roundtables/${encodeURIComponent(id)}`);
   } catch (err) {
     $('view').innerHTML = `
-      <p><a href="#roundtables" class="back-link">← Roundtable</a></p>
+      <p><a href="#roundtables" class="back-link rt-back-link">← Roundtable</a></p>
       <h1>Roundtable <code>${esc(id)}</code></h1>
       <p class="muted">加载失败: ${esc(err.message)}</p>
     `;
@@ -5313,7 +5421,7 @@ function paintRoundtableDetail(id, row) {
     </div>` : '';
 
   $('view').innerHTML = `
-    <p><a href="#roundtables" class="back-link">← Roundtable</a></p>
+    <p><a href="#roundtables" class="back-link rt-back-link">← Roundtable</a></p>
     <h1 class="rt-question">${esc(row.question || '(无题)')}</h1>
     <div class="rt-meta">
       ${statusTag(status === 'done' ? 'done' : status === 'error' ? 'failed' : 'running')}

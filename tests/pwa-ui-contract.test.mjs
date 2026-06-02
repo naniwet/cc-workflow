@@ -25,6 +25,7 @@ import {
   _prunePanes,
   loadShellState,
   navModelFromTree,
+  navModelFromRoundtables,
 } from '../pwa/ui_contract.mjs';
 
 test('status accent mapping follows the mobile overview design', () => {
@@ -879,4 +880,92 @@ test('navModelFromTree: 空 tree → newAction 仍在,items 空', () => {
   const model = navModelFromTree([]);
   assert.deepEqual(model.newAction, { label: '+ 新建 workspace', data: {} });
   assert.deepEqual(model.sections[0].items, []);
+});
+
+// ---------- navModelFromRoundtables(评议列表 → NavModel 适配器,spec §4.2 / §160)----------
+// 纯函数:输入 lastData.roundtables 数组(_roundtable_session_summary 的行形状),
+// 输出 NavModel = { sections:[{ items:[{ id, label, running }] }] }。NavItem.active
+// 留给调用方按 activeId 比对填(同 navModelFromTree 纪律)。**不带 data.tileId / 任何
+// tile 字段** —— 那会被 _bindSidebarNavHandlers 的 .shell-nav-item[data-tile-id] 误绑。
+// running 判定:status 在终态集 {done, error} → false;其它(running / queued / 缺字段)
+// → true(queued + 执行中都算进行中)。label 来源 question,40 char 截断 + 省略号;
+// question 空 → (无标题)。后端从不产 title,故无 `|| r.title` 回落(见 ui_contract.mjs
+// navModelFromRoundtables 注释 + backend main.py:_roundtable_session_summary)。
+
+test('navModelFromRoundtables: 空列表 → 空 items', () => {
+  const model = navModelFromRoundtables([]);
+  assert.equal(model.sections.length, 1);
+  assert.deepEqual(model.sections[0].items, []);
+});
+
+test('navModelFromRoundtables: 缺省 / null 输入 → 空 items(容错)', () => {
+  assert.deepEqual(navModelFromRoundtables(undefined).sections[0].items, []);
+  assert.deepEqual(navModelFromRoundtables(null).sections[0].items, []);
+});
+
+test('navModelFromRoundtables: 多条 → 按输入顺序,每条 { id, label, running }', () => {
+  const items = navModelFromRoundtables([
+    { id: 'a', question: 'Q1', status: 'done' },
+    { id: 'b', question: 'Q2', status: 'running' },
+    { id: 'c', question: 'Q3', status: 'queued' },
+  ]).sections[0].items;
+  assert.equal(items.length, 3);
+  assert.deepEqual(items.map((i) => i.id), ['a', 'b', 'c']);   // 顺序 = 输入顺序
+  assert.deepEqual(items.map((i) => i.label), ['Q1', 'Q2', 'Q3']);
+});
+
+test('navModelFromRoundtables: running 判定 —— done / error 终态 → false', () => {
+  const items = navModelFromRoundtables([
+    { id: 'a', question: 'Q', status: 'done' },
+    { id: 'b', question: 'Q', status: 'error' },
+  ]).sections[0].items;
+  assert.equal(items[0].running, false);
+  assert.equal(items[1].running, false);
+});
+
+test('navModelFromRoundtables: running 判定 —— running / queued / 缺字段 → true', () => {
+  const items = navModelFromRoundtables([
+    { id: 'a', question: 'Q', status: 'running' },
+    { id: 'b', question: 'Q', status: 'queued' },
+    { id: 'c', question: 'Q' },                       // 缺 status
+  ]).sections[0].items;
+  assert.equal(items[0].running, true);
+  assert.equal(items[1].running, true);
+  assert.equal(items[2].running, true);
+});
+
+test('navModelFromRoundtables: label 截断 40 字符(超长加省略号)', () => {
+  const long = 'x'.repeat(50);
+  const item = navModelFromRoundtables([{ id: 'a', question: long, status: 'done' }])
+    .sections[0].items[0];
+  assert.equal(item.label, 'x'.repeat(40) + '…');
+  assert.equal(item.label.length, 41);              // 40 char + 1 省略号
+});
+
+test('navModelFromRoundtables: 恰好 40 字符不截断', () => {
+  const exact = 'y'.repeat(40);
+  const item = navModelFromRoundtables([{ id: 'a', question: exact, status: 'done' }])
+    .sections[0].items[0];
+  assert.equal(item.label, exact);                  // 无省略号
+});
+
+test('navModelFromRoundtables: question 为空字符串 → (无标题)', () => {
+  // 后端从不产 title,question 空字符串直接回落 (无标题)(不存在 title 回落分支)。
+  const item = navModelFromRoundtables([{ id: 'a', question: '', status: 'done' }])
+    .sections[0].items[0];
+  assert.equal(item.label, '(无标题)');
+});
+
+test('navModelFromRoundtables: question 字段缺失 → (无标题)', () => {
+  const item = navModelFromRoundtables([{ id: 'a', status: 'done' }])
+    .sections[0].items[0];
+  assert.equal(item.label, '(无标题)');
+});
+
+test('navModelFromRoundtables: id 直接取 r.id,不带 data.tileId / tile 字段', () => {
+  const item = navModelFromRoundtables([{ id: 'rt-123', question: 'Q', status: 'done' }])
+    .sections[0].items[0];
+  assert.equal(item.id, 'rt-123');
+  assert.equal(item.data, undefined);               // 不带 data 钩子
+  assert.equal(item.active, undefined);             // 调用方填
 });
