@@ -1104,6 +1104,12 @@ label {
 @media (max-width: 768px) {
   .back-link { display: none; }
 }
+/* Settings 子页的"← Settings"返回链:desktop 下用 sidebar 的 section 链
+ * 替代(方案 A),隐掉页内返回链;mobile 走全局 .back-link mobile-hide +
+ * bottom-nav Settings 回 hub。不动全局 .back-link 规则。 */
+@media (min-width: 769px) {
+  .settings-back-link { display: none; }
+}
 
 /* Markdown rendering for run-detail Output section. Style headings,
  * lists, inline code, and fenced code blocks so Claude's typical output
@@ -1675,6 +1681,9 @@ pre {
   }
   .sidebar.is-rail .sidebar-app span { display: none; }  /* rail 只留图标 */
   .sidebar.is-rail .sidebar-ctx { padding: var(--space-2) 0; }
+  /* 收起态:Settings 的 section 链整块隐掉,rail 只剩 app 图标(section
+     太少,没有 rail glyph 设计,直接收起 → 展开再选) */
+  .sidebar.is-rail .settings-sidebar-nav { display: none; }
 
   .shell-nav-toolbar { flex: 0 0 auto; }
   .shell-nav-tree {
@@ -1683,6 +1692,15 @@ pre {
     gap: 2px;
     min-height: 0;
   }
+  /* Settings section 链容器:复用 .shell-nav-item 行视觉,跟 repo 树同款
+     flex column + 2px 间距(spec §14 阶段 2) */
+  .settings-sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+  }
+  .settings-sidebar-nav .shell-nav-item { text-decoration: none; }
   .shell-nav-empty {
     font-size: var(--text-sm);
     padding: var(--space-2);

@@ -1013,6 +1013,16 @@ function render() {
   if (ctx) ctx.innerHTML = '';
   $('sidebar')?.classList.remove('is-rail');
 
+  // Settings 接统一侧栏(spec §14 阶段 2):desktop 下把 3 个 section 链填进
+  // 刚清空的 #sidebar-ctx,跟 Workspaces repo 树占同一槽位;mobile 保持 hub
+  // 卡片 / 子页 back-link,ctx 留空。Workspaces 的 ctx 仍由
+  // renderDesktopSidebarLayout 在下面重填,不受影响。
+  const isDesktop = !window.matchMedia('(max-width: 768px)').matches;
+  if (isDesktop && (route.name === 'settings' || route.name === 'settings-section')) {
+    const activeSection = route.name === 'settings-section' ? route.id : 'providers';
+    renderSettingsSidebarNav(activeSection);
+  }
+
   if (route.name === 'runs' && route.id) {
     setActiveTab(null);                            // no tab is active for detail page
     renderRunDetailView(route.id);
@@ -5767,7 +5777,37 @@ function _highlight(text, query) {
 // 不用 ssh。secrets.toml / workspaces.json 是后续子项,目前 Settings hub
 // 里显示成 disabled placeholder。
 
+// desktop 统一侧栏:Settings 路由下把 3 个 section 链填进 #sidebar-ctx,跟
+// Workspaces 的 repo 树占同一槽位(spec §14 阶段 2)。复用 .shell-nav-item
+// 视觉,但 **不带 data-tile-id** —— 否则 _bindSidebarNavHandlers 的
+// `.shell-nav-item[data-tile-id]` 选择器会误命中。纯 <a href> 靠 hashchange
+// → render() 跳转,不绑自定义 handler;active section 加 .is-active。
+// 收起态(.sidebar.is-rail)由 CSS 把整块 .settings-sidebar-nav 隐掉。
+function renderSettingsSidebarNav(activeSection) {
+  const ctx = $('sidebar-ctx');
+  if (!ctx) return;
+  const sections = [
+    { id: 'providers', label: 'Providers' },
+    { id: 'roles', label: 'Roles' },
+    { id: 'agents', label: 'Agents' },
+  ];
+  const links = sections.map((s) => {
+    const cls = 'shell-nav-item shell-nav-repo'
+      + (s.id === activeSection ? ' is-active' : '');
+    return `<a class="${cls}" href="#settings/${s.id}">`
+      + `<span class="shell-nav-label">${esc(s.label)}</span></a>`;
+  }).join('');
+  ctx.innerHTML = `<div class="settings-sidebar-nav">${links}</div>`;
+}
+
 function renderSettingsView() {
+  // desktop:#settings 无 section → 默认渲 providers 内容(sidebar nav 由
+  // render() 填,active=providers)。**不 replaceState**,hash 留 #settings,
+  // 让 Settings tab 的"裸 hash"稳定指向默认子页。mobile 保持 hub 卡片。
+  if (!window.matchMedia('(max-width: 768px)').matches) {
+    renderSettingsProvidersView();
+    return;
+  }
   const view = $('view');
   view.innerHTML = `
     <h2 style="margin:0 0 var(--space-3)">Settings</h2>
@@ -5810,7 +5850,7 @@ function renderSettingsProvidersView() {
   const list = lastData.providers || [];
   const rows = list.map(_settingsProviderRow).join('');
   view.innerHTML = `
-    <p style="margin:0 0 var(--space-2)"><a href="#settings" class="back-link">← Settings</a></p>
+    <p style="margin:0 0 var(--space-2)"><a href="#settings" class="back-link settings-back-link">← Settings</a></p>
     <div class="ws-toolbar">
       <button class="ws-new-btn" type="button" id="provider-new-btn">+ New provider</button>
     </div>
@@ -5850,7 +5890,7 @@ function renderSettingsProvidersView() {
 async function renderSettingsRolesView() {
   const view = $('view');
   view.innerHTML = `
-    <p style="margin:0 0 var(--space-2)"><a href="#settings" class="back-link">← Settings</a></p>
+    <p style="margin:0 0 var(--space-2)"><a href="#settings" class="back-link settings-back-link">← Settings</a></p>
     <h3 style="margin:0 0 var(--space-2)">Roundtable Roles</h3>
     <p class="muted" style="margin:0 0 var(--space-3)">配每个角色默认用哪个 model。新建 round 表单的 per-role 下拉仍可临时 override 这里的默认。</p>
     <div id="roles-table" class="muted">加载中...</div>`;
@@ -6041,7 +6081,7 @@ function _onRolePromptReset(e) {
 async function renderSettingsAgentsView() {
   const view = $('view');
   view.innerHTML = `
-    <p style="margin:0 0 var(--space-2)"><a href="#settings" class="back-link">← Settings</a></p>
+    <p style="margin:0 0 var(--space-2)"><a href="#settings" class="back-link settings-back-link">← Settings</a></p>
     <h3 style="margin:0 0 var(--space-2)">Subagents</h3>
     <p class="muted" style="margin:0 0 var(--space-3)">
       管理 user-global subagents(<code>~/.claude/agents/*.md</code>)。改完 Claude Code 立刻生效,无需重启 backend。
