@@ -48,8 +48,8 @@
 ### 阶段 1-4 — 页面接入(每个独立 ship)
 1. **Workspaces**(第一个真实消费者,边接边验证组件)— 重构现有 `baf81ea` 代码用公共组件 + P1 去卡片 + P2 coding 报文流。
 2. **Settings** — shell + sections nav + 现有表单 pane。
-3. **Roundtable** — shell + 评议列表 nav + transcript(复用 conversation 渲染角色发言 + markdown)。
-4. **Tasks** — shell + loop 列表 nav + loop 详情。
+3. **Roundtable** — shell + 评议列表 nav + transcript(**保留 round×role 网格,不套 conversation**;共用视觉 token + 扩展的 markdown)。
+4. **Tasks** — shell + loop 列表 nav + loop 详情(run 历史**复用 conversation renderer**)。
 
 ### 排期原则
 - 公共组件**先被 Workspaces(最复杂场景)用上验证,接口契约定稳**,再铺 Settings/Roundtable/Tasks。
@@ -112,7 +112,7 @@ NavModel = { newAction?: {label,data}, sections: [{ label?, items: NavItem[] }] 
 ### 4.3 `conversation` renderer
 **输入**:归一化 turn 流。**输出**:去卡片 turn 流 + tool block + markdown,(可选)composer。
 
-**归一化 Turn/Event 契约**(Workspaces 与 Roundtable 都映射进来):
+**归一化 Turn/Event 契约**(Workspaces pane 与 Tasks loop 历史用;**Roundtable 不用**,见下):
 ```
 Turn = {
   id, role,                   // role: 'user'|'assistant'|'system'|<评议角色名>
@@ -123,13 +123,14 @@ Turn = {
 Event = { kind: 'text'|'thinking'|'tool_use'|'tool_result'|'result', ... }  // 沿用现有
 ```
 - Workspaces:现有 run/turn/event 直接是这个形状(`_renderTurnEvent` 重做)。
-- Roundtable:角色发言 → Turn{role=角色名, events:[{kind:'text', text}]}(无 tool 事件)。所以 conversation renderer 对"无 tool 的纯文本 turn"要优雅退化。
+- **Tasks(loop 历史)**:loop 详情里历史 run 已用 turn 渲染(`turn-collapsed`)→ 直接是这个形状,是 conversation renderer 的**第二个消费者**(验证它不只服务 Workspaces)。
+- **Roundtable 不用这个 renderer(已核实)**:它的 transcript 是 **round × role 二维网格**(turn=`{type, round, role, content}`,按 Round 1/2/3 × 角色分块 + synth/reviewer/verdict 特殊块),**不是线性 turn 流**。强塞进线性 renderer 会丢掉网格语义 → Roundtable **保留自己的网格布局**,只共享 §4.1 视觉 token + 下面的 markdown 渲染。
 
 **纯函数(进 `ui_contract.mjs` + TDD)**:
 - `formatToolUse(name, input)` → `{verb,target,glyph,kind}`(Bash/Edit/Write/Read/Grep/未知)。
 - `renderEditDiff(oldStr, newStr)` → diff 行模型(MVP:全删旧+全增新两块,见 §9 Q)。
 - `pairToolEvents(events)` → 把 `tool_use` 与紧跟的 `tool_result` 配成 block 列表。
-- markdown:**vendor `marked.min.js`**(无 build step,`<script>` 引);渲染输出按不可信处理转义防 XSS。
+- markdown:**扩展现有 `renderMarkdown(s)`(app.js:55,roundtable 已在用)**,补表格(+ 标题 / 有序列表)。DRY、零新依赖,Workspaces 报文 + Roundtable 共用同一渲染器。输出按不可信处理转义防 XSS。
 
 **渲染规则**(§见 mockup):工具块默认紧凑(单行 call,diff/output 折叠)、`isError` 红且默认展开、assistant text 渲染 markdown、user prompt 弱气泡、一连串动作左侧 rail 串联。
 
@@ -156,8 +157,8 @@ renderComposer({ placeholder, model, running, hasDraft }) + binder
 
 ## 6. 阶段 2-4(各自独立 plan,这里只勾勒映射)
 - **Settings**(已核现状,确认契合,**Workspaces 之后第一个接**):现状是 `renderSettingsView` hub 卡片 + `renderSettingsSectionView` 子页 +"← Settings"返回链(钻入/返回)。改造 = `navModelFromSettings` 产出 3 个平铺 nav 项(Providers / Roles / Agents,无 children / running)→ shell-nav 常驻;各子页内容(`renderSettingsProvidersView`/`RolesView`/`AgentsView` 复用,**去掉 back-link 包壳**)填 shell-main;移动端走 shell 抽屉。是 UX 升级(标准"左 section 列表 + 右内容",切换不用退回 hub),且**没有 conversation / 多 pane / 拖拽** → 验证 shell 最纯粹布局 + 收起 + 抽屉 + 平铺 nav-model 的最低风险消费者。
-- **Roundtable**:`navModelFromRoundtables`(评议列表)→ shell;transcript 用 conversation renderer(角色发言映射成 Turn)。验证 conversation 对"无 tool 纯文本 turn"退化。
-- **Tasks**:`navModelFromLoops` → shell;loop 详情/历史填 main。
+- **Roundtable**(已核现状):transcript 是 **round×role 网格**(非线性 turn 流,`{type,round,role,content}` + synth/reviewer/verdict 块)→ **不套 conversation renderer**,保留现有网格渲染。改造 = `navModelFromRoundtables`(评议列表)→ shell-nav + 网格 transcript 填 main + 套 §4.1 视觉 token + 共用扩展后的 `renderMarkdown`。验证 shell 对"list→detail + 自定义 main"场景。
+- **Tasks**(已核现状):扁平 loop 列表(`.loop-row`)+ 详情;详情里历史 run **已用 turn 渲染** → `navModelFromLoops` → shell-nav + loop 详情填 main,run 历史**复用 conversation renderer**(conversation 的第二个真实消费者)。
 
 > 阶段 2-4 各自写 plan 前,先确认阶段 0 组件接口在该 tab 站得住;站不住就回头扩接口(并回写本 spec §4)。
 
@@ -176,13 +177,13 @@ renderComposer({ placeholder, model, running, hasDraft }) + binder
 | 抽公共 shell/nav-model/conversation 接口 | **几乎不可逆**(组件契约)→ 80% 心思在这 | 接口设计前多 review;定后尽量不动 |
 | 一次性程序级(4 tab)而非样板先行 | 痛但可行 | 用户已决策;靠"边做边验证 + 分阶段 ship"控风险 |
 | nav-model 统一抽象 | 痛但可行 | 某 tab 套不进 → 扩 NavItem 字段(向前兼容) |
-| markdown vendor marked | 痛但可行 | 想去依赖改手写 |
+| markdown 扩展现有 renderMarkdown(补表格) | 轻易可逆 | 边界 case 太多再考虑 vendor |
 | diff MVP 全删全增 | 轻易可逆 | 需要精确再上行级 LCS |
 | 移动端导航统一抽屉(退役 carousel) | 痛但可行 | git 留旧码可回滚 |
 
 ## 9. Open Questions(给倾向)
 1. **diff 精度**:MVP 全删旧+全增新够看?倾向是,精确 diff 迭代。
-2. **markdown**:vendor `marked.min.js`?倾向是。
+2. ~~markdown vendor~~ **已定**:扩展现有 `renderMarkdown`(app.js:55)补表格,不引第三方(roundtable 已用它 → DRY、共用)。
 3. **nav-model 抽象 vs 各 tab 各写 nav HTML**:抽 nav-model(shell 统一渲染 full+rail)是更大复用但更强抽象;退路是 shell 只给布局+收起机制、各 tab 自己给 navHtml/railHtml。倾向**抽 nav-model**(rail/角标/active 逻辑只写一遍),但这是最该 review 的接口——若觉得太重可降级成"各 tab 给 HTML"。
 4. **阶段 0 与阶段 1 边界**:倾向**合并推进**(组件跟着 Workspaces 一起长出来),不先憋一个抽象的阶段 0 再用——避免空中楼阁。
 
@@ -196,6 +197,6 @@ renderComposer({ placeholder, model, running, hasDraft }) + binder
 ## 11. 不做(YAGNI)
 - 不预先造抽象阶段 0(组件随 Workspaces 长出)。
 - 不做精确语法高亮、可调侧栏宽、pane 拖拽换位。
-- 不把 conversation 用到 Workspaces/Roundtable 以外。
+- 不把 conversation 用到 Workspaces pane / Tasks loop 历史以外(Roundtable 明确不用,保留网格)。
 - 不为 Tasks/Settings 想象需求提前加 nav-model 字段。
 - 后端不动(除复用 cancel)。
