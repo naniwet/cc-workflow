@@ -155,7 +155,7 @@ renderComposer({ placeholder, model, running, hasDraft }) + binder
 阶段 1 内部再分批:**1a 去卡片+composer+shell(收起/抽屉)** → **1b coding 报文流(tool block/diff/markdown)**。两批各自 review + ship。
 
 ## 6. 阶段 2-4(各自独立 plan,这里只勾勒映射)
-- **Settings**:`navModelFromSettings`(固定 sections)→ shell;现有各设置表单填 main。低风险,验证 shell 对"平铺无 children + 无 conversation"场景。
+- **Settings**(已核现状,确认契合,**Workspaces 之后第一个接**):现状是 `renderSettingsView` hub 卡片 + `renderSettingsSectionView` 子页 +"← Settings"返回链(钻入/返回)。改造 = `navModelFromSettings` 产出 3 个平铺 nav 项(Providers / Roles / Agents,无 children / running)→ shell-nav 常驻;各子页内容(`renderSettingsProvidersView`/`RolesView`/`AgentsView` 复用,**去掉 back-link 包壳**)填 shell-main;移动端走 shell 抽屉。是 UX 升级(标准"左 section 列表 + 右内容",切换不用退回 hub),且**没有 conversation / 多 pane / 拖拽** → 验证 shell 最纯粹布局 + 收起 + 抽屉 + 平铺 nav-model 的最低风险消费者。
 - **Roundtable**:`navModelFromRoundtables`(评议列表)→ shell;transcript 用 conversation renderer(角色发言映射成 Turn)。验证 conversation 对"无 tool 纯文本 turn"退化。
 - **Tasks**:`navModelFromLoops` → shell;loop 详情/历史填 main。
 
