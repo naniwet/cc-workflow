@@ -225,3 +225,32 @@ renderComposer({ placeholder, model, running, hasDraft }) + binder
 - 反悔成本:轻易可逆(CSS + turn HTML 结构,无 schema/接口改)。
 
 **验证**:这两条都是纯前端 + 无自动化(DOM/CSS)→ 用 render harness 真渲染截图验(1a 已证明 harness 能抓真 bug)。
+
+---
+
+## 13. v3 迭代(2026-06-02,v2 真机后用户反馈:still 不好用)
+
+v2 真机后两条:报文 doc-flow 半拉子(turn 外壳没动 → 提示词显示 2 次 + result.text 重复回复 + 大 Collapse 横条);侧边栏割裂(app-rail + workspace 两条竖条)。**参照系:Claude 会话 UI 本身**(用户气泡 + 助手 markdown 文档流)。
+
+### 13.1 报文重构 turn 结构(对齐 Claude 会话 UI)
+- **提示词只出现一次** = 一个干净用户气泡(右对齐、圆角、弱底,仅文本 + 弱时间戳)。**删掉** turn-head 的"提示词当标题"那一行、`你 ›` 边框块。气泡本身(或其上一个小 chevron)= 折叠开关。
+- **助手回复** = 全宽流动 markdown 文档(左对齐),顶部一个极轻 `Claude` 指示或无;**渲染富 markdown**(见 13.3)。
+- **meta** = 助手块末尾一小撮 `✓ <用时> · <in>→<out> tok`(弱)。**删掉** v2 的 `✓ 完成` 块 + 重复的 result.text 灰行(result event 只取 meta,**丢弃 result.text** —— 它跟助手正文重复)。
+- **折叠** = 用户气泡上的小 chevron(或点气泡)。**删掉整条 `Collapse` 横条**。
+- 一句问答 = `[用户气泡 ×1] + [助手文档] + [行末 meta]`,无任何重复、无横条。
+- 作用域 PC + mobile 共享;解析逻辑(parseStreamLinesToEvents/_loadTurnEvents)不动。
+
+### 13.2 侧边栏统一(消割裂)
+- v2 的 `[app-rail 52px][workspace 栏 210px]` 两条竖条 → **合并成一条侧边栏(~230px)**:
+  - 顶部:app 导航区(Workspaces / Tasks / Roundtable / Settings,图标+名,紧凑竖列或分段),**正经名字**(不再 Table/Set 截断;Roundtable 用"评议")。
+  - 下方:当前 tab 的上下文列表(Workspaces = repo 树;其它 tab 接 shell 后填各自列表)。
+  - **同一块底色,顶/下之间至多一条极淡分隔,不要两栏中缝** → 读成一块,不割裂。
+  - 收起 rail(52px,1a 的)保留:收起态 = 仅图标(app 导航 + repo 首字母)。
+  - desktop topbar 仍隐藏;mobile 不变(bottom-nav)。
+- 即:**取消独立 app-rail,app 导航并入统一侧边栏顶部**。
+
+### 13.3 renderMarkdown 增强(让助手正文读起来像文档)
+- 现 `renderMarkdown` 只做 code-block / bullet / p。补:**标题(`#`/`##`/`###`)、粗体 `**`、inline `\`code\``、有序列表 `1.`**(表格留 1b)。
+- **保持 esc-before-replace 纪律**(先全文 esc 再正则,防 XSS —— code-review 已确认现有实现安全,增强时不破坏)。
+
+**验证**:render harness 真渲染,死盯"一句问答只出现一次 + 像 Claude 文档流 + 侧边栏一块不割裂"。
