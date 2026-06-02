@@ -4763,12 +4763,17 @@ function _onRtModelRadioClick(e) {
   //   - the picked role's <details> snaps back to collapsed (the new DOM
   //     defaults to closed) and shows the new pick in the summary row
   //   - the selected dot is repainted on the right radio
-  _populateRtModelConfig();
+  // mode 从 hidden input 读(此刻已被上次 mode 切换的 _onFormPickerClick 写定,
+  // 稳定可靠);不传会回落 'roundtable',把 1v1 的正方/反方冲成 4 派。
+  const mode = document.querySelector('input[name="mode"]')?.value || 'roundtable';
+  _populateRtModelConfig(mode);
 }
 
 function _onRtModelResetAll() {
   _saveRtRoleModels({});
-  _populateRtModelConfig();
+  // 同 _onRtModelRadioClick:从 hidden input 读当前 mode,别回落 'roundtable'。
+  const mode = document.querySelector('input[name="mode"]')?.value || 'roundtable';
+  _populateRtModelConfig(mode);
   showToast('info', '已恢复全部默认', { ttl: 1200 });
 }
 
@@ -5030,11 +5035,18 @@ function renderRoundtablesView() {
 
 // Mode picker 切换时 触发 form 重排:隐藏 / 显示轮数;改 blurb;切换 placeholder;
 // 重新 populate model config(过滤 1v1 / roundtable 各自的角色)。
-// 用 click delegation 而不是 change event,跟 _onFormPickerClick 同样的事件
-// 序列 — 它会先把 hidden input 改完,再冒泡到这里。
+// 用 click delegation 而不是 change event。注意:_onFormPickerClick 绑在
+// document 上,在冒泡里晚于本 handler 触发(本 handler 绑在更近的 #rt-mode-row),
+// 所以这里读它写的 hidden input 会拿到旧值 —— mode 改从被点选项的 data-value
+// 读,详见函数体内注释。
 function _onRtModeChange(e) {
-  if (!e.target.closest('.form-picker-radio')) return;
-  const mode = document.querySelector('input[name="mode"]')?.value || 'roundtable';
+  const btn = e.target.closest('.form-picker-radio');
+  if (!btn) return;
+  // mode 直接读被点选项的 data-value,不读 hidden input:写 hidden 的
+  // _onFormPickerClick 绑在 document 上,在事件冒泡里晚于本 handler(绑在更近的
+  // #rt-mode-row 上)触发 —— 此刻读 hidden 会拿到切换前的旧 mode(race),
+  // 导致切到 1v1 仍按 4 派重渲。读 data-value 是切后的新值,无 race。
+  const mode = btn.dataset.value || 'roundtable';
   const roundsRow = document.getElementById('rt-rounds-row');
   if (roundsRow) roundsRow.style.display = mode === 'oneonone' ? 'none' : '';
   const blurb = document.getElementById('rt-mode-blurb');
