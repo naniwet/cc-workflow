@@ -44,11 +44,11 @@ const esc = (s) =>
   );
 
 // Minimal markdown renderer — covers what Claude actually emits ~95% of
-// the time: **bold**, *italic*, ## headings, - bullets, ``` fenced code,
-// `inline code`. Deliberately NOT a full spec (no links / images / tables /
-// blockquotes / ordered lists) — keeps the implementation under 40 lines
-// of regex without the corner-case zoo that a real parser inherits. When
-// something real breaks, add the specific pattern; don't reach for marked.js.
+// the time: **bold**, *italic*, ## headings, - bullets, 1. ordered lists,
+// ``` fenced code, `inline code`. Deliberately NOT a full spec (no links /
+// images / tables / blockquotes) — keeps the implementation small without
+// the corner-case zoo that a real parser inherits. When something real
+// breaks, add the specific pattern; don't reach for marked.js.
 //
 // Strategy: pull code blocks out first (so their contents don't trigger
 // inline patterns), then esc the rest, then walk the inline / block
@@ -72,6 +72,13 @@ function renderMarkdown(s) {
   h = h.replace(/(?:^[*-] .+\n?)+/gm, (block) => {
     const items = block.split('\n').filter(l => /^[*-] /.test(l));
     return '<ul>' + items.map(l => `<li>${l.slice(2)}</li>`).join('') + '</ul>\n';
+  });
+  // Ordered groups: run of `1. foo` lines → one <ol>. Mirrors the bullet
+  // rule above; runs AFTER it so the two don't fight over the same line.
+  // `\d+\. ` marker is stripped per-line (content already esc'd upstream).
+  h = h.replace(/(?:^\d+\. .+\n?)+/gm, (block) => {
+    const items = block.split('\n').filter(l => /^\d+\. /.test(l));
+    return '<ol>' + items.map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('') + '</ol>\n';
   });
   // Restore fenced code blocks BEFORE paragraph-wrapping, so the wrap
   // step sees a real <pre> at the line start and skips it (vs. wrapping
@@ -3559,89 +3566,61 @@ function _workspaceTurnHtml(turn) {
   const status = turn.status || '?';
   const prompt = turn.prompt || '';
   const expanded = !!turn.expanded;
-  // Collapsed head 两行布局:
-  //   ▶ prompt 首行 .................. ✓ 53s 36m ago
-  //   ↳ reply preview ...
-  // reply preview 来源 turn.output_preview(后端 db._RUN_SUMMARY_COLS 用
-  // head+tail+elision 拼出的预览,长 reply 也能看到末尾结论)。没有
-  // output_preview(running / queued / cron 没存)就退化为单行 prompt。
-  // expanded 时 reply preview 被 CSS 隐藏(body 里全文 reply 已经看到)。
-  const summary = (prompt.split(/\r?\n/).find(Boolean) || '(empty prompt)').slice(0, 200);
-  const replyRaw = String(turn.output_preview || '').trim();
-  // 把空行 / 单独 '…' 行剔掉,其余原换行保留 —— CSS 用 line-clamp:2 wrap,
-  // 多行内容自然显示前两行可读。
-  const replyPreview = replyRaw
-    ? replyRaw.split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter((l) => l && l !== '…')
-        .join(' ')           // 用空格连接,让 2 行 clamp 自己按宽度 wrap
-        .slice(0, 400)        // 兜底硬截一下,免得超长 reply 占内存
-    : '';
+  // 对齐 Claude 会话 UI(spec §13.1):一个 turn 只三块 ——
+  //   ① 用户气泡 ×1(右对齐圆角弱底,仅 prompt 文本 + 弱时间戳)
+  //   ② 助手文档(展开时全宽流动 markdown,顶一个极轻 CLAUDE 指示)
+  //   ③ 行末 meta(助手块末尾 ✓ 用时 · tokens,由 result event 渲染)
+  // 提示词全局只出现这一次(气泡)。删掉了 v2 的"提示词当标题"summary 行、
+  // reply-preview、整条 Collapse 横条、✓完成大块。
   const cancelBtn = status === 'running' && turn.id
     ? `<button class="run-cancel-btn turn-cancel" type="button" data-run-id="${esc(turn.id)}">✕ Cancel</button>`
     : '';
   const approvals = pendingApprovalsFor(turn.id || '').map(approvalBlockHtml).join('');
   const startedRel = turn.started_at ? timeAgo(turn.started_at) : '';
   const startedAbs = turn.started_at ? new Date(turn.started_at * 1000).toLocaleString() : '';
-  // doc-flow(spec §12.2):用户 prompt = 弱前缀块(`你 ›` + 文本,弱色/弱底),
-  // 不再 User 标签 + 边框盒。始终是 expanded body 的第一块。起始时间已挪到
-  // head meta,这里不重复。
-  const userHeaderHtml = `
-    <div class="turn-user">
-      <span class="turn-user-prefix">你 ›</span>
-      <span class="turn-user-text">${esc(prompt)}</span>
-    </div>`;
-  // turn 顶 CLAUDE 轻指示:取代每条 Reply 左标签,整 turn 只一个。
-  const asstIndicatorHtml = `<div class="turn-asst-indicator">CLAUDE</div>`;
+  // ① 用户气泡 = head 本身(可点击折叠)。左侧小 chevron(▸/▾),复用
+  //    .turn-toggle handler。气泡内仅 prompt 文本 + 弱小时间戳。
+  // turn 顶 CLAUDE 轻指示:整 turn 只一个,取代每条 Reply 左标签。
+  const asstIndicatorHtml = `<div class="turn-asst-indicator">Claude</div>`;
+  // running/queued turn 还没 result event → 没有行末 meta,补一个"处理中…"
+  // 指示,免得展开时助手区空白看着像崩了。
+  const pendingHint = (status === 'running' || status === 'queued')
+    ? `<div class="turn-pending-hint muted">处理中…</div>`
+    : '';
   // turn-events 容器:expanded 时 _bindWorkspaceSessionHandlers 会触发
   // 一次 _loadTurnEvents 把 /runs/{id}/tail 的 stream-jsonl 解析渲染进来。
   // 同一 runId 二次 mount 时(主 poll 触发的 view rerender),容器会被
   // 重建为空状态,loader 据此判断要不要重新拉取。
+  // data-elapsed:把 turn 级用时挂在容器上,result event 渲染行末 meta 时
+  //   读它出"用时"(result event 自己只带 tokens,没有 elapsed)。
+  const elapsedAttr = turn.elapsed_s != null ? ` data-elapsed="${esc(turn.elapsed_s)}"` : '';
   const eventsHtml = expanded
-    ? `<div class="turn-events" data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}">
+    ? `<div class="turn-events" data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}"${elapsedAttr}>
          <div class="muted turn-events-loading">Loading events…</div>
        </div>`
-    : `<div class="turn-events" data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}"></div>`;
+    : `<div class="turn-events" data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}"${elapsedAttr}></div>`;
 
   return `
     <article class="turn turn-${expanded ? 'expanded' : 'collapsed'} turn-status-${esc(status)}"
              data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}">
       <button class="turn-head turn-toggle" type="button"
               data-run-id="${esc(turn.id || '')}" data-expanded="${expanded ? '1' : '0'}">
-        <span class="turn-caret">${expanded ? '▼' : '▶'}</span>
-        <span class="turn-main">
-          <span class="turn-summary">${esc(summary)}</span>
-          ${replyPreview
-            ? `<span class="turn-reply-preview">↳ ${esc(replyPreview)}</span>`
-            : ''}
-        </span>
-        <span class="turn-meta">
-          ${statusIcon(status)}
-          ${turn.elapsed_s != null ? `<span class="turn-elapsed">${esc(turn.elapsed_s)}s</span>` : ''}
-          ${startedRel ? `<span class="turn-started" title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
+        <span class="turn-caret">${expanded ? '▾' : '▸'}</span>
+        <span class="turn-user">
+          <span class="turn-user-text">${esc(prompt)}</span>
+          ${startedRel ? `<span class="turn-user-time" title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
         </span>
       </button>
       ${cancelBtn}
       <div class="turn-body">
-        ${userHeaderHtml}
         ${asstIndicatorHtml}
         ${eventsHtml}
+        ${pendingHint}
         ${approvals}
-        <button class="turn-collapse-foot turn-toggle" type="button"
-                data-run-id="${esc(turn.id || '')}" data-expanded="1"
-                title="Collapse this turn">
-          <span class="turn-caret">▲</span> Collapse
-        </button>
       </div>
     </article>
   `;
 }
-// ↑ collapse-foot 按钮:expanded turn body 最末尾加一个收起按钮 ——
-//   reply / events 长起来后,用户不用再滚到最顶 chevron 才能收起。
-//   class .turn-toggle 让现有 _onWorkspaceTurnToggle handler 自动绑上。
-//   data-expanded=1 hardcode 因为它只在 .turn-expanded 时 CSS 可见,
-//   点击必然是 "从展开切到收起"。CSS 用 .turn-collapsed .turn-collapse-foot
-//   { display: none } 收起态隐藏自身。
 // ↑ approvals 放在最后 —— bug:之前夹在 USER 和 events 之间,events 长出
 //   来后 approval 被推到上方,auto-scroll-to-bottom 之后用户看不到 Approve
 //   按钮。挪到 events 后面,turn 的最底部就是 [Approve][Deny],跟输入框
@@ -3746,7 +3725,10 @@ async function _loadTurnEvents(runId) {
 
     const newLines = allLines.slice(already);
     const newEvents = parseStreamLinesToEvents(newLines);
-    const html = newEvents.map(_renderTurnEvent).join('');
+    // 把 turn 级用时(挂在容器 data-elapsed)传给每个 event —— result event
+    // 渲染行末 meta 要用它出"用时"。
+    const elapsedS = container.dataset.elapsed;
+    const html = newEvents.map((ev) => _renderTurnEvent(ev, elapsedS)).join('');
 
     // 只有 html 真有内容才 remove loading + 插入。html 可能为空 ——
     // 比如 system init 行被 parser 过滤,或 thinking/tool 被 "Show all
@@ -3814,7 +3796,9 @@ function _foldedTextHtml(text) {
     </div>`;
 }
 
-function _renderTurnEvent(ev) {
+// elapsedS:turn 级用时(秒),由 _loadTurnEvents 从 .turn-events 容器的
+//   data-elapsed 取出传入 —— result event 自己只带 tokens,没有 elapsed。
+function _renderTurnEvent(ev, elapsedS) {
   // 全局过滤:默认只显示 reply / result(text / result kind),用户在 ⚙
   // 打开 "Show all events" 时再展示 thinking / tool_use / tool_result。
   // 例外:tool_result.isError 一律显示 —— 错误不能在 default 模式被静默
@@ -3861,16 +3845,18 @@ function _renderTurnEvent(ev) {
       </div>`;
   }
   if (ev.kind === 'result') {
-    // doc-flow(spec §12.2):去 Done 标签 + 大块,收成小字脚注 ——
-    //   ✓ 完成 · <in>→<out> tokens
-    // 用时不放(turn-head 已有 elapsed,不重复)。result.text 不丢,放脚注
-    // 下方极小字(视觉最弱)。
-    const tokens = `${ev.inTokens}→${ev.outTokens} tokens`;
+    // 对齐 Claude 会话 UI(spec §13.1):助手块末尾一小撮行末 meta ——
+    //   ✓ <用时>s · <in>→<out> tok
+    // 用时来自 turn 级 elapsedS(容器 data-elapsed),tokens 来自本 event。
+    // ev.text 故意丢弃 —— 它跟助手正文(text event 渲染的 markdown)重复,
+    // 是 v2 灰字重复的根因。
+    const elapsedHtml = elapsedS != null && elapsedS !== ''
+      ? `<span class="turn-meta-elapsed">${esc(elapsedS)}s</span> · `
+      : '';
     return `
-      <div class="turn-done-foot">
-        <span class="turn-done-mark">✓ 完成</span>
-        <span class="turn-done-tokens">· ${esc(tokens)}</span>
-        ${ev.text ? `<div class="turn-done-foot-text">${esc(ev.text)}</div>` : ''}
+      <div class="turn-meta-foot">
+        <span class="turn-meta-mark">✓</span>
+        ${elapsedHtml}<span class="turn-meta-tokens">${esc(ev.inTokens)}→${esc(ev.outTokens)} tok</span>
       </div>`;
   }
   return '';
@@ -3935,11 +3921,9 @@ function _onWorkspaceTurnToggle(e) {
   const next = btn.dataset.expanded !== '1';
   workspaceTurnOverrides[runId] = next;
   btn.dataset.expanded = next ? '1' : '0';
-  // 同步整个 turn 里所有 .turn-caret(head 的 ▶/▼ + foot 的 ▲ 之类):
-  // 收起态都用 ▶,展开态都用 ▼。Foot 按钮的 ▲ 是装饰性的,被覆盖也无妨
-  // —— foot 收起时整个 CSS 隐藏,文字看不到。head 是关键,必须同步。
+  // 同步 head 左侧 chevron:展开 ▾,收起 ▸(spec §13.1 的小 chevron)。
   for (const caret of turn?.querySelectorAll('.turn-caret') || []) {
-    caret.textContent = next ? '▼' : '▶';
+    caret.textContent = next ? '▾' : '▸';
   }
   // 用 class 控制 body 可见性,不用 [hidden] —— author 的
   // `.turn-body { display: flex }` 特异性盖过 UA 的 [hidden] {

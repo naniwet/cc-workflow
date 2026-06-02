@@ -1186,8 +1186,7 @@ pre {
   font-size: var(--text-sm);
   color: var(--text-tertiary);
   line-height: var(--lh-tight);
-  /* 2 行 clamp,同 .turn-reply-preview。-webkit-* 前缀全主流浏览器都
-     支持(虽然带 webkit 名字)。 */
+  /* 2 行 clamp。-webkit-* 前缀全主流浏览器都支持(虽然带 webkit 名字)。 */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -2142,15 +2141,12 @@ pre {
   background: transparent;
   overflow: hidden;
 }
+/* head = 折叠开关 + 用户气泡(spec §13.1)。chevron 在左,气泡靠右对齐
+   (Claude 会话 UI 里用户消息靠右)。整行可点 → 折叠/展开。 */
 .turn-head {
-  /* 设计图 §3.2:收起态可以 1 行 prompt 或 2 行(prompt + reply preview),
-     min-height 52 保证只有 prompt 时也跟旧版一样高;有 reply 自然撑到
-     72-80。done turn 都有 output_preview → 都 2 行,等高;running/queued
-     没 preview → 1 行,跟"在跑"的视觉提示对得上。 */
-  min-height: 52px;
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   background: transparent;
@@ -2159,66 +2155,17 @@ pre {
   text-align: left;
   border-radius: 0;
 }
-.turn-head:hover { background: var(--bg-elevated); border-color: transparent; }
 .turn-caret {
   flex: 0 0 auto;
   width: 14px;
+  margin-top: 3px;
   color: var(--text-tertiary);
   font-size: 11px;
   line-height: 1;
   text-align: center;
-  align-self: center;
 }
-.turn-main {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.turn-summary {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-  font-size: var(--text-md);
-  line-height: var(--lh-tight);
-}
-.turn-reply-preview {
-  min-width: 0;
-  font-size: var(--text-sm);
-  color: var(--text-tertiary);
-  font-weight: 400;
-  line-height: var(--lh-tight);
-  /* 2 行 clamp:long reply 自然 wrap 到第 2 行,再长用省略号截断。
-     -webkit-* 前缀在 Chrome / Safari / FF 都支持(虽然名字带 webkit)。 */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
-}
-/* expanded 时 body 里已经能看到完整 reply,head 里的 preview 就是噪音,
-   隐藏掉。collapsed 时显示,作为内容的快速预览。 */
-.turn-expanded .turn-reply-preview { display: none; }
-.turn-meta {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-  white-space: nowrap;
-}
-.turn-meta .tag {
-  flex: 0 0 auto;
-  min-height: 0;
-  padding: 1px var(--space-2);
-  font-size: var(--text-sm);
-}
-/* head meta 区的极简状态指示:只有 icon,无文字、无背景。
-   紧贴 elapsed/起始时间排在一起。 */
+/* head meta 区的极简状态指示:只有 icon,无文字、无背景(其它地方仍用,
+   如 mobile overview / loop 列表)。 */
 .status-icon {
   display: inline-flex;
   align-items: center;
@@ -2232,8 +2179,6 @@ pre {
 .status-icon-failed,
 .status-icon-error   { color: var(--accent-red); }
 .status-icon-paused  { color: var(--text-disabled); }
-.turn-elapsed { font-variant-numeric: tabular-nums; }
-.turn-started { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .turn-cancel {
   position: absolute;
   top: 9px;
@@ -2242,7 +2187,8 @@ pre {
   padding: var(--space-1) var(--space-2);
   z-index: 2;
 }
-/* running turn 头部给 Cancel 让出空间(两态都生效)。 */
+/* running turn:Cancel 按钮绝对定位在右上,给 head 右侧让出空间,
+   免得用户气泡(靠右)被 Cancel 盖住。 */
 .turn:has(.turn-cancel) .turn-head { padding-right: 108px; }
 .turn-body {
   display: flex;
@@ -2258,43 +2204,11 @@ pre {
    to-expand 真正生效的入口。 */
 .turn-collapsed .turn-body { display: none; }
 
-/* Collapse-foot:expanded turn body 最末尾的"▲ Collapse"按钮 ——
-   reply / events 长起来后,免得用户滚到 head chevron 才能收起。
-   宽度撑满,subtle styling 不抢眼。点击走同一个 _onWorkspaceTurnToggle。
-   collapsed 态整个 turn-body 都被 display:none 藏起来了,所以这条
-   规则自动也藏(不用单独写 `.turn-collapsed .turn-collapse-foot`)。 */
-.turn-collapse-foot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-2);
-  margin-top: var(--space-2);
-  background: transparent;
-  color: var(--text-tertiary);
-  border: 1px dashed var(--border-subtle);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition: color var(--t-base), background var(--t-base), border-color var(--t-base);
-}
-.turn-collapse-foot:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  border-color: var(--border-strong);
-  border-style: solid;
-}
-.turn-collapse-foot .turn-caret {
-  width: auto;
-  font-size: 11px;
-  color: inherit;
-}
 .event {
-  /* doc-flow 后,.event 只剩 thinking / tool_use / tool_result 在用
-     (user → .turn-user,assistant text → .event-asst-md,result →
-     .turn-done-foot,都不再走 .event)。这些 meta event 默认隐藏(事件
-     过滤),展开时仍走 72px label + 1fr body 的两列网格。 */
+  /* 对齐 Claude 会话 UI 后,.event 只剩 thinking / tool_use / tool_result
+     在用(user → head 气泡 .turn-user,assistant text → .event-asst-md,
+     result → 行末 .turn-meta-foot,都不再走 .event)。这些 meta event 默认
+     隐藏(事件过滤),展开时仍走 72px label + 1fr body 的两列网格。 */
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   gap: var(--space-3);
@@ -2381,33 +2295,39 @@ pre {
 .event-tool-result .event-label { color: var(--text-tertiary); }
 .event-tool-result-error .event-label { color: var(--accent-red); }
 
-/* ── doc-flow turn(spec §12.2)──────────────────────────────────────────
-   去标签栏 + 整条彩色左 border,改文档流:
-     · 用户 prompt = 弱前缀块(你 › + 弱色文本,弱底)
-     · CLAUDE = turn 顶一个轻量小指示,取代每条 Reply 左标签
-     · assistant text = 全宽流动正文(markdown)
-     · result = 小字脚注(✓ 完成 · tokens),result.text 放下方极小字
+/* ── 对齐 Claude 会话 UI(spec §13.1)─────────────────────────────────────
+   一个 turn 只三块:
+     · 用户气泡 = head 右对齐圆角弱底气泡(仅 prompt 文本 + 弱小时间戳)
+     · Claude  = turn 顶一个极轻小指示
+     · assistant text = 全宽流动 markdown 文档
+     · result = 助手块末尾行末 meta(✓ 用时 · tokens),不要 result.text
 */
+/* 用户气泡:在 head flex 里靠右(margin-left:auto 把气泡推到右侧),
+   圆角 + 弱底,不叠阴影(§4.1 去卡片)。气泡内部上下排:文本 + 弱时间戳。
+   max-width 留出左侧空白,读成"我说的话"靠右。 */
 .turn-user {
+  margin-left: auto;
+  max-width: 80%;
   display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
   padding: var(--space-2) var(--space-3);
   background: var(--bg-elevated);
-  border-radius: var(--radius-sm);
-}
-.turn-user-prefix {
-  flex: 0 0 auto;
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-  font-weight: 600;
+  border-radius: var(--radius-md);
 }
 .turn-user-text {
   min-width: 0;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
+  text-align: left;
   line-height: var(--lh-normal);
+}
+.turn-user-time {
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
 }
 .turn-asst-indicator {
   color: var(--accent-blue);
@@ -2426,7 +2346,8 @@ pre {
 .event-asst-md > :first-child { margin-top: 0; }
 .event-asst-md > :last-child { margin-bottom: 0; }
 .event-asst-md p { margin: var(--space-2) 0; }
-.event-asst-md ul { margin: var(--space-2) 0; padding-left: var(--space-4); }
+.event-asst-md ul,
+.event-asst-md ol { margin: var(--space-2) 0; padding-left: var(--space-4); }
 .event-asst-md code { font-size: 0.92em; }
 .event-asst-md pre.md-code {
   background: var(--bg-canvas);
@@ -2435,20 +2356,18 @@ pre {
   padding: var(--space-3);
   overflow-x: auto;
 }
-/* result 脚注:视觉最弱的一行小字 ✓ 完成 · tokens。 */
-.turn-done-foot {
+/* 行末 meta:助手块末尾一小撮最弱小字 ✓ 用时 · tokens。 */
+.turn-meta-foot {
   color: var(--text-tertiary);
   font-size: var(--text-micro);
 }
-.turn-done-mark { color: var(--accent-green); }
-.turn-done-tokens { font-variant-numeric: tabular-nums; }
-/* result.text 不丢信息,但视觉压到最弱(更小 + 更淡)。 */
-.turn-done-foot-text {
-  margin-top: 4px;
-  color: var(--text-disabled);
-  font-size: var(--text-micro);
-  white-space: pre-wrap;
-  word-break: break-word;
+.turn-meta-mark { color: var(--accent-green); }
+.turn-meta-elapsed,
+.turn-meta-tokens { font-variant-numeric: tabular-nums; }
+/* running/queued turn 还没 result event → 助手区给个"处理中…"占位,
+   免得展开时空白看着像崩了。 */
+.turn-pending-hint {
+  font-size: var(--text-sm);
 }
 /* tool_use:一行 code,name 高亮 + args 暗灰,等宽,可换行(长 path 不
    被裁断)。 */
