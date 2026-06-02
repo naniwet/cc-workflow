@@ -17,6 +17,7 @@
 
 import {
   foldToolResult,
+  formatToolUse,
   nextRunLabel,
   parseStreamLinesToEvents,
   roundtablePersonaAvatarsHtml,
@@ -2138,15 +2139,13 @@ function _onQueueRemoveClick(e) {
   render();
 }
 
-// Turn 交互的子绑定(turn-toggle / tool-result-fold + bootstrap)。
+// Turn 交互的子绑定(tool-result-fold + bootstrap)。
 // 抽出来是因为 cron 的 patch path(只换一个 loop-row,不整页重画)也要
 // rewire 新 row 里的 turn 元素,但不能跟着调 _stopAllTurnEventsPolls
 // —— 那会把别的 loop-row 还活着的 poll 一起干掉。
+// v4 去折叠(spec §14.1):turn 永远展开,没有 turn-toggle 可绑;只剩
+// tool-result-fold 绑定 + `.turn.turn-expanded` 的 _loadTurnEvents bootstrap。
 function _bindTurnInteractions(root) {
-  for (const btn of root.querySelectorAll('.turn-toggle')) {
-    btn.addEventListener('click', _onWorkspaceTurnToggle);
-    _addTapFallback(btn, _onWorkspaceTurnToggle);
-  }
   for (const btn of root.querySelectorAll('.tool-result-fold')) {
     btn.addEventListener('click', _onToolResultExpand);
     _addTapFallback(btn, _onToolResultExpand);
@@ -3608,52 +3607,48 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning, activ
 function _workspaceTurnHtml(turn) {
   const status = turn.status || '?';
   const prompt = turn.prompt || '';
-  const expanded = !!turn.expanded;
-  // 对齐 Claude 会话 UI(spec §13.1):一个 turn 只三块 ——
+  // v4 去折叠(spec §14.1):turn 永远展开 —— 删了 chevron + 可点 turn-head。
+  // "点击收起单条 turn"无意义,且现状气泡 = 可点 button → 被点/聚焦后整条
+  // 变全宽高亮蓝条(丑)。现在用户气泡 = 普通右对齐 <div>(非 button,无全宽
+  // 点击区、无 focus/active 蓝背景)。turn-events 一律加载。
+  // 一个 turn 只三块(对齐 Claude 会话 UI,spec §13.1):
   //   ① 用户气泡 ×1(右对齐圆角弱底,仅 prompt 文本 + 弱时间戳)
-  //   ② 助手文档(展开时全宽流动 markdown,顶一个极轻 CLAUDE 指示)
+  //   ② 助手文档(全宽流动 markdown,顶一个极轻 CLAUDE 指示)
   //   ③ 行末 meta(助手块末尾 ✓ 用时 · tokens,由 result event 渲染)
-  // 提示词全局只出现这一次(气泡)。删掉了 v2 的"提示词当标题"summary 行、
-  // reply-preview、整条 Collapse 横条、✓完成大块。
   const cancelBtn = status === 'running' && turn.id
     ? `<button class="run-cancel-btn turn-cancel" type="button" data-run-id="${esc(turn.id)}">✕ Cancel</button>`
     : '';
   const approvals = pendingApprovalsFor(turn.id || '').map(approvalBlockHtml).join('');
   const startedRel = turn.started_at ? timeAgo(turn.started_at) : '';
   const startedAbs = turn.started_at ? new Date(turn.started_at * 1000).toLocaleString() : '';
-  // ① 用户气泡 = head 本身(可点击折叠)。左侧小 chevron(▸/▾),复用
-  //    .turn-toggle handler。气泡内仅 prompt 文本 + 弱小时间戳。
   // turn 顶 CLAUDE 轻指示:整 turn 只一个,取代每条 Reply 左标签。
   const asstIndicatorHtml = `<div class="turn-asst-indicator">Claude</div>`;
   // running/queued turn 还没 result event → 没有行末 meta,补一个"处理中…"
-  // 指示,免得展开时助手区空白看着像崩了。
+  // 指示,免得助手区空白看着像崩了。
   const pendingHint = (status === 'running' || status === 'queued')
     ? `<div class="turn-pending-hint muted">处理中…</div>`
     : '';
-  // turn-events 容器:expanded 时 _bindWorkspaceSessionHandlers 会触发
-  // 一次 _loadTurnEvents 把 /runs/{id}/tail 的 stream-jsonl 解析渲染进来。
-  // 同一 runId 二次 mount 时(主 poll 触发的 view rerender),容器会被
-  // 重建为空状态,loader 据此判断要不要重新拉取。
+  // turn-events 容器:turn 永远 expanded → _bindTurnInteractions 的
+  // `.turn.turn-expanded` bootstrap 必命中,触发一次 _loadTurnEvents 把
+  // /runs/{id}/tail 的 stream-jsonl 解析渲染进来。同一 runId 二次 mount 时
+  // (主 poll 触发的 view rerender),容器被重建为空 loading 态,loader 据此
+  // 判断要不要重新拉取。
   // data-elapsed:把 turn 级用时挂在容器上,result event 渲染行末 meta 时
   //   读它出"用时"(result event 自己只带 tokens,没有 elapsed)。
   const elapsedAttr = turn.elapsed_s != null ? ` data-elapsed="${esc(turn.elapsed_s)}"` : '';
-  const eventsHtml = expanded
-    ? `<div class="turn-events" data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}"${elapsedAttr}>
+  const eventsHtml = `<div class="turn-events" data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}"${elapsedAttr}>
          <div class="muted turn-events-loading">Loading events…</div>
-       </div>`
-    : `<div class="turn-events" data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}"${elapsedAttr}></div>`;
+       </div>`;
 
   return `
-    <article class="turn turn-${expanded ? 'expanded' : 'collapsed'} turn-status-${esc(status)}"
+    <article class="turn turn-expanded turn-status-${esc(status)}"
              data-run-id="${esc(turn.id || '')}" data-status="${esc(status)}">
-      <button class="turn-head turn-toggle" type="button"
-              data-run-id="${esc(turn.id || '')}" data-expanded="${expanded ? '1' : '0'}">
-        <span class="turn-caret">${expanded ? '▾' : '▸'}</span>
-        <span class="turn-user">
+      <div class="turn-head">
+        <div class="turn-user">
           <span class="turn-user-text">${esc(prompt)}</span>
           ${startedRel ? `<span class="turn-user-time" title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
-        </span>
-      </button>
+        </div>
+      </div>
       ${cancelBtn}
       <div class="turn-body">
         ${asstIndicatorHtml}
@@ -3839,17 +3834,42 @@ function _foldedTextHtml(text) {
     </div>`;
 }
 
+// Edit/MultiEdit/Write 的 diff 块(spec §14.2 MVP:全删旧 + 全增新,精确
+// LCS 留后)。old_string 每行 .diff-del、new_string 每行 .diff-add;Write
+// 没有 old_string 只渲染 new。两者都缺 → 空串(不渲染 diff 容器)。
+function _diffLinesHtml(text, cls) {
+  return String(text)
+    .split(/\r?\n/)
+    .map((line) => `<div class="${cls}">${esc(line)}</div>`)
+    .join('');
+}
+function _toolUseDiffHtml(name, input) {
+  const inp = input && typeof input === 'object' ? input : {};
+  if (name === 'Write') {
+    const next = inp.content != null ? inp.content : inp.new_string;
+    if (next == null) return '';
+    return `<div class="event-tool-diff">${_diffLinesHtml(next, 'diff-add')}</div>`;
+  }
+  if (name === 'Edit' || name === 'MultiEdit') {
+    const oldStr = inp.old_string;
+    const newStr = inp.new_string;
+    if (oldStr == null && newStr == null) return '';
+    const del = oldStr != null ? _diffLinesHtml(oldStr, 'diff-del') : '';
+    const add = newStr != null ? _diffLinesHtml(newStr, 'diff-add') : '';
+    return `<div class="event-tool-diff">${del}${add}</div>`;
+  }
+  return '';
+}
+
 // elapsedS:turn 级用时(秒),由 _loadTurnEvents 从 .turn-events 容器的
 //   data-elapsed 取出传入 —— result event 自己只带 tokens,没有 elapsed。
 function _renderTurnEvent(ev, elapsedS) {
-  // 全局过滤:默认只显示 reply / result(text / result kind),用户在 ⚙
-  // 打开 "Show all events" 时再展示 thinking / tool_use / tool_result。
-  // 例外:tool_result.isError 一律显示 —— 错误不能在 default 模式被静默
-  // 吞掉,否则 debug 看不见。
+  // 全局过滤(spec §14.2 默认显示内部执行过程):tool_use / tool_result 默认
+  // 紧凑显示 —— agent 读了啥、跑了啥、改了啥都要看得见。只有 thinking 默认
+  // 隐藏(英文 prose,长且噪),用户在 ⚙ 打开 "Show all events" 才显示。
   const showAll = eventFilterShowAll();
   if (!showAll) {
-    if (ev.kind === 'thinking' || ev.kind === 'tool_use') return '';
-    if (ev.kind === 'tool_result' && !ev.isError) return '';
+    if (ev.kind === 'thinking') return '';
   }
 
   if (ev.kind === 'thinking') {
@@ -3868,23 +3888,34 @@ function _renderTurnEvent(ev, elapsedS) {
     return `<div class="event-asst-md">${renderMarkdown(ev.text || '')}</div>`;
   }
   if (ev.kind === 'tool_use') {
-    let preview = '';
-    try { preview = JSON.stringify(ev.input || {}); } catch { preview = '<unserializable>'; }
-    if (preview.length > 220) preview = preview.slice(0, 220) + '…';
+    // 紧凑块(spec §14.2):glyph + verb + target 单行。verb 派生 CSS class
+    // (.event-tool-<verb>)做着色 —— formatToolUse 不塞颜色。Edit/MultiEdit/
+    // Write 额外在下面渲染 diff(全删旧 + 全增新两块,精确 LCS 留后)。
+    const { verb, target, glyph } = formatToolUse(ev.name, ev.input || {});
+    const diffHtml = _toolUseDiffHtml(ev.name, ev.input || {});
     return `
-      <div class="event event-tool">
-        <div class="event-label">Tool</div>
-        <div class="event-body">
-          <code class="tool-call"><span class="tool-name">${esc(ev.name)}</span><span class="tool-args">${esc(preview)}</span></code>
+      <div class="event-tool event-tool-${esc(verb)}">
+        <div class="event-tool-call">
+          <span class="tool-glyph">${esc(glyph)}</span>
+          <span class="tool-verb">${esc(verb)}</span>
+          <code class="tool-target">${esc(target)}</code>
         </div>
+        ${diffHtml}
       </div>`;
   }
   if (ev.kind === 'tool_result') {
-    const cls = ev.isError ? 'event-tool-result event-tool-result-error' : 'event-tool-result';
+    // 缩进 output(左 hairline rail,跟在 tool_use call 行下方读成"这个工具
+    // 的返回")。正常情况 _workspaceOutputHtml 折叠超 5 行;isError 红 + 不
+    // 折叠(默认全展开 —— 错误不能被静默吞掉,debug 要全文)。
+    if (ev.isError) {
+      return `
+        <div class="event-tool-result event-tool-result-error">
+          <pre class="tool-result">${esc(ev.text || '')}</pre>
+        </div>`;
+    }
     return `
-      <div class="event ${cls}">
-        <div class="event-label">${ev.isError ? 'Error' : 'Result'}</div>
-        <div class="event-body">${_workspaceOutputHtml(ev.text || '')}</div>
+      <div class="event-tool-result">
+        ${_workspaceOutputHtml(ev.text || '')}
       </div>`;
   }
   if (ev.kind === 'result') {
@@ -3920,13 +3951,10 @@ function _workspaceOutputHtml(output) {
 }
 
 // Mobile-only 加成绑定:scroll 监听 + workspace-new-events fab。
-// turn-toggle / tool-result-fold / _loadTurnEvents bootstrap / 停 poll
-// 这一套 bindWorkspaceColHandlers 已经做了(renderMobileWorkspaceDetail
-// 调它在前),这里再绑一次会:
-//   - turn-toggle 同一按钮挂两个 click handler,点 1 次跑 2 次 → 状态翻
-//     2 次抵消,看着像"没反应"
-//   - _loadTurnEvents 同一 runId 并发 2 次 fetch /tail,两个 async 都跑
-//     to 渲染,大量 event duplicate(用户反馈"event 经常重复")
+// tool-result-fold / _loadTurnEvents bootstrap / 停 poll 这一套
+// bindWorkspaceColHandlers 已经做了(renderMobileWorkspaceDetail 调它在前),
+// 这里再绑一次会让 _loadTurnEvents 同一 runId 并发 2 次 fetch /tail,两个
+// async 都跑到渲染,大量 event duplicate(用户反馈"event 经常重复")。
 // 所以这里只留 mobile 特定的两个,避免跟 bindWorkspaceColHandlers 重叠。
 function _bindWorkspaceSessionHandlers(root, name) {
   const stream = root.querySelector('.workspace-session-stream[data-ws]');
@@ -3954,40 +3982,6 @@ function _syncWorkspaceNewEventsButton(name) {
   const count = workspaceStreamState[name]?.newEvents || 0;
   btn.hidden = count <= 0;
   btn.textContent = `↓ ${count} new`;
-}
-
-function _onWorkspaceTurnToggle(e) {
-  const btn = e.currentTarget;
-  const runId = btn.dataset.runId;
-  if (!runId) return;
-  const turn = btn.closest('.turn');
-  const next = btn.dataset.expanded !== '1';
-  workspaceTurnOverrides[runId] = next;
-  btn.dataset.expanded = next ? '1' : '0';
-  // 同步 head 左侧 chevron:展开 ▾,收起 ▸(spec §13.1 的小 chevron)。
-  for (const caret of turn?.querySelectorAll('.turn-caret') || []) {
-    caret.textContent = next ? '▾' : '▸';
-  }
-  // 用 class 控制 body 可见性,不用 [hidden] —— author 的
-  // `.turn-body { display: flex }` 特异性盖过 UA 的 [hidden] {
-  // display: none },attribute 视觉无效。CSS 里的
-  // `.turn-collapsed .turn-body { display: none }` 才真生效。
-  turn?.classList.toggle('turn-expanded', next);
-  turn?.classList.toggle('turn-collapsed', !next);
-
-  if (next) {
-    // 展开:把 events 容器塞回 loading 占位 + 触发拉取。如果该 runId
-    // 已经在跑 poll(理论上不应该,_stopAllTurnEventsPolls 已清),
-    // 这里也会被 _loadTurnEvents 内部覆盖掉。
-    const events = turn?.querySelector('.turn-events');
-    if (events && !events.querySelector('.event')) {
-      events.innerHTML = '<div class="muted turn-events-loading">Loading events…</div>';
-      events.dataset.renderedLines = '0';
-    }
-    _loadTurnEvents(runId);
-  } else {
-    _stopTurnEventsPoll(runId);
-  }
 }
 
 function _onToolResultExpand(e) {
@@ -4108,8 +4102,8 @@ function paintRunDetail(id, row) {
       </div>
     </div>
   `;
-  // 复用 workspace detail 的同一套 handler:绑 turn-toggle / tool-result-fold,
-  // bootstrap _loadTurnEvents(已展开的 turn 会自动加载)。
+  // 复用 workspace detail 的同一套 handler:绑 tool-result-fold +
+  // bootstrap _loadTurnEvents(turn 永远展开,无 turn-toggle)。
   bindWorkspaceColHandlers(view);
 }
 
@@ -4234,9 +4228,9 @@ function renderTasksView() {
   for (const b of $('view').querySelectorAll('.run-now-btn, .pause-btn, .resume-btn, .delete-btn')) {
     b.addEventListener('click', onLoopAction);
   }
-  // loopHistoryHtml 现在每条历史 run 渲染成 turn-collapsed,需要 wire
-  // turn-toggle / tool-result-fold + 停 poll + 启动已展开 turn 的 event
-  // load。bindWorkspaceColHandlers 已经把这一套封装好了,直接复用。
+  // loopHistoryHtml 每条历史 run 渲染成一个 turn,需要 wire
+  // tool-result-fold + 停 poll + bootstrap 已展开 turn 的 event load
+  // (turn 永远展开,无 turn-toggle)。bindWorkspaceColHandlers 已封装好,复用。
   bindWorkspaceColHandlers($('view'));
   // Dialog open/close。原生 <dialog> 自带 backdrop / ESC,只 wire open
   // 按钮 + cancel。form submit 成功后 onAddLoop 里 form.closest('dialog')?

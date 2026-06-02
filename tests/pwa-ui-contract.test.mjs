@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   STATUS_ACCENTS,
   ROUNDTABLE_PERSONAS,
+  formatToolUse,
   foldToolResult,
   nextRunLabel,
   parseStreamLinesToEvents,
@@ -159,6 +160,79 @@ test('foldToolResult keeps the first five lines and reports hidden lines', () =>
   assert.equal(folded.truncated, true);
   assert.equal(folded.preview, ['one', 'two', 'three', 'four', 'five'].join('\n'));
   assert.equal(folded.hiddenLineCount, 2);
+});
+
+// formatToolUse(name, input) → {verb, target, glyph}(纯函数,coding 报文流 §14.2)。
+// verb 着色靠 CSS class(由 verb 派生),纯函数不塞颜色;不加 kind。
+test('formatToolUse: Bash → $ command', () => {
+  assert.deepEqual(
+    formatToolUse('Bash', { command: 'ls -la' }),
+    { verb: 'Bash', target: 'ls -la', glyph: '$' },
+  );
+});
+
+test('formatToolUse: Edit / MultiEdit → ✎ file_path(verb 统一 Edit)', () => {
+  assert.deepEqual(
+    formatToolUse('Edit', { file_path: '/a/b.py', old_string: 'x', new_string: 'y' }),
+    { verb: 'Edit', target: '/a/b.py', glyph: '✎' },
+  );
+  assert.deepEqual(
+    formatToolUse('MultiEdit', { file_path: '/a/c.py', edits: [] }),
+    { verb: 'Edit', target: '/a/c.py', glyph: '✎' },
+  );
+});
+
+test('formatToolUse: Write → ✎ file_path', () => {
+  assert.deepEqual(
+    formatToolUse('Write', { file_path: '/a/d.py', content: 'hello' }),
+    { verb: 'Write', target: '/a/d.py', glyph: '✎' },
+  );
+});
+
+test('formatToolUse: Read → ▢ file_path', () => {
+  assert.deepEqual(
+    formatToolUse('Read', { file_path: '/a/e.py' }),
+    { verb: 'Read', target: '/a/e.py', glyph: '▢' },
+  );
+});
+
+test('formatToolUse: Grep / Glob → ⌕ pattern(无 pattern 退回 query)', () => {
+  assert.deepEqual(
+    formatToolUse('Grep', { pattern: 'def foo' }),
+    { verb: 'Search', target: 'def foo', glyph: '⌕' },
+  );
+  assert.deepEqual(
+    formatToolUse('Glob', { query: '**/*.py' }),
+    { verb: 'Search', target: '**/*.py', glyph: '⌕' },
+  );
+});
+
+test('formatToolUse: 未知工具 → verb=name + 首个 string 参数 + •', () => {
+  assert.deepEqual(
+    formatToolUse('WebFetch', { url: 'https://x', prompt: 'summarize' }),
+    { verb: 'WebFetch', target: 'https://x', glyph: '•' },
+  );
+  // 首个 string 跳过非 string 值(取到第一个 string)
+  assert.deepEqual(
+    formatToolUse('TodoWrite', { count: 3, note: 'first string' }),
+    { verb: 'TodoWrite', target: 'first string', glyph: '•' },
+  );
+});
+
+test('formatToolUse: target 缺字段 → 空串不崩', () => {
+  assert.deepEqual(
+    formatToolUse('Bash', {}),
+    { verb: 'Bash', target: '', glyph: '$' },
+  );
+  assert.deepEqual(
+    formatToolUse('Read', undefined),
+    { verb: 'Read', target: '', glyph: '▢' },
+  );
+  // 未知工具且 input 无任何 string 值 → target 空串
+  assert.deepEqual(
+    formatToolUse('Mystery', { n: 1, ok: true }),
+    { verb: 'Mystery', target: '', glyph: '•' },
+  );
 });
 
 test('workspaceAutoScrollState accumulates new events while user is away from bottom', () => {

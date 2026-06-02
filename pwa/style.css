@@ -2204,6 +2204,15 @@ pre {
   padding: var(--space-3);
   border-top: 1px solid var(--border-subtle);
 }
+/* event 列表容器:顶层 event 块(.event-tool / .event-tool-result /
+   .event-asst-md / 默认隐藏的 .event thinking)之间用 gap 分节奏 —— tool
+   块不带 .event class,没有 `.event + .event` 的 border-top 分隔,靠这条 gap。 */
+.turn-events {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
 /* 收起态隐藏 body。用 class 不用 [hidden]:author 的
    `.turn-body { display: flex }`(0,1,0)盖过 UA 的
    `[hidden] { display: none }`(0,0,1),attribute 视觉无效。
@@ -2212,10 +2221,10 @@ pre {
 .turn-collapsed .turn-body { display: none; }
 
 .event {
-  /* 对齐 Claude 会话 UI 后,.event 只剩 thinking / tool_use / tool_result
-     在用(user → head 气泡 .turn-user,assistant text → .event-asst-md,
-     result → 行末 .turn-meta-foot,都不再走 .event)。这些 meta event 默认
-     隐藏(事件过滤),展开时仍走 72px label + 1fr body 的两列网格。 */
+  /* spec §14.2 后,.event(72px label + 1fr body 两列网格)只剩 thinking 在用
+     (默认隐藏,⚙ Show all events 才显)。tool_use / tool_result 已改紧凑块
+     .event-tool / .event-tool-result(默认显示,不走两列网格);user → 气泡
+     .turn-user,assistant text → .event-asst-md,result → 行末 .turn-meta-foot。 */
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   gap: var(--space-3);
@@ -2298,9 +2307,6 @@ pre {
 }
 
 .event-thinking .event-label { color: var(--accent-purple); }
-.event-tool   .event-label { color: var(--accent-cyan); }
-.event-tool-result .event-label { color: var(--text-tertiary); }
-.event-tool-result-error .event-label { color: var(--accent-red); }
 
 /* ── 对齐 Claude 会话 UI(spec §13.1)─────────────────────────────────────
    一个 turn 只三块:
@@ -2376,26 +2382,83 @@ pre {
 .turn-pending-hint {
   font-size: var(--text-sm);
 }
-/* tool_use:一行 code,name 高亮 + args 暗灰,等宽,可换行(长 path 不
-   被裁断)。 */
-.tool-call {
-  display: inline-flex;
-  flex-wrap: wrap;
+/* tool_use 紧凑块(spec §14.2):一行 glyph + verb + target,target 单行
+   省略号截断(长 path 不撑爆行)。verb 派生 class .event-tool-<verb> 着色。 */
+.event-tool {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-canvas);
+  min-width: 0;
+}
+.event-tool-call {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-  word-break: break-all;
 }
-.tool-call .tool-name {
-  color: var(--accent-cyan);
-  font-weight: 600;
-}
-.tool-call .tool-args {
+.tool-glyph {
+  flex: 0 0 auto;
   color: var(--text-tertiary);
+}
+.tool-verb {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.tool-target {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}
+/* verb 着色:formatToolUse 把工具归到 5 个 verb(Edit/Bash/Read/Search/Write),
+   各给一个语义色。未知工具 verb=原 name,无匹配 → 默认 .tool-verb 灰。 */
+.event-tool-Edit   .tool-verb { color: var(--accent-purple); }
+.event-tool-Write  .tool-verb { color: var(--accent-purple); }
+.event-tool-Bash   .tool-verb { color: var(--accent-cyan); }
+.event-tool-Read   .tool-verb { color: var(--text-tertiary); }
+.event-tool-Search .tool-verb { color: var(--accent-amber); }
+/* Edit/Write diff(MVP:全删旧 + 全增新)。等宽弱底块,行级 del/add 着色。 */
+.event-tool-diff {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+  background: var(--bg-canvas);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.diff-del {
+  padding: 1px var(--space-2);
+  background: rgba(239, 68, 68, 0.10);
+  color: #f0a8a8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diff-add {
+  padding: 1px var(--space-2);
+  background: rgba(34, 197, 94, 0.10);
+  color: #a3e3bb;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* tool_result:缩进 + 左 hairline rail,读成"这次工具调用的返回"。
+   isError 红边强调(默认不折叠,见 _renderTurnEvent)。 */
+.event-tool-result {
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.event-tool-result-error {
+  border-left-color: var(--accent-red);
+}
+.event-tool-result-error .tool-result {
+  color: var(--accent-red);
 }
 .tool-result {
   margin: 0;

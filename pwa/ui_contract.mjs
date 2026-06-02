@@ -136,6 +136,40 @@ export function workspaceTurnExpansion(turns, manual = {}, opts = {}) {
   });
 }
 
+// 工具调用 → 紧凑报文三元组(coding 报文流 §14.2)。纯函数:0 IO,
+// 给定 (name, input) 返回 {verb, target, glyph}。
+//   - verb 是显示动词(Edit/MultiEdit 都归 'Edit',Grep/Glob 都归 'Search'),
+//     着色靠 CSS class（由 verb 派生,如 .event-tool-Edit）—— 这里不塞颜色。
+//   - target 缺字段一律退回空串,不崩。
+//   - 未知工具:verb=原 name,target=input 里第一个 string 值,glyph='•'。
+function _firstStringValue(input) {
+  if (!input || typeof input !== 'object') return '';
+  for (const v of Object.values(input)) {
+    if (typeof v === 'string') return v;
+  }
+  return '';
+}
+
+export function formatToolUse(name, input) {
+  const inp = input && typeof input === 'object' ? input : {};
+  switch (name) {
+    case 'Bash':
+      return { verb: 'Bash', target: String(inp.command || ''), glyph: '$' };
+    case 'Edit':
+    case 'MultiEdit':
+      return { verb: 'Edit', target: String(inp.file_path || ''), glyph: '✎' };
+    case 'Write':
+      return { verb: 'Write', target: String(inp.file_path || ''), glyph: '✎' };
+    case 'Read':
+      return { verb: 'Read', target: String(inp.file_path || ''), glyph: '▢' };
+    case 'Grep':
+    case 'Glob':
+      return { verb: 'Search', target: String(inp.pattern || inp.query || ''), glyph: '⌕' };
+    default:
+      return { verb: String(name || ''), target: _firstStringValue(inp), glyph: '•' };
+  }
+}
+
 export function foldToolResult(text, maxLines = 5) {
   const lines = String(text == null ? '' : text).split(/\r?\n/);
   if (lines.length <= maxLines) {
