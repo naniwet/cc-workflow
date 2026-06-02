@@ -2198,8 +2198,8 @@ function _onQueueRemoveClick(e) {
 // tool-result-fold 绑定 + `.turn.turn-expanded` 的 _loadTurnEvents bootstrap。
 function _bindTurnInteractions(root) {
   for (const btn of root.querySelectorAll('.tool-result-fold')) {
-    btn.addEventListener('click', _onToolResultExpand);
-    _addTapFallback(btn, _onToolResultExpand);
+    btn.addEventListener('click', _onToolResultFoldToggle);
+    _addTapFallback(btn, _onToolResultFoldToggle);
   }
   for (const turn of root.querySelectorAll('.turn.turn-expanded')) {
     const runId = turn.dataset.runId;
@@ -3838,8 +3838,8 @@ async function _loadTurnEvents(runId) {
       if (loading) loading.remove();
       container.insertAdjacentHTML('beforeend', html);
       for (const btn of container.querySelectorAll('.tool-result-fold:not([data-bound])')) {
-        btn.addEventListener('click', _onToolResultExpand);
-        _addTapFallback(btn, _onToolResultExpand);
+        btn.addEventListener('click', _onToolResultFoldToggle);
+        _addTapFallback(btn, _onToolResultFoldToggle);
         btn.dataset.bound = '1';
       }
     } else {
@@ -3879,7 +3879,7 @@ function cssQuoteEsc(s) {
 // 长 prose 折叠:5 行以内直接展示;超过 5 行先显示前 5 行 + "↓ Expand N
 // lines" 按钮。复用 .tool-result-wrap / .tool-result-preview /
 // .tool-result-full / .tool-result-fold 4 个 class —— 这样
-// _onToolResultExpand 现有 handler 自动 work,不写新的展开逻辑。
+// _onToolResultFoldToggle 现有 handler 自动 work,不写新的展开逻辑。
 // 跟 _workspaceOutputHtml 的区别:这里输出 div.event-text-block(flow
 // 文本),不是 <pre>(monospace 块)—— thinking / text 是英文 prose,
 // 用 pre 会看着像代码。
@@ -4046,15 +4046,27 @@ function _syncWorkspaceNewEventsButton(name) {
   btn.textContent = `↓ ${count} new`;
 }
 
-function _onToolResultExpand(e) {
+// fold 按钮 toggle(展开 ⇄ 收起)。修「有 expand 却没有收起」:旧版点
+// Expand 后把按钮自己 hidden 掉,展开了就收不回。现在保留按钮,文字在
+// 「↓ Expand N lines」⇄「↑ Collapse」间切换 —— 首次点时把原始 Expand
+// 文案存进 dataset.expandLabel,收起时还原(N lines 不丢)。
+function _onToolResultFoldToggle(e) {
   const btn = e.currentTarget;
   const wrap = btn.closest('.tool-result-wrap');
   const preview = wrap?.querySelector('.tool-result-preview');
   const full = wrap?.querySelector('.tool-result-full');
   if (!wrap || !preview || !full) return;
-  preview.hidden = true;
-  full.hidden = false;
-  btn.hidden = true;
+  const collapsed = full.hidden;            // 当前折叠态 → 这次点是展开
+  if (collapsed) {
+    if (!btn.dataset.expandLabel) btn.dataset.expandLabel = btn.textContent;
+    preview.hidden = true;
+    full.hidden = false;
+    btn.textContent = '↑ Collapse';
+  } else {
+    preview.hidden = false;
+    full.hidden = true;
+    btn.textContent = btn.dataset.expandLabel || '↓ Expand';
+  }
 }
 
 function _onWorkspaceNewEventsClick(e) {
