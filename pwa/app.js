@@ -1072,14 +1072,12 @@ function renderDesktopSidebarLayout() {
   if (!paneState || (paneState.panes.length === 0 && _pcSidebarTree().length > 0)) {
     loadPcLayout();
   }
-  const navModel = navModelFromTree(_pcSidebarTree());
   const groups = groupBySession(lastData.workspaces, lastData.sessions);
 
-  // active 计算:active pane 的 tileId 加 .is-active,所有 open pane 加 .is-open。
-  const activeId = paneState.panes[paneState.activePaneIdx];
-  const activeIds = new Set(paneState.panes);
-  const expandedRepos = new Set(paneState.expandedRepos || []);
-  const navOpts = { activeId, activeIds, expandedRepos };
+  // 侧栏 nav(#sidebar-ctx + .sidebar.is-rail + « / » glyph)抽成
+  // _renderSidebarNav():它完全不碰 #view,所以收起/展开只需调它,主区 DOM
+  // 原地不动(避免重建主区导致的闪抖,见该函数注释)。这里 render 主区前先画 nav。
+  _renderSidebarNav();
 
   // 主区 = pane 网格(布局阶梯 .pc-main[data-pane-count] 不变)。统一侧栏后
   // (spec §13.2)nav 进 #sidebar-ctx,主区直接进 #view(#view 接管原
@@ -1088,25 +1086,6 @@ function renderDesktopSidebarLayout() {
   // Provider picker — uses the unified form-picker component so dark
   // theming matches the workspace ⋯ menu / roundtable model picker.
   const newWsProviderPicker = _newWsProviderPickerHtml();
-
-  // 侧栏上下文区(#sidebar-ctx):repo 树。收起态(.sidebar.is-rail)用 rail
-  // (图标 + repo 首字母),展开态用 full(两级树 + 新建)。收起态由 sidebar
-  // 顶部的 « / »(data-shell-collapse,全局绑定)翻 cc.shell.workspaces.collapsed。
-  const collapsed = loadShellCollapsed('workspaces');
-  const sidebar = $('sidebar');
-  if (sidebar) {
-    sidebar.classList.toggle('is-rail', collapsed);
-    // 收起钮 glyph:展开态显 «(收起),收起态显 »(展开)。aria-label 同步。
-    const collapseBtn = sidebar.querySelector('[data-shell-collapse]');
-    if (collapseBtn) {
-      collapseBtn.textContent = collapsed ? '»' : '«';
-      collapseBtn.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
-    }
-  }
-  const ctx = $('sidebar-ctx');
-  ctx.innerHTML = collapsed
-    ? renderNavRail(navModel, navOpts)
-    : renderNavFull(navModel, navOpts);
 
   // 主区 = pane 网格,直接进 #view(不再走 renderShell 的 .shell-main 包裹)。
   // new-ws dialog 跟在主区后面(原生 <dialog> 浮层,位置无所谓)。
@@ -1158,14 +1137,63 @@ function renderDesktopSidebarLayout() {
     dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
   }
 
-  // 侧边栏导航事件(点击 / 拖拽 / ⇲ / 塌缩 / + 新对话)。统一侧栏后 nav 在
-  // #sidebar-ctx,主区 drop 落点在 #view —— 选择器分离见 bindOverviewHandlers。
-  // 收起钮 « / »(data-shell-collapse)由 boot 全局绑定(见 bindSidebarCollapse),
-  // 不在这里逐次绑(它在常驻 #sidebar 里,不随重画重建)。
-  bindOverviewHandlers();
+  // 主区 pane 交互(drop 落点 / × 关闭)绑在 #view。nav 交互(focus / 拖拽 /
+  // ⇲ / 塌缩 / + 新对话)已由上面 _renderSidebarNav() 绑过(#sidebar-ctx),
+  // 这里不再重绑 —— 否则收起/展开重画 ctx 时若也连带重绑 view 部分,会让
+  // drop/close 双触发。收起钮 « / »(data-shell-collapse)由 boot 全局绑定
+  // (见 bindSidebarCollapse),它在常驻 #sidebar 里不随重画重建。
+  _bindViewPaneHandlers($('view'));
   // 主区 pane 内的 trigger / provider / trust / approval / attach / turn 交互
   // (复用 detail / mobile 共享的 binder)。
   bindWorkspaceColHandlers($('view').querySelector('.pc-main'));
+}
+
+// 只渲染侧栏 nav(#sidebar-ctx + .sidebar.is-rail + « / » glyph),完全不碰
+// #view —— 这是修「PC 收起/展开主区闪抖」bug 的关键:收起钮只需调它,主区
+// 那批 DOM 节点原地不动,靠 CSS flex 随侧栏 reflow,不重建 → 不闪。
+//
+// 收起态(.sidebar.is-rail)用 rail(图标 + repo 首字母),展开态用 full(两级
+// 树 + 新建)。repo 树只在「Workspaces 系」路由填进 ctx —— 即 PC 上走
+// renderDesktopSidebarLayout 的两条:overview('workspaces')+ 深链单 pane
+// ('workspace-detail',见 renderWorkspaceDetailView PC 分支)。其它路由
+// (Tasks / Settings / Roundtable / runs)的 #sidebar-ctx 被 render() 清空,
+// 这里只 toggle is-rail + glyph,绝不把 repo 树塞进去(rail 态对它们无意义)。
+//
+// 末尾只绑 #sidebar-ctx 的 nav handler(ctx 被 innerHTML 换新需重绑);#view
+// 没动所以不重绑 view 部分(否则 drop/close 双触发)。
+const _SIDEBAR_NAV_ROUTES = ['workspaces', 'workspace-detail'];
+function _renderSidebarNav() {
+  const collapsed = loadShellCollapsed('workspaces');
+  const sidebar = $('sidebar');
+  if (sidebar) {
+    sidebar.classList.toggle('is-rail', collapsed);
+    // 收起钮 glyph:展开态显 «(收起),收起态显 »(展开)。aria-label 同步。
+    const collapseBtn = sidebar.querySelector('[data-shell-collapse]');
+    if (collapseBtn) {
+      collapseBtn.textContent = collapsed ? '»' : '«';
+      collapseBtn.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
+    }
+  }
+
+  // 只有 Workspaces 系路由的 ctx 装 repo 树。其它路由 ctx 为空 —— 不在这里塞树。
+  if (!_SIDEBAR_NAV_ROUTES.includes(parseRoute().name)) return;
+
+  if (!paneState) loadPcLayout();
+  const navModel = navModelFromTree(_pcSidebarTree());
+  // active 计算:active pane 的 tileId 加 .is-active,所有 open pane 加 .is-open。
+  const activeId = paneState.panes[paneState.activePaneIdx];
+  const activeIds = new Set(paneState.panes);
+  const expandedRepos = new Set(paneState.expandedRepos || []);
+  const navOpts = { activeId, activeIds, expandedRepos };
+
+  const ctx = $('sidebar-ctx');
+  if (!ctx) return;
+  ctx.innerHTML = collapsed
+    ? renderNavRail(navModel, navOpts)
+    : renderNavFull(navModel, navOpts);
+
+  // ctx 被 innerHTML 换新 → 重绑 nav 交互。#view 没动 → 不在这里绑 view 部分。
+  _bindSidebarNavHandlers(ctx);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1218,7 +1246,7 @@ function _navRunningDot(running) {
 //
 // 按 NavModel 渲染展开态。承接旧 _pcSidebarHtml 全部行为:active(.is-active)
 // / open(.is-open)/ 塌缩三角 / +新建动作 / hover ⇲ / running 点。数据源
-// 从 tree 换成 NavModel,但 data 钩子保持不变,让 bindOverviewHandlers 委托
+// 从 tree 换成 NavModel,但 data 钩子保持不变,让 _bindSidebarNavHandlers 委托
 // 仍命中。
 //
 // class 名清单(.shell-nav-* 通用命名,4 tab 复用):
@@ -1233,7 +1261,7 @@ function _navRunningDot(running) {
 //   .shell-nav-children    展开后的子行容器
 //   .shell-nav-dot         running 青色脉冲点
 //   .is-open / .is-active  高亮态
-// data 钩子(保持,bindOverviewHandlers 依赖):data-tile-id / draggable /
+// data 钩子(保持,_bindSidebarNavHandlers 依赖):data-tile-id / draggable /
 //   data-open-beside / data-toggle-repo / data-new-chat-ws。
 //
 // opts:{ activeId(= active pane 的 tileId,加 .is-active),
@@ -1311,7 +1339,7 @@ function renderNavFull(navModel, opts = {}) {
 //
 // class:.shell-nav-rail-item / .shell-nav-rail-glyph / .shell-nav-rail-badge
 // / .shell-nav-dot(复用)/ .is-active。data 钩子 data-tile-id(点 rail 项仍
-// 走 focus,bindOverviewHandlers 命中)。
+// 走 focus,_bindSidebarNavHandlers 命中)。
 function renderNavRail(navModel, opts = {}) {
   const items = navModel.sections?.[0]?.items || [];
   const activeId = opts.activeId;
@@ -1403,9 +1431,13 @@ function bindShellChrome(tab, rerender) {
 
 // 统一侧栏收起钮全局接线(spec §13.2)。« / »(data-shell-collapse)在常驻
 // #sidebar 里(不随 render 重建)→ boot 时绑一次,翻 cc.shell.workspaces.collapsed
-// → 重画当前 view(render 会按收起态重填 #sidebar-ctx + 翻 .sidebar.is-rail)。
+// → 只调 _renderSidebarNav() 重画侧栏(toggle .sidebar.is-rail + 翻 glyph +
+// 重填 #sidebar-ctx)。**不调 render()** —— render 会经 renderDesktopSidebarLayout
+// 重建 #view(主区 pane + 对话),那正是「收起/展开主区闪抖」的根因。#view
+// 原地不动,靠 CSS flex 随侧栏 reflow,对话 scroll / 草稿都不丢。
 // 当前只有 Workspaces tab 有收起态(其它 tab 的 #sidebar-ctx 为空,rail 态无意义)
-// —— 故 key 固定 'workspaces'。
+// —— 故 key 固定 'workspaces';_renderSidebarNav 内部按路由判断,非 workspaces
+// 只 toggle is-rail + glyph,不往 ctx 塞 repo 树。
 function bindSidebarCollapse() {
   const sidebar = $('sidebar');
   if (!sidebar) return;
@@ -1413,7 +1445,7 @@ function bindSidebarCollapse() {
   if (!btn) return;
   btn.addEventListener('click', () => {
     saveShellCollapsed('workspaces', !loadShellCollapsed('workspaces'));
-    render();
+    _renderSidebarNav();
   });
 }
 
@@ -2196,21 +2228,25 @@ function _addTapFallback(el, handler) {
 // PC 侧边栏 + pane 的导航事件(逐元素绑定,贴 bindWorkspaceColHandlers 风格,
 // 决策 6;不用 document 级委托)。pane 内的 trigger / provider / trust /
 // approval / attach 由 renderDesktopSidebarLayout 单独调 bindWorkspaceColHandlers
-// 绑(只绑主区),这里只管侧边栏导航 + pane 关闭 + 拖拽落点。
+// 绑(只绑主区);侧边栏导航 + pane 关闭 + 拖拽落点拆成下面两个 binder。
 //
 // 交互(决策 5 / Task 9):
-//   点 [data-tile-id]        → focus(聚焦到 active pane)
-//   拖 [data-tile-id] 落主区  → openBeside(开/替换第二 pane)
-//   点 [data-open-beside]    → openBeside(⇲ 点击入口,等价拖拽)
-//   点 [data-close-pane]     → close
-//   点 [data-toggle-repo]    → toggle expandedRepos(不走 reducer,直接重画)
-//   点 [data-new-chat-ws]    → 自动命名新 session → focus(决策 2,不弹框)
-function bindOverviewHandlers() {
-  // 统一侧栏(spec §13.2):nav 项(focus / 拖拽源 / ⇲ / 塌缩三角 / + 新对话)
-  // 渲染在常驻 #sidebar-ctx 里;主区 pane(drop 落点 / × 关闭)在 #view 里。
-  // 两个根分开找,不再统一在 #view 下。
-  const ctx = $('sidebar-ctx');
-  const view = $('view');
+//   点 [data-tile-id]        → focus(聚焦到 active pane)         [nav]
+//   拖 [data-tile-id] 落主区  → openBeside(开/替换第二 pane)      [nav 拖源 + view 落点]
+//   点 [data-open-beside]    → openBeside(⇲ 点击入口,等价拖拽)  [nav]
+//   点 [data-close-pane]     → close                              [view]
+//   点 [data-toggle-repo]    → toggle expandedRepos(不走 reducer,直接重画)[nav]
+//   点 [data-new-chat-ws]    → 自动命名新 session → focus(决策 2,不弹框)[nav]
+// 统一侧栏(spec §13.2):nav 项(focus / 拖拽源 / ⇲ / 塌缩三角 / + 新对话)
+// 渲染在常驻 #sidebar-ctx 里;主区 pane(drop 落点 / × 关闭)在 #view 里。
+// 两个根分开绑(_bindSidebarNavHandlers / _bindViewPaneHandlers)—— 收起/展开
+// 只重建 ctx,所以收起 handler 只重绑 nav 部分(经 _renderSidebarNav),绝不重绑
+// view 部分(否则 drop/close 双触发)。全量重画走 renderDesktopSidebarLayout:
+// _renderSidebarNav() 绑 nav + 末尾 _bindViewPaneHandlers() 绑 view,各一次。
+
+// 绑 #sidebar-ctx 里的 nav 交互(focus / dragstart / open-beside / toggle-repo /
+// new-chat)。ctx 被 innerHTML 换新后需重绑;不碰 #view。
+function _bindSidebarNavHandlers(ctx) {
   if (!ctx) return;
 
   // ── 点击 = focus(行内的 ⇲ / 塌缩三角各有自己的 handler,这里要排除)──
@@ -2233,28 +2269,12 @@ function bindOverviewHandlers() {
       e.dataTransfer.effectAllowed = 'copy';
     });
   }
-  const main = view.querySelector('.pc-main');
-  if (main) {
-    main.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
-    main.addEventListener('drop', (e) => {
-      e.preventDefault();
-      const tileId = e.dataTransfer.getData('text/plain');
-      if (tileId) dispatchPane({ type: 'openBeside', tileId });
-    });
-  }
 
   // ── ⇲ 并排打开按钮(决策 5 的点击入口)──
   for (const btn of ctx.querySelectorAll('.shell-nav-open-beside[data-open-beside]')) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       dispatchPane({ type: 'openBeside', tileId: btn.dataset.openBeside });
-    });
-  }
-
-  // ── pane × 关闭(在主区 #view)──
-  for (const btn of view.querySelectorAll('.pc-pane-close[data-close-pane]')) {
-    btn.addEventListener('click', () => {
-      dispatchPane({ type: 'close', idx: Number(btn.dataset.closePane) });
     });
   }
 
@@ -2270,6 +2290,29 @@ function bindOverviewHandlers() {
   // ── + 新对话:自动命名一条新 session(决策 2)→ focus,不弹框 ──
   for (const btn of ctx.querySelectorAll('.shell-nav-new-chat[data-new-chat-ws]')) {
     btn.addEventListener('click', () => _onPcNewChatClick(btn.dataset.newChatWs));
+  }
+}
+
+// 绑 #view 里的主区 pane 交互(.pc-main 的 drop 落点 / .pc-pane-close 的 ×)。
+// 只在 #view 被 innerHTML 重建后绑;收起/展开不重建 #view,所以那条路径不调它。
+function _bindViewPaneHandlers(view) {
+  if (!view) return;
+
+  const main = view.querySelector('.pc-main');
+  if (main) {
+    main.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+    main.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const tileId = e.dataTransfer.getData('text/plain');
+      if (tileId) dispatchPane({ type: 'openBeside', tileId });
+    });
+  }
+
+  // ── pane × 关闭(在主区 #view)──
+  for (const btn of view.querySelectorAll('.pc-pane-close[data-close-pane]')) {
+    btn.addEventListener('click', () => {
+      dispatchPane({ type: 'close', idx: Number(btn.dataset.closePane) });
+    });
   }
 }
 

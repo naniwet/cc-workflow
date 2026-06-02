@@ -1559,7 +1559,9 @@ pre {
     min-height: 0;
     background: var(--bg-surface);
     border-right: 1px solid var(--border-subtle);
-    transition: flex-basis var(--t-base);
+    /* flex-basis + width 同走过渡:is-rail 态两者一起变(52px),只动 flex-basis
+       会让 width 瞬切 → 视觉抖。补 width 保险(不动 is-rail 的宽度切法本身)。 */
+    transition: flex-basis var(--t-base), width var(--t-base);
   }
   /* head:品牌 mark + 在线状态点 + « 收起钮,一行 */
   .sidebar-head {
