@@ -200,3 +200,28 @@ renderComposer({ placeholder, model, running, hasDraft }) + binder
 - 不把 conversation 用到 Workspaces pane / Tasks loop 历史以外(Roundtable 明确不用,保留网格)。
 - 不为 Tasks/Settings 想象需求提前加 nav-model 字段。
 - 后端不动(除复用 cancel)。
+
+---
+
+## 12. v2 迭代决策(2026-06-02,1a 真渲染截图后用户反馈)
+
+1a 上线截图后用户两条反馈,定为 1a 的紧接迭代(仍只动 PC + 共享渲染前端):
+
+### 12.1 导航统一:顶部 tab → 最左 app-rail(几乎不可逆,术语补 §2)
+- 新增**全局 `app-rail`**(最左 ~52px 竖条):品牌 + 4 个 tab(Workspaces / Tasks / Roundtable / Settings)+ 底部 Settings/状态。**砍掉 topbar 那排 tab**,topbar 收成最简(或并入 app-rail)。
+- 布局变成 `[app-rail][ shell-nav ][ main ]`(Workspaces);其它 tab = `[app-rail][ 该 tab 内容 ]`。app-rail 全局,所有 tab 通用 → 顺手把"4 tab 统一壳"往前推一步。
+- **移动端不变**:app-rail desktop-only(`@media min-width:769px`),mobile 仍用现有 `.bottom-nav`。
+- `setActiveTab` 同步更新 app-rail 高亮(跟 bottom-nav 联动)。
+- 术语新增:`app-rail` = 全局应用级导航(区别于 `shell-nav` = 当前 tab 的上下文导航)。
+
+### 12.2 报文风格:doc-flow(取代标签栏 + 绿左条)
+- 现状 turn 是 `USER/REPLY/DONE 左标签栏 + 内容列 + 整条绿左条`,读着像日志表单。改成**文档流**(用户选 B):
+  - 用户 prompt:弱前缀块(如 `你 ›` + 文本,弱底),不再 `USER` 标签 + 边框盒。
+  - assistant 回复:**全宽流动正文**(markdown),turn 顶一个 `CLAUDE` 轻指示,不再每条 `REPLY` 左标签。
+  - 完成/result:小字脚注(`✓ 完成 · 用时 · tokens`),不再 `DONE` 标签行。
+  - 去掉整条彩色左 border;状态收成脚注的小 ✓ / 颜色。
+- 作用域:turn 渲染是 PC pane + mobile 共享 → 两端一起变自然。保留折叠/展开 + 事件过滤。
+- **不拉入 1b 的工具块/diff/markdown 表格**(那仍是 1b);本次只是 turn **布局restyle**(去标签栏 → 流动)。
+- 反悔成本:轻易可逆(CSS + turn HTML 结构,无 schema/接口改)。
+
+**验证**:这两条都是纯前端 + 无自动化(DOM/CSS)→ 用 render harness 真渲染截图验(1a 已证明 harness 能抓真 bug)。
