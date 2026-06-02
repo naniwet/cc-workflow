@@ -306,18 +306,22 @@ export function tileKeyFor(ws, sessionKey) {
 // ---------------------------------------------------------------------------
 
 // 主区最多并排几个 pane。放开到 N 只改这一个常量 + 网格 CSS(spec §3.3,
-// 轻易可逆)。
-export const MAX_PANES = 2;
+// 轻易可逆)。2026-06-02 由 2 提到 4(2 不够用,4 封顶 — 再多每格 < ¼ 屏)。
+export const MAX_PANES = 4;
 
 // pane 状态 reducer(纯函数 state→state)。state = {panes:[tileId...],
-// activePaneIdx}。三条不变量(每个 action 后都成立):
+// activePaneIdx}。泛化到任意 ≤MAX_PANES,不 hardcode 2/4 特例。
+// 三条不变量(每个 action 后都成立):
 //   ① panes 长度 ∈ [1, MAX_PANES]  ② 无重复 tileId
 //   ③ activePaneIdx 永远指向存在的 pane
 //
 // action:
 //   {type:'focus', tileId}      写进 active pane;tileId 已开则只切 activePaneIdx
-//   {type:'openBeside', tileId} 未满 append 设 active;已满替换非 active;已开则只 focus
-//   {type:'close', idx}         仅 2 pane 合法,删该 idx,剩下成 active(idx 0);单 pane no-op
+//   {type:'openBeside', tileId} 未满(len<MAX)append 设 active;已满(len===MAX)
+//                               替换"最大的非 active 下标"(从尾往前找第一个非
+//                               active);已开则只 focus
+//   {type:'close', idx}         len>=2 删该 idx 并按 idx 与 active 的相对位置归位;
+//                               len===1 no-op(至少留 1)
 export function paneStateReducer(state, action) {
   const panes = state.panes;
   const activeIdx = state.activePaneIdx;
@@ -347,8 +351,12 @@ export function paneStateReducer(state, action) {
       const nextPanes = panes.concat(action.tileId);
       return { panes: nextPanes, activePaneIdx: nextPanes.length - 1 };
     }
-    // 已满:替换非 active 的那个,替进去的成 active
-    const replaceIdx = activeIdx === 0 ? panes.length - 1 : 0;
+    // 已满(len===MAX):替换最大的非 active 下标(从尾往前找第一个非 active),
+    // 替进去的成 active。active 永远保留。
+    let replaceIdx = -1;
+    for (let i = panes.length - 1; i >= 0; i--) {
+      if (i !== activeIdx) { replaceIdx = i; break; }
+    }
     const nextPanes = panes.slice();
     nextPanes[replaceIdx] = action.tileId;
     return { panes: nextPanes, activePaneIdx: replaceIdx };
@@ -356,9 +364,24 @@ export function paneStateReducer(state, action) {
 
   if (action.type === 'close') {
     if (panes.length <= 1) return state;   // 至少留 1 个 pane,no-op
+    const idx = action.idx;
     const nextPanes = panes.slice();
-    nextPanes.splice(action.idx, 1);
-    return { panes: nextPanes, activePaneIdx: 0 };
+    nextPanes.splice(idx, 1);
+    const newLen = nextPanes.length;
+    // 归位:
+    //   删 idx < active → active 跟着前移(active-1)
+    //   删 idx > active → active 不变
+    //   删 === active   → clamp(min(idx, newLen-1), 0, newLen-1)
+    let nextActive;
+    if (idx < activeIdx) {
+      nextActive = activeIdx - 1;
+    } else if (idx > activeIdx) {
+      nextActive = activeIdx;
+    } else {
+      nextActive = Math.min(idx, newLen - 1);
+    }
+    nextActive = Math.max(0, Math.min(nextActive, newLen - 1));
+    return { panes: nextPanes, activePaneIdx: nextActive };
   }
 
   return state;   // 未知 action:原样返回

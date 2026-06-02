@@ -339,9 +339,10 @@ test('sessionTileId / parseSessionTileId round-trip', () => {
   assert.deepEqual(parseSessionTileId(id2), { ws: 'myrepo', sessionKey: 'pwa-myrepo' });
 });
 
-// ---------- paneStateReducer(PC 侧边栏主区 1~2 pane,spec §5.2)----------
+// ---------- paneStateReducer(PC 侧边栏主区 1~4 pane,spec §5.2)----------
 // 纯函数 state→state,无 IO / 无 localStorage。三条不变量(每个 case 后成立):
-//   ① panes 长度 ∈ [1,2]  ② 无重复 tileId  ③ activePaneIdx 指向存在的 pane
+//   ① panes 长度 ∈ [1,MAX_PANES(=4)]  ② 无重复 tileId  ③ activePaneIdx 指向存在的 pane
+// reducer 泛化到任意 ≤MAX_PANES,不 hardcode 2/4 特例。
 
 // 不变量断言 helper:任何 reducer 输出都过这一关。
 function assertPaneInvariants(state) {
@@ -352,8 +353,8 @@ function assertPaneInvariants(state) {
     `activePaneIdx 指向不存在的 pane: ${state.activePaneIdx}`);
 }
 
-test('MAX_PANES = 2(放开 N 只改这个常量)', () => {
-  assert.equal(MAX_PANES, 2);
+test('MAX_PANES = 4(放开 N 只改这个常量 + 网格 CSS)', () => {
+  assert.equal(MAX_PANES, 4);
 });
 
 test('paneStateReducer focus: 写进 active pane(替换它)', () => {
@@ -380,28 +381,51 @@ test('paneStateReducer focus: focus 当前 active 自身 = no-op', () => {
   assertPaneInvariants(next);
 });
 
-test('paneStateReducer openBeside: 未满 → append 并设为 active', () => {
-  const state = { panes: ['a'], activePaneIdx: 0 };
-  const next = paneStateReducer(state, { type: 'openBeside', tileId: 'b' });
-  assert.deepEqual(next.panes, ['a', 'b']);
-  assert.equal(next.activePaneIdx, 1);        // 新开的成 active
+test('paneStateReducer openBeside: 未满 → append 并设为 active(逐个 1→2→3→4)', () => {
+  // 1 → 2
+  let s = paneStateReducer({ panes: ['a'], activePaneIdx: 0 }, { type: 'openBeside', tileId: 'b' });
+  assert.deepEqual(s.panes, ['a', 'b']);
+  assert.equal(s.activePaneIdx, 1);
+  assertPaneInvariants(s);
+  // 2 → 3
+  s = paneStateReducer(s, { type: 'openBeside', tileId: 'c' });
+  assert.deepEqual(s.panes, ['a', 'b', 'c']);
+  assert.equal(s.activePaneIdx, 2);
+  assertPaneInvariants(s);
+  // 3 → 4
+  s = paneStateReducer(s, { type: 'openBeside', tileId: 'd' });
+  assert.deepEqual(s.panes, ['a', 'b', 'c', 'd']);
+  assert.equal(s.activePaneIdx, 3);
+  assertPaneInvariants(s);
+});
+
+test('paneStateReducer openBeside: 满(4)后 → 替换最大的非 active 下标(active 在末尾)', () => {
+  // active = idx 3(末尾),从尾往前找第一个非 active → idx 2 被替
+  const state = { panes: ['a', 'b', 'c', 'd'], activePaneIdx: 3 };
+  const next = paneStateReducer(state, { type: 'openBeside', tileId: 'e' });
+  assert.deepEqual(next.panes, ['a', 'b', 'e', 'd']);   // c 被替,d(active)保留
+  assert.equal(next.activePaneIdx, 2);                  // 替进去的成 active
   assertPaneInvariants(next);
 });
 
-test('paneStateReducer openBeside: 已满 → 替换非 active 的那个', () => {
-  // active = idx 0,非 active = idx 1 → 新 tile 替掉 idx 1
+test('paneStateReducer openBeside: 满(4)后 → 替换最大的非 active 下标(active 在中间)', () => {
+  // active = idx 1(中间),从尾往前找第一个非 active → idx 3 被替
+  const state = { panes: ['a', 'b', 'c', 'd'], activePaneIdx: 1 };
+  const next = paneStateReducer(state, { type: 'openBeside', tileId: 'e' });
+  assert.deepEqual(next.panes, ['a', 'b', 'c', 'e']);   // d 被替,b(active)保留
+  assert.equal(next.activePaneIdx, 3);                  // 替进去的成 active
+  assertPaneInvariants(next);
+});
+
+test('paneStateReducer openBeside: 满(2)时也替换最大的非 active 下标(泛化,非 hardcode)', () => {
+  // MAX 虽是 4,但若当前已 2 个又用 2 验泛化 —— 用 length===MAX 才替换,
+  // 2 个时 length<MAX 仍 append,所以这里验"已满即 MAX=4"语义不被 2 特例污染:
+  // 2 个 openBeside 必须 append(不替换)。
   const state = { panes: ['a', 'b'], activePaneIdx: 0 };
   const next = paneStateReducer(state, { type: 'openBeside', tileId: 'c' });
-  assert.deepEqual(next.panes, ['a', 'c']);   // b 被替掉,a(active)保留
-  assert.equal(next.activePaneIdx, 1);        // 替进去的成 active
+  assert.deepEqual(next.panes, ['a', 'b', 'c']);   // append,不替换(因 length<MAX)
+  assert.equal(next.activePaneIdx, 2);
   assertPaneInvariants(next);
-
-  // active = idx 1 时,替掉 idx 0
-  const state2 = { panes: ['a', 'b'], activePaneIdx: 1 };
-  const next2 = paneStateReducer(state2, { type: 'openBeside', tileId: 'c' });
-  assert.deepEqual(next2.panes, ['c', 'b']);  // a 被替掉,b(active)保留
-  assert.equal(next2.activePaneIdx, 0);
-  assertPaneInvariants(next2);
 });
 
 test('paneStateReducer openBeside: tileId 已存在 → 只 focus 不 dup', () => {
@@ -412,14 +436,47 @@ test('paneStateReducer openBeside: tileId 已存在 → 只 focus 不 dup', () =
   assertPaneInvariants(next);
 });
 
-test('paneStateReducer close: 2 pane 时删 idx,剩下成 active(activePaneIdx 归 0)', () => {
-  const state = { panes: ['a', 'b'], activePaneIdx: 1 };
+test('paneStateReducer close: 删 idx < active → active 跟着前移(active-1)', () => {
+  // panes=[a,b,c,d] active=2(c);删 idx 0 → active 应指向仍是 c(现 idx 1)
+  const state = { panes: ['a', 'b', 'c', 'd'], activePaneIdx: 2 };
   const next = paneStateReducer(state, { type: 'close', idx: 0 });
+  assert.deepEqual(next.panes, ['b', 'c', 'd']);
+  assert.equal(next.activePaneIdx, 1);     // 2 - 1,仍指向 c
+  assertPaneInvariants(next);
+});
+
+test('paneStateReducer close: 删 idx > active → active 不变', () => {
+  // panes=[a,b,c,d] active=1(b);删 idx 3 → active 仍指 b(idx 1)
+  const state = { panes: ['a', 'b', 'c', 'd'], activePaneIdx: 1 };
+  const next = paneStateReducer(state, { type: 'close', idx: 3 });
+  assert.deepEqual(next.panes, ['a', 'b', 'c']);
+  assert.equal(next.activePaneIdx, 1);     // 不变
+  assertPaneInvariants(next);
+});
+
+test('paneStateReducer close: 删 === active → clamp(min(idx,newLen-1))', () => {
+  // 删的就是 active 自身,新 active = clamp(min(idx, newLen-1), 0, newLen-1)。
+  // panes=[a,b,c,d] active=2(c);删 idx 2 → newLen=3,min(2,2)=2,clamp=2 → 指向 d
+  const a = paneStateReducer({ panes: ['a', 'b', 'c', 'd'], activePaneIdx: 2 }, { type: 'close', idx: 2 });
+  assert.deepEqual(a.panes, ['a', 'b', 'd']);
+  assert.equal(a.activePaneIdx, 2);        // min(2, 2)=2 → 现 idx 2 是 d
+  assertPaneInvariants(a);
+
+  // 删末尾 active:panes=[a,b,c] active=2;删 idx 2 → newLen=2,min(2,1)=1 → 指向 b
+  const b = paneStateReducer({ panes: ['a', 'b', 'c'], activePaneIdx: 2 }, { type: 'close', idx: 2 });
+  assert.deepEqual(b.panes, ['a', 'b']);
+  assert.equal(b.activePaneIdx, 1);        // min(2, 1)=1
+  assertPaneInvariants(b);
+});
+
+test('paneStateReducer close: 2 pane 时删 idx 归位', () => {
+  // active=1,删 idx 0(idx<active)→ active-1=0
+  const next = paneStateReducer({ panes: ['a', 'b'], activePaneIdx: 1 }, { type: 'close', idx: 0 });
   assert.deepEqual(next.panes, ['b']);
   assert.equal(next.activePaneIdx, 0);
   assertPaneInvariants(next);
 
-  // 删 idx 1
+  // active=0,删 idx 1(idx>active)→ active 不变=0
   const next2 = paneStateReducer({ panes: ['a', 'b'], activePaneIdx: 0 }, { type: 'close', idx: 1 });
   assert.deepEqual(next2.panes, ['a']);
   assert.equal(next2.activePaneIdx, 0);

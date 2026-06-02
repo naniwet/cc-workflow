@@ -17,7 +17,7 @@ PC 当前 overview = `renderDesktopOverview` 的卡片墙:每个 session 是一�
 移动端"还可以"正是因为 carousel **一次只显示一个 workspace**,天然有焦点。本设计把"专注单开"搬到 PC,同时保留 PC 大屏优势(侧边栏一眼扫所有 repo + 偶尔并排两个对比)。
 
 **目标:** PC 进 Workspaces 默认是 **侧边栏 + 一个聚焦的对话**,而非一墙卡片;需要对比/并行时主动拖出第二个 pane。
-**非目标:** 不动移动端;不动数据模型;不做 pane > 2、可调分隔条、侧边栏折叠成图标条(YAGNI,§9)。
+**非目标:** 不动移动端;不动数据模型;不做 pane > 4、可调分隔条、侧边栏折叠成图标条(YAGNI,§9)。
 
 ---
 
@@ -68,16 +68,17 @@ UI 文案里 session 对用户叫"对话",但代码 / 标识符 / 本 spec 统�
 | **⇲ 并排打开按钮**(§7-3 用户确认加) | 侧边栏项 hover 时右侧出现一个 `⇲` 小按钮,点它 = 等价于拖出来开第二 pane | 纯拖拽对触控板/不熟者不友好,给一个点击入口 |
 | **当前聚焦项高亮** | active pane 对应的侧边栏项高亮 | 导航必须能看出主区在看哪个;**与早前"tile 不需要高亮"不冲突**(那是墙上格子靠点击直触发,这里是导航) |
 
-### 3.3 主区 / 多开(A:MAX_PANES=2)
+### 3.3 主区 / 多开(MAX_PANES=4,2026-06-02 由 2 提到 4)
 
 | 决策 | 选项 | 理由 |
 |---|---|---|
-| **pane 内容** | 复用 `workspaceColHtml(ws, data, {detail:true, sessionKey})` | 现有 detail 渲染,不新写 |
+| **pane 内容** | 复用 `workspaceColHtml(ws, data, {detail:true, sessionKey, tileId, noSessionBar:true})` | 现有 detail 渲染,不新写 |
 | **默认** | 1 个 pane,聚焦上次状态(§3.5) | 专注单开 |
-| **上限** | 常量 `MAX_PANES = 2`,并排等宽 | 嫌"重"的根因就是塞太多;放开数量 = 回到墙。改一个常量 + 网格 CSS 即可放开到 N(轻易可逆) |
-| **超限** | 已 2 个再开第 3 个 → **替换非 active 的那个**(拖拽时替换离拖入点近的) | 不无限增长 |
-| **去重** | 同一 session 不能同时在两个 pane | reducer 保证 |
-| **关闭** | 2 pane 时每个 pane 右上角 `×` → 回单开;1 pane 时不显示 `×` | 至少留 1 个 pane |
+| **上限** | 常量 `MAX_PANES = 4`,硬顶 | 2 不够用(用户实测);4 封顶,再多每格 < ¼ 屏没意义。仍 opt-in,不开就保持单开/双开 |
+| **布局阶梯**(按当前 pane 数) | 1=全屏;2=左右等宽;3=左列占满高 + 右列上下劈(1 大 2 小);4=2×2 四宫格 | CSS grid 一套搞定:容器 `grid-template:1fr 1fr / 1fr 1fr`;3 时 pane[0] `grid-row:1/3` 跨左列两行,pane[1]/pane[2] 占右列上下;1/2 退化成单格 / 双列 |
+| **超限** | 已 4 个再开第 5 个 → **替换非 active 的 pane**(优先替最后一格 panes[last],若它正 active 则向前找第一个非 active 的) | 不无限增长,4 硬顶 |
+| **去重** | 同一 session(tileId)不能同时在多个 pane | reducer 保证 |
+| **关闭** | `panes.length >= 2` 时每个 pane 右上角 `×` → 删该 pane;1 pane 时不显示 `×` | 至少留 1 个 pane |
 
 ### 3.4 数据流
 
@@ -162,10 +163,10 @@ mobile 路由不变。
 `state = {panes:[tileId...], activePaneIdx}`,actions:
 - `{type:'focus', tileId}` → 写进 active pane(若已在某 pane,只切 activePaneIdx,不重复)
 - `{type:'openBeside', tileId, near?}` → panes<MAX 则 append 并设为 active;已满则替换非 active(或近 `near` 的);已存在则只 focus
-- `{type:'close', idx}` → 删该 pane(仅 panes.length===2 时合法);剩下的成 active
-- 不变量:panes 长度 ∈ [1,2];无重复 tileId;activePaneIdx 永远指向存在的 pane
+- `{type:'close', idx}` → 删该 pane(`panes.length >= 2` 时合法;length===1 时 no-op,至少留 1);剩下的归位,activePaneIdx 夹回有效范围
+- 不变量:panes 长度 ∈ [1, MAX_PANES](=4);无重复 tileId;activePaneIdx 永远指向存在的 pane
 
-单测:open→满→再 open 替换、close 回单开、focus 已开项不 dup、去重、MAX 边界。
+单测:open 逐个到满(1→2→3→4)、满(4)后再 open 替换非 active、close 任意 idx 后归位、close 到 1 后 no-op、focus 已开项不 dup、去重、MAX(=4)边界。
 
 ### 5.3 不进单测的(集成 / 手动 smoke)
 DOM 渲染、拖拽 dragstart/drop、localStorage 读写、CSS 布局 —— `node --check` + 手动浏览器 smoke。
@@ -178,7 +179,7 @@ DOM 渲染、拖拽 dragstart/drop、localStorage 读写、CSS 布局 —— `no
 |---|---|---|
 | 删卡片墙换侧边栏 | **痛但可行**(模块边界) | 用户用一阵觉得侧边栏不如墙一眼全看 → 但 git 留着旧 `renderDesktopOverview` 可回滚 |
 | 两级 vs 纯 session | **几乎不可逆**(通用语言)→ 选两级,不动术语 | 基本不翻 |
-| MAX_PANES=2 | **轻易可逆** | 改常量 + 网格 CSS 放开到 N |
+| MAX_PANES=4(2026-06-02 由 2 提到 4) | **轻易可逆** | 改常量 + 布局阶梯 CSS;再调上限同样只动常量 + grid |
 | ⇲ 并排按钮 | 轻易可逆 | 没人用就删 |
 | localStorage 不迁移旧墙布局 | 轻易可逆 | 旧布局本就要废,无迁移价值 |
 
@@ -205,7 +206,7 @@ DOM 渲染、拖拽 dragstart/drop、localStorage 读写、CSS 布局 —— `no
 
 ## 9. 不做(YAGNI)
 
-- pane > 2(常量留口,不实现)
+- pane > 4(4 硬顶,常量留口,不实现)
 - pane 间拖拽互换、可调分隔条、pane 大小记忆
 - 侧边栏宽度可拖 / 折叠成图标条
 - 移动端任何改动

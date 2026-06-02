@@ -1046,7 +1046,7 @@ function renderDesktopSidebarLayout() {
         </div>
         <div class="pc-sidebar-tree">${_pcSidebarHtml(tree)}</div>
       </nav>
-      <div class="pc-main">${_pcMainHtml(groups)}</div>
+      <div class="pc-main" data-pane-count="${paneState.panes.length}">${_pcMainHtml(groups)}</div>
     </div>
     <dialog class="ws-new-dialog" id="ws-new-dialog">
       <form data-form-id="new-ws" class="ws-new-form">
@@ -1183,15 +1183,17 @@ function _pcSidebarHtml(tree) {
 // pane 内不再放 chip 条)+ tileId(让 colKey/scroll/draft/queue 按 tileId
 // 索引,同 ws 两 pane 不串台,决策 3)。
 //
-// × 关闭按钮(data-close-pane=idx)仅 panes.length===2 时渲染(§3.3:至少留
-// 1 个 pane)。空 panes → 空态文字。
+// × 关闭按钮(data-close-pane=idx)在 panes.length>=2 时渲染(§3.3:至少留
+// 1 个 pane,1 个时不显示 ×)。空 panes → 空态文字。
+// 布局(1=全屏 / 2=左右 / 3=左大右上下 / 4=2×2)全交 CSS:容器 .pc-main 带
+// data-pane-count="${panes.length}",grid 模板按 attr 切。JS 不写 grid 内联。
 // class 名(交接 Task 11):.pc-pane / .pc-pane-close / .pc-main-empty。
 function _pcMainHtml(groups) {
   const panes = paneState.panes;
   if (!panes.length) {
     return '<div class="pc-main-empty muted">左侧选一个 workspace 开始对话。</div>';
   }
-  const showClose = panes.length === 2;
+  const showClose = panes.length >= 2;
   return panes.map((tileId, idx) => {
     const { ws, sessionKey } = parseSessionTileId(tileId);
     // groups[tileId] 可能不存在:loadPcLayout 只在进 app 时 prune 一次。
