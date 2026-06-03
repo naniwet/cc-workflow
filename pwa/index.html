@@ -17,7 +17,9 @@
   <!-- 统一侧边栏(desktop ≥769px only,spec §13.2)。一条竖栏,不再割裂成
        [app-rail 52px][workspace 栏] 两条:
          .sidebar-head  品牌 mark + 在线状态点(#sidebar-status)+ « 收起钮
-         .sidebar-apps  4 个 app tab(Workspaces / Tasks / 评议 / Settings)
+         .sidebar-apps  4 个 app tab(Workspaces / Tasks / Roundtable / Settings)
+                        nav label 统一英文(用户要求,2026-06-03);代码 identifier
+                        + 页内内容(新建评议 dialog / 模式 chip)仍保留中文「评议」
          .sidebar-ctx   当前 tab 的上下文列表(Workspaces = repo 树;
                         其它 tab 留空)。由 app.js 按路由填充 / 清空。
        同一块底色(--bg-surface),app-nav 与 ctx 间至多一条极淡 divider,无中缝。
@@ -61,7 +63,7 @@
         </svg>
         <span>Tasks</span>
       </a>
-      <a href="#roundtables" data-tab="roundtables" class="sidebar-app" title="评议">
+      <a href="#roundtables" data-tab="roundtables" class="sidebar-app" title="Roundtable">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="4"/>
@@ -70,7 +72,7 @@
           <circle cx="4"  cy="12" r="1.5"/>
           <circle cx="20" cy="12" r="1.5"/>
         </svg>
-        <span>评议</span>
+        <span>Roundtable</span>
       </a>
       <a href="#settings" data-tab="settings" class="sidebar-app" title="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -92,7 +94,7 @@
     <nav class="tabs" id="tabs">
       <a href="#workspaces" data-tab="workspaces" class="tab">Workspaces</a>
       <a href="#tasks" data-tab="tasks" class="tab">Tasks</a>
-      <a href="#roundtables" data-tab="roundtables" class="tab">评议</a>
+      <a href="#roundtables" data-tab="roundtables" class="tab">Roundtable</a>
       <a href="#settings" data-tab="settings" class="tab">Settings</a>
     </nav>
     <span class="status" id="status"></span>

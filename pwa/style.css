@@ -3065,18 +3065,28 @@ pre {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  margin-top: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);   /* 跟上面的 transcript 分隔 */
 }
+/* 2026-06-03:这块原来用 --bg-2 / --text / --border / --text-muted / --text-xs
+   —— 评议子系统移植时带的旧 token 名,主设计系统里根本没定义,导致 textarea
+   没底色/没边框、附件文字默认色,渲成"没框的浮动占位"(用户反馈"丑")。
+   全部改成主 token。 */
 .rt-continue-input textarea {
   width: 100%;
   font-family: inherit;
   font-size: var(--text-sm);
   padding: var(--space-2);
-  background: var(--bg-2);
-  color: var(--text);
-  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   resize: vertical;
+}
+.rt-continue-input textarea:focus {
+  outline: none;
+  border-color: var(--accent-blue);
 }
 .rt-continue-row {
   display: flex;
@@ -3085,17 +3095,19 @@ pre {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+/* 附件行收紧成单行(原来 column 把 label 和文件框拆两行,松散):
+   📎 label + 原生文件框同行,小号 + 弱色。 */
 .rt-continue-attach {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: var(--text-xs);
-  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-micro);
+  color: var(--text-tertiary);
 }
 .rt-continue-attach input[type="file"] {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  max-width: 280px;
+  font-size: var(--text-micro);
+  color: var(--text-tertiary);
+  max-width: 200px;
 }
 .rt-continue-submit {
   /* 不复用 .ws-new-btn 的 + 前缀样式 — 这是个独立按钮,放右侧 */
