@@ -4996,7 +4996,7 @@ function renderRoundtableSidebarNav(activeId) {
     <div class="ws-toolbar rt-sidebar-toolbar">
       <button class="ws-new-btn" type="button" id="rt-sidebar-new-btn">+ 新建</button>
       <a href="#settings/roles" class="ws-toolbar-link"
-         style="margin-left:12px;font-size:13px;text-decoration:none;color:var(--accent)">
+         style="margin-left:12px;font-size:13px;text-decoration:none;color:var(--accent-blue)">
         ⚙ 角色配置
       </a>
     </div>
@@ -5206,7 +5206,7 @@ function renderRoundtablesView() {
     <div class="ws-toolbar">
       <button class="ws-new-btn" type="button" id="rt-new-btn">+ 新建</button>
       <a href="#settings/roles" class="ws-toolbar-link"
-         style="margin-left:12px;font-size:13px;text-decoration:none;color:var(--accent)">
+         style="margin-left:12px;font-size:13px;text-decoration:none;color:var(--accent-blue)">
         ⚙ 角色配置
       </a>
     </div>

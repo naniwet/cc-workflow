@@ -556,29 +556,29 @@ main {
   gap: 6px;
   padding: 6px 0;
   margin-bottom: var(--space-1);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .ws-session-chip {
-  font-size: var(--text-xs);
+  font-size: var(--text-micro);
   padding: 3px 10px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-2);
-  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-tertiary);
   cursor: pointer;
   white-space: nowrap;
 }
-.ws-session-chip:hover { color: var(--text); border-color: var(--accent); }
+.ws-session-chip:hover { color: var(--text-primary); border-color: var(--accent-blue); }
 .ws-session-chip.is-active {
   background: rgba(99, 102, 241, 0.15);
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
   font-weight: 500;
 }
 
 /* session tile 标题里的 "/ <session 名>" 后缀 —— 比 ws 名淡,小一号 */
 .ws-session-tag {
-  color: var(--accent);
+  color: var(--accent-blue);
   font-weight: 500;
   font-size: 0.85em;
 }
@@ -760,12 +760,12 @@ main {
   align-items: baseline;
   gap: var(--space-2);
   font-size: var(--text-sm);
-  line-height: var(--lh-snug);
+  line-height: var(--lh-normal);
   flex-wrap: wrap;
 }
 .a-row .a-icon { flex-shrink: 0; font-weight: 700; width: 1.2em; text-align: center; }
 .a-row .a-label {
-  font-size: var(--text-xs);
+  font-size: var(--text-micro);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -773,7 +773,7 @@ main {
 }
 .a-row .a-tool {
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-micro);
   background: var(--bg-canvas);
   padding: 2px var(--space-1);
   border-radius: var(--radius-sm);
@@ -782,7 +782,7 @@ main {
   flex: 1 1 auto;
   min-width: 0;
 }
-.a-row .a-time { font-size: var(--text-xs); flex-shrink: 0; }
+.a-row .a-time { font-size: var(--text-micro); flex-shrink: 0; }
 /* Color the icon + label per status — keeps the row scannable. */
 .a-row.a-ok    .a-icon, .a-row.a-ok    .a-label { color: var(--accent-green); }
 .a-row.a-auto  .a-icon, .a-row.a-auto  .a-label { color: var(--accent-green); opacity: 0.75; }
@@ -961,7 +961,7 @@ label {
 .toast-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .toast-message  { min-width: 0; word-break: break-word; line-height: var(--lh-normal); }
 .toast-hint {
-  font-size: var(--text-xs);
+  font-size: var(--text-micro);
   color: var(--text-secondary);
   line-height: var(--lh-normal);
 }
@@ -972,7 +972,7 @@ label {
   border-radius: var(--radius-sm);
   background: var(--accent-blue);
   color: white;
-  font-size: var(--text-xs);
+  font-size: var(--text-micro);
   text-decoration: none;
   font-weight: 500;
 }
@@ -982,7 +982,7 @@ label {
 }
 .toast-raw summary {
   cursor: pointer;
-  font-size: var(--text-xs);
+  font-size: var(--text-micro);
   color: var(--text-tertiary);
   user-select: none;
   list-style: none;
@@ -994,7 +994,7 @@ label {
   margin: 4px 0 0;
   padding: 6px 8px;
   background: var(--bg-canvas);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   font-size: 11px;
   max-height: 160px;
   overflow: auto;
@@ -3128,8 +3128,8 @@ pre {
   margin-top: 0;
 }
 .rt-verdict-warning {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
+  font-size: var(--text-micro);
+  color: var(--text-tertiary);
   font-weight: normal;
   margin-left: var(--space-2);
 }
@@ -3153,15 +3153,15 @@ pre {
 /* 决断员失败态 — 跟成功态视觉切开:灰色 + 不加粗 headline。避免用户瞄一眼
    把 "决断员调用失败" 当成 AI 推荐的方案名误读。 */
 .rt-verdict-failed {
-  border-color: var(--border);
+  border-color: var(--border-subtle);
   background: rgba(150, 150, 150, 0.06);
 }
 .rt-verdict-failed h2 {
-  color: var(--text-muted);
+  color: var(--text-tertiary);
 }
 .rt-verdict-failed-msg {
   font-size: var(--text-sm);
-  color: var(--text-muted);
+  color: var(--text-tertiary);
   padding: var(--space-2) 0;
 }
 
@@ -3177,7 +3177,7 @@ pre {
   font-size: var(--text-sm);
   line-height: 1.4;
   cursor: pointer;
-  color: var(--text);
+  color: var(--text-primary);
 }
 .rt-decider-row input[type="checkbox"] {
   width: auto;
@@ -3195,9 +3195,9 @@ pre {
   padding: 2px 8px;
   border-radius: 999px;
   background: rgba(99, 102, 241, 0.12);
-  color: var(--accent);
+  color: var(--accent-blue);
   border: 1px solid rgba(99, 102, 241, 0.30);
-  font-size: var(--text-xs);
+  font-size: var(--text-micro);
   font-weight: 500;
 }
 /* mode row 跟 rounds-row 用同一布局(label 左 picker 右,见下方 .rt-rounds-row)*/
@@ -3209,7 +3209,7 @@ pre {
 }
 .rt-mode-label {
   font-size: var(--text-sm);
-  color: var(--text-muted);
+  color: var(--text-tertiary);
   white-space: nowrap;
 }
 .rt-mode-row > .form-picker { flex: 1; }
@@ -3881,7 +3881,7 @@ pre {
   outline: none;
   border-color: var(--accent-blue);
 }
-.search-result-count { margin: 0 0 var(--space-2); font-size: var(--text-xs); }
+.search-result-count { margin: 0 0 var(--space-2); font-size: var(--text-micro); }
 .search-results {
   display: flex;
   flex-direction: column;
@@ -3937,7 +3937,7 @@ pre {
   overflow: hidden;
   background: var(--bg-canvas);
   padding: 4px 8px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   white-space: pre-wrap;
   flex: 1;
   min-width: 0;
@@ -4017,14 +4017,14 @@ pre {
   gap: var(--space-2);
   font-family: var(--font-mono, monospace);
 }
-.provider-field > .muted { min-width: 60px; font-family: var(--font-sans, inherit); font-size: var(--text-xs); }
+.provider-field > .muted { min-width: 60px; font-family: var(--font-ui); font-size: var(--text-micro); }
 .provider-field code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   background: var(--bg-canvas);
   padding: 1px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 .provider-row-actions {
   display: flex;
@@ -4066,7 +4066,7 @@ pre {
   border-radius: 10px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  font-size: var(--text-xs);
+  font-size: var(--text-micro);
   color: var(--text-primary);
   max-width: 100%;
   overflow: hidden;
@@ -4125,7 +4125,7 @@ pre {
 
 /* 队列项里的 📎 N 标识(已排队的 prompt 带附件时显示数量)*/
 .queue-attach {
-  font-size: var(--text-xs);
+  font-size: var(--text-micro);
   color: var(--text-secondary);
   margin-left: 4px;
   white-space: nowrap;
