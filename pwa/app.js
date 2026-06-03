@@ -995,13 +995,40 @@ function clearDetails(detailsId) {
   if (el) el.open = false;
 }
 
+// 离开 roundtables / tasks tab 时,关掉挂在 document.body 上、可能还开着的
+// +新建 dialog(#rt-new-dialog / #task-new-dialog)。全局宿主让弹窗不随 #view
+// 生灭,代价是它不会因导航自动消失 —— 浏览器后退换路由时 modal 会浮在新页上
+// (adversarial-review 抓到)。按目标路由收口:不在其 tab 就 close。同 tab 内
+// 的轮询不命中(route.name 仍是本 tab),弹窗照常存活(轮询不关弹窗的语义保留)。
+function _closeStrayDialogs(route) {
+  const onRt = route.name === 'roundtables' || route.name === 'roundtable-detail';
+  const onTasks = route.name === 'tasks' || route.name === 'task-detail';
+  let closed = false;
+  if (!onRt) { const d = document.getElementById('rt-new-dialog'); if (d && d.open) { d.close(); closed = true; } }
+  if (!onTasks) { const d = document.getElementById('task-new-dialog'); if (d && d.open) { d.close(); closed = true; } }
+  // 关掉 dialog 后,焦点可能还(异步)停在 dialog 的输入框上 → 下面"焦点在
+  // input 就 bail"的守卫会误判,导致这一轮 render 不更新视图(要等下次轮询
+  // 才切过去)。主动 blur:用户是导航离开(浏览器后退),不是在打字,放行守卫、
+  // 本轮就完成路由切换。
+  if (closed) document.activeElement?.blur?.();
+}
+
 function render() {
+  const route = parseRoute();
+  // 离开 roundtables / tasks tab 时,关掉挂在 body 上、可能还开着的 +新建
+  // dialog。dialog 全局宿主(_ensure*Dialog)让弹窗不随 #view 生灭(好处:
+  // 轮询重渲不关弹窗),副作用是浏览器后退换路由时 modal 会浮在新页上。这里
+  // 按目标路由收口。**放在焦点守卫之前** —— 即使焦点还困在 dialog 输入框里
+  // (modal trap),也能先 close(焦点回 opener 按钮)再正常往下重渲,避免
+  // "render 一直 bail、dialog 一直浮着"的卡死。同 tab 内的轮询不命中(route
+  // 仍是本 tab),弹窗照常存活。
+  _closeStrayDialogs(route);
+
   // Don't tear DOM out from under a focused input — refresh resumes after blur.
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return;
 
   snapshotDrafts();
-  const route = parseRoute();
   const isFreshNav = location.hash !== _lastRenderedHash;
   _lastRenderedHash = location.hash;
 
