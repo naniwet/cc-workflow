@@ -597,3 +597,43 @@ export function navModelFromLoops(loops) {
   });
   return { sections: [{ items }] };
 }
+
+// ---------------------------------------------------------------------------
+// Workspace Git 区段 —— 纯函数(spec: 2026-06-03-workspace-git-view.md)。
+// 消费后端 GET /workspaces/{ws}/git[/diff] 的 schema(spec §3.2)。0 IO / 0 DOM,
+// 被 pwa-ui-contract.test.mjs 覆盖;DOM 接线 / fetch 在 app.js。
+// ---------------------------------------------------------------------------
+
+// 展开态 header 的 ±N 角标文案。N = diff_stat 文件数;diff_truncated(后端
+// 文件数 cap 200,spec §7)→ ±200+;空 / 无改动 → 空串(不显角标)。
+// 折叠态不显精确 N(spec §4.3/Q1)—— 折叠时 app.js 不调本函数。
+export function gitBadgeText(diffStat, diffTruncated) {
+  const n = Array.isArray(diffStat) ? diffStat.length : 0;
+  if (n === 0) return '';
+  return diffTruncated ? '±200+' : `±${n}`;
+}
+
+// diff 行 kind → CSS class(spec §5.2 方案 A:复用 .diff-add/.diff-del 视觉层 +
+// 新增 .diff-ctx 上下文行)。未知 kind → diff-ctx 中性兜底(不崩)。
+// **不复用 _toolUseDiffHtml**:那个函数语义是"全删旧 + 全增新",不认 hunk /
+// 上下文行(见 spec §5.1 核查结论)。
+export function hunkLineClass(kind) {
+  if (kind === 'add') return 'diff-add';
+  if (kind === 'del') return 'diff-del';
+  return 'diff-ctx';
+}
+
+// 后端结构化 hunks([{header, lines:[{kind, text}]}],parse_unified_diff 产出)
+// → html。薄渲染器(spec §5.2 方案 A 核心):每个 hunk 渲一行 header(@@...)+
+// 每行按 hunkLineClass(kind) 套 class 显 text。esc 由调用方注入(贴 app.js 的
+// esc),**全程转义** header + 行文本,防注入。空 hunks → 空串。
+export function hunksToHtml(hunks, esc) {
+  if (!Array.isArray(hunks) || hunks.length === 0) return '';
+  return hunks.map((hunk) => {
+    const header = `<div class="diff-hunk-header">${esc(hunk.header)}</div>`;
+    const lines = (hunk.lines || []).map((line) =>
+      `<div class="${hunkLineClass(line.kind)}">${esc(line.text)}</div>`
+    ).join('');
+    return header + lines;
+  }).join('');
+}

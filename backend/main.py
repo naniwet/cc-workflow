@@ -62,7 +62,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import agents_store, approvals, auth, config, cron_state, db, im_feishu, llm, runner, skills, ws_settings
+from . import agents_store, approvals, auth, config, cron_state, db, git_view, im_feishu, llm, runner, skills, ws_settings
 from .roundtable import decider as roundtable_decider
 from .roundtable import io as roundtable_io
 from .roundtable import model as roundtable_model
@@ -667,6 +667,58 @@ def get_workspace_sessions(workspace: str) -> dict:
         "worktree_mode": ws_settings.worktree_mode_for(workspace),
         "sessions": sessions,
     }
+
+
+def _resolve_git_context(ws: str, session: str):
+    """workspace 白名单校验 + cwd/base 推导(两个 git 端点共用)。
+
+    校验失败抛 404。返回 (cwd, cwd_kind, base, warnings)。
+    worktree 存在性在此探测(对齐 main.py:664 的 .is_dir()),纯函数
+    git_view.resolve_git_cwd 只收 bool 不碰 filesystem。
+    """
+    from . import ui_cards
+    if ws not in set(ui_cards._discover_workspaces()):
+        raise HTTPException(404, {"error": "workspace not found", "name": ws})
+
+    mode = ws_settings.worktree_mode_for(ws)
+    session_safe = re.sub(r"[^A-Za-z0-9._-]", "_", session)
+    wt_path = config.WORKSPACES_DIR / ".wt" / f"{ws}-{session_safe}"
+    cwd, cwd_kind, warnings = git_view.resolve_git_cwd(
+        ws, session, mode, worktree_exists=wt_path.is_dir(),
+        workspaces_dir=config.WORKSPACES_DIR,
+    )
+    main_dir = config.WORKSPACES_DIR / ws
+    base = git_view.resolve_base(git_view.run_git, main_dir)
+    return cwd, cwd_kind, base, warnings
+
+
+@app.get("/workspaces/{ws}/git", dependencies=PROTECT)
+def get_workspace_git(ws: str, session: str = "default") -> dict:
+    """只读 git 概览(spec §3.2)。路由薄,逻辑在 git_view.build_git_overview。"""
+    cwd, cwd_kind, base, warnings = _resolve_git_context(ws, session)
+    overview = git_view.build_git_overview(
+        git_view.run_git, ws, session, cwd, cwd_kind, base,
+    )
+    # cwd 推导产生的 warning(如 worktree 还没建退化)并进概览 warnings
+    if warnings and overview.get("is_git_repo"):
+        overview["warnings"] = warnings + overview.get("warnings", [])
+    return overview
+
+
+@app.get("/workspaces/{ws}/git/diff", dependencies=PROTECT)
+def get_workspace_git_diff(
+    ws: str, file: str, session: str = "default", uncommitted: int = 0,
+) -> dict:
+    """单文件 diff 懒加载(spec §3.4/§5.2)。?file 纵深防御:含 .. 或绝对路径 → 400。"""
+    if ".." in file.split("/") or file.startswith("/"):
+        raise HTTPException(400, {"error": "invalid file path", "file": file})
+    cwd, _cwd_kind, base, _ = _resolve_git_context(ws, session)
+    _, sb_out, _ = git_view.run_git(cwd, ["status", "-sb"])
+    sb_first = sb_out.splitlines()[0] if sb_out else ""
+    branch = git_view.parse_branch(sb_first)
+    return git_view.build_git_file_diff(
+        git_view.run_git, cwd, base, branch, file, bool(uncommitted),
+    )
 
 
 @app.get("/workspaces", dependencies=PROTECT)

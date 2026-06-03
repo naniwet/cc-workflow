@@ -27,6 +27,9 @@ import {
   navModelFromTree,
   navModelFromRoundtables,
   navModelFromLoops,
+  gitBadgeText,
+  hunkLineClass,
+  hunksToHtml,
 } from '../pwa/ui_contract.mjs';
 
 test('status accent mapping follows the mobile overview design', () => {
@@ -1078,4 +1081,100 @@ test('navModelFromLoops: id 直接取 loop.name,不带 data.tileId / tile 字段
   assert.equal(item.id, 'loop-1');
   assert.equal(item.data, undefined);               // 不带 data 钩子
   assert.equal(item.active, undefined);             // 调用方填
+});
+
+// ---------- Git 区段纯函数(workspace-git-view spec §4.3 / §5.2)----------
+// gitBadgeText / hunkLineClass / hunksToHtml 都是 0 IO / 0 DOM 的纯函数,
+// 消费后端 GET /workspaces/{ws}/git[/diff] 的 schema(spec §3.2)。
+//   - gitBadgeText:展开态 header 的 ±N 角标文案(N = diff_stat 文件数;
+//     diff_truncated → ±200+;空 → 空串)。折叠态不显 N(由 app.js 控制)。
+//   - hunkLineClass:diff 行 kind → CSS class(复用 .diff-add/.diff-del +
+//     新增 .diff-ctx,**不复用 _toolUseDiffHtml**,见 spec §5.2 方案 A)。
+//   - hunksToHtml:后端结构化 hunks → html(薄渲染器,全程 esc 转义)。
+
+test('gitBadgeText: 多文件 → ±N(N = diff_stat 文件数)', () => {
+  const diffStat = [{ file: 'a.js' }, { file: 'b.py' }, { file: 'c.css' }];
+  assert.equal(gitBadgeText(diffStat, false), '±3');
+});
+
+test('gitBadgeText: 单文件 → ±1', () => {
+  assert.equal(gitBadgeText([{ file: 'a.js' }], false), '±1');
+});
+
+test('gitBadgeText: diff_truncated → ±200+(后端文件数 cap 200,spec §7)', () => {
+  // 截断时文件数封顶,显 ±200+ 而非精确数。
+  const big = Array.from({ length: 200 }, (_, i) => ({ file: `f${i}` }));
+  assert.equal(gitBadgeText(big, true), '±200+');
+});
+
+test('gitBadgeText: 空 diff_stat → 空串(无改动不显角标)', () => {
+  assert.equal(gitBadgeText([], false), '');
+});
+
+test('gitBadgeText: null / undefined diff_stat → 空串(容错)', () => {
+  assert.equal(gitBadgeText(undefined, false), '');
+  assert.equal(gitBadgeText(null, false), '');
+});
+
+test('hunkLineClass: 三 kind → 对应 CSS class', () => {
+  assert.equal(hunkLineClass('add'), 'diff-add');
+  assert.equal(hunkLineClass('del'), 'diff-del');
+  assert.equal(hunkLineClass('ctx'), 'diff-ctx');
+});
+
+test('hunkLineClass: 未知 kind → diff-ctx 兜底(中性,不崩)', () => {
+  assert.equal(hunkLineClass('weird'), 'diff-ctx');
+  assert.equal(hunkLineClass(undefined), 'diff-ctx');
+});
+
+test('hunksToHtml: 单 hunk 三 kind → header + 每行套 class', () => {
+  const hunks = [{
+    header: '@@ -1,3 +1,4 @@',
+    lines: [
+      { kind: 'ctx', text: 'unchanged' },
+      { kind: 'del', text: 'old line' },
+      { kind: 'add', text: 'new line' },
+    ],
+  }];
+  const html = hunksToHtml(hunks, (s) => String(s));
+  // header 渲出来
+  assert.match(html, /@@ -1,3 \+1,4 @@/);
+  // 三 kind 各自 class + 文本
+  assert.match(html, /class="diff-ctx"[^>]*>unchanged</);
+  assert.match(html, /class="diff-del"[^>]*>old line</);
+  assert.match(html, /class="diff-add"[^>]*>new line</);
+});
+
+test('hunksToHtml: 多 hunk → 各 hunk 的 header 都渲', () => {
+  const hunks = [
+    { header: '@@ -1,1 +1,1 @@', lines: [{ kind: 'add', text: 'x' }] },
+    { header: '@@ -10,2 +10,3 @@', lines: [{ kind: 'add', text: 'y' }] },
+  ];
+  const html = hunksToHtml(hunks, (s) => String(s));
+  assert.match(html, /@@ -1,1 \+1,1 @@/);
+  assert.match(html, /@@ -10,2 \+10,3 @@/);
+});
+
+test('hunksToHtml: 空 hunks → 空串', () => {
+  assert.equal(hunksToHtml([], (s) => String(s)), '');
+  assert.equal(hunksToHtml(undefined, (s) => String(s)), '');
+});
+
+test('hunksToHtml: 全程 esc 转义(行文本含 <script> 不注入)', () => {
+  const hunks = [{
+    header: '@@ <h> @@',
+    lines: [{ kind: 'add', text: '<script>alert(1)</script>' }],
+  }];
+  // 用真实 esc(贴 app.js 的 esc):< → &lt; 等
+  const realEsc = (s) =>
+    String(s == null ? '' : s).replace(
+      /[&<>"']/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]),
+    );
+  const html = hunksToHtml(hunks, realEsc);
+  // 原始 < 不出现(被转义),也不出现可执行的 <script>
+  assert.ok(!html.includes('<script>'));
+  assert.match(html, /&lt;script&gt;/);
+  // header 也转义
+  assert.match(html, /@@ &lt;h&gt; @@/);
 });

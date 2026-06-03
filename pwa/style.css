@@ -2504,6 +2504,191 @@ pre {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* unified diff 上下文行(spec §5.2 方案 A):跟 del/add 同形,中性色透明底
+   —— 让用户看到改动在哪段代码里(现有 _toolUseDiffHtml 没有上下文行概念)。 */
+.diff-ctx {
+  padding: 1px var(--space-2);
+  background: transparent;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* ============================================================================
+ *  Workspace Git 区段(spec: 2026-06-03-workspace-git-view.md)
+ *  默认折叠、只读。折叠态一行 header;展开渲 4 块(状态行 / changed files /
+ *  commits / worktrees)。全用主设计 token。
+ * ============================================================================ */
+.git-section {
+  margin: var(--space-2) 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.git-header {
+  display: flex;
+  align-items: center;
+}
+.git-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.git-toggle:hover { background: var(--bg-hover); }
+.git-caret { color: var(--text-tertiary); width: 1em; }
+.git-title { color: var(--text-primary); }
+.git-badge {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+}
+.git-refresh {
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-base);
+  cursor: pointer;
+}
+.git-refresh:hover { color: var(--text-primary); }
+.git-body:empty { display: none; }
+.git-loading { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); }
+.git-empty { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); }
+
+/* 4 块通用:顶 hairline 分隔 + 极简 label。 */
+.git-block {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+.git-block-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-1);
+}
+
+/* ① 状态行 */
+.git-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+}
+.git-branch { color: var(--text-primary); }
+.git-ahead { color: var(--accent-green); }
+.git-behind { color: var(--accent-amber); }
+.git-dirty { color: var(--accent-amber); }
+.git-cwd-hint { color: var(--text-tertiary); }
+.git-base { color: var(--text-tertiary); margin-left: auto; }
+
+/* ② changed files */
+.git-file-row { display: block; }
+.git-file {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  text-align: left;
+}
+.git-file:hover { color: var(--text-primary); }
+.git-file-status {
+  flex: none;
+  width: 1.2em;
+  text-align: center;
+  font-weight: 600;
+}
+/* status 字母上色(spec §3.2 porcelain 单字母):M/A 中性偏绿、D 红、? 弱色 */
+.git-status-M { color: var(--text-secondary); }
+.git-status-A { color: var(--accent-green); }
+.git-status-D { color: var(--accent-red); }
+.git-status-R { color: var(--accent-blue); }
+.git-status-\? { color: var(--text-tertiary); }
+.git-file-name {
+  flex: 1;
+  word-break: break-all;
+}
+.git-file-stat { flex: none; color: var(--text-tertiary); }
+.git-add { color: var(--accent-green); }
+.git-files-empty,
+.git-commits-empty { font-size: var(--text-sm); }
+
+/* 单文件 inline diff(懒加载展开)。复用 .event-tool-diff 容器 + diff-* 行。 */
+.git-diff-inline {
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+.diff-hunk-header {
+  padding: 1px var(--space-2);
+  color: var(--accent-blue);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.git-diff-trunc { padding: var(--space-1) var(--space-2); font-size: var(--text-micro); }
+
+/* ③ commits */
+.git-commit-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--text-sm);
+}
+.git-sha { flex: none; color: var(--accent-amber); font-family: var(--font-mono); }
+.git-subject {
+  flex: 1;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-rel-date { flex: none; color: var(--text-tertiary); font-size: var(--text-micro); }
+
+/* ④ worktrees */
+.git-worktree-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+}
+.git-worktree-row.is-current .git-wt-branch { color: var(--text-primary); }
+.git-wt-branch { color: var(--text-secondary); }
+.git-wt-head { color: var(--text-tertiary); }
+.git-wt-current {
+  color: var(--accent-green);
+  font-size: var(--text-micro);
+  font-family: var(--font-ui);
+}
+
+/* 降级 warnings */
+.git-warnings {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+.git-warning { font-size: var(--text-micro); color: var(--accent-amber); }
+
 /* tool_result:缩进 + 左 hairline rail,读成"这次工具调用的返回"。
    isError 红边强调(默认不折叠,见 _renderTurnEvent)。 */
 .event-tool-result {
