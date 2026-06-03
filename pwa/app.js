@@ -3879,6 +3879,16 @@ async function _loadTurnEvents(runId) {
         _addTapFallback(btn, _onToolResultFoldToggle);
         btn.dataset.bound = '1';
       }
+      // 还原跨重渲保留的 fold 展开态(_foldState):数据变化触发的 #view 重写
+      // 会把 fold 重建成折叠态,这里把用户之前展开过的重新展开。幂等:已展开的
+      // (full.hidden=false)跳过,所以 running turn 增量 append 多次调用无副作用。
+      for (const wrap of container.querySelectorAll('.tool-result-wrap')) {
+        const key = _foldKeyForWrap(wrap);
+        if (key && _foldState[key]) {
+          const full = wrap.querySelector('.tool-result-full');
+          if (full && full.hidden) _setFoldExpanded(wrap, true);
+        }
+      }
     } else {
       // 全过滤掉了,placeholder 文案 mark 一下,让用户知道流是动的
       // 但当前模式下没东西显示。
@@ -4083,18 +4093,32 @@ function _syncWorkspaceNewEventsButton(name) {
   btn.textContent = `↓ ${count} new`;
 }
 
-// fold 按钮 toggle(展开 ⇄ 收起)。修「有 expand 却没有收起」:旧版点
-// Expand 后把按钮自己 hidden 掉,展开了就收不回。现在保留按钮,文字在
-// 「↓ Expand N lines」⇄「↑ Collapse」间切换 —— 首次点时把原始 Expand
-// 文案存进 dataset.expandLabel,收起时还原(N lines 不丢)。
-function _onToolResultFoldToggle(e) {
-  const btn = e.currentTarget;
-  const wrap = btn.closest('.tool-result-wrap');
-  const preview = wrap?.querySelector('.tool-result-preview');
-  const full = wrap?.querySelector('.tool-result-full');
-  if (!wrap || !preview || !full) return;
-  const collapsed = full.hidden;            // 当前折叠态 → 这次点是展开
-  if (collapsed) {
+// fold 展开态跨重渲保留。detail / pane 的 #view 在数据变化(新 run / 状态变 /
+// running streaming)触发 render 时整段重写 → fold 被重建成折叠态,用户刚展开
+// 的长输出又缩回去。_foldState 记住"哪些 fold 被展开过",_loadTurnEvents 渲完
+// 事件后据此还原。keyed by runId + wrap 在该 turn-events 内的序号(事件顺序
+// 确定 → 序号稳定)。只覆盖 .turn-events 里的 fold(别处如 mobile loop row 不
+// 命中,优雅降级)。注:只保留展开/折叠态,内部滚动位置不保留(重写后回顶)。
+const _foldState = {};
+
+function _foldKeyForWrap(wrap) {
+  const container = wrap.closest('.turn-events');
+  if (!container) return null;
+  const runId = container.dataset.runId || '';
+  const idx = Array.prototype.indexOf.call(
+    container.querySelectorAll('.tool-result-wrap'), wrap);
+  return idx < 0 ? null : runId + ':' + idx;
+}
+
+// 设 fold 展开/折叠 DOM 态(toggle handler + 重渲还原共用)。保留按钮(不 hidden),
+// 文字在「↓ Expand N lines」⇄「↑ Collapse」间切换 —— 首次展开把原始 Expand 文案
+// 存进 dataset.expandLabel,折叠时还原(N lines 不丢)。
+function _setFoldExpanded(wrap, expanded) {
+  const preview = wrap.querySelector('.tool-result-preview');
+  const full = wrap.querySelector('.tool-result-full');
+  const btn = wrap.querySelector('.tool-result-fold');
+  if (!preview || !full || !btn) return;
+  if (expanded) {
     if (!btn.dataset.expandLabel) btn.dataset.expandLabel = btn.textContent;
     preview.hidden = true;
     full.hidden = false;
@@ -4104,6 +4128,18 @@ function _onToolResultFoldToggle(e) {
     full.hidden = true;
     btn.textContent = btn.dataset.expandLabel || '↓ Expand';
   }
+}
+
+// fold 按钮 toggle(展开 ⇄ 收起)。修「有 expand 却没有收起」(旧版点 Expand
+// 后把按钮自己 hidden,展开了收不回)。顺带把展开态写进 _foldState 跨重渲保留。
+function _onToolResultFoldToggle(e) {
+  const wrap = e.currentTarget.closest('.tool-result-wrap');
+  const full = wrap?.querySelector('.tool-result-full');
+  if (!wrap || !full) return;
+  const expanding = full.hidden;            // 当前折叠 → 这次点是展开
+  _setFoldExpanded(wrap, expanding);
+  const key = _foldKeyForWrap(wrap);
+  if (key) { if (expanding) _foldState[key] = true; else delete _foldState[key]; }
 }
 
 function _onWorkspaceNewEventsClick(e) {
