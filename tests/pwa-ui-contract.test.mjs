@@ -30,6 +30,7 @@ import {
   gitBadgeText,
   hunkLineClass,
   hunksToHtml,
+  nextSessionKey,
 } from '../pwa/ui_contract.mjs';
 
 test('status accent mapping follows the mobile overview design', () => {
@@ -1282,4 +1283,45 @@ test('hunksToHtml: 全程 esc 转义(行文本含 <script> 不注入)', () => {
   assert.match(html, /&lt;script&gt;/);
   // header 也转义
   assert.match(html, /@@ &lt;h&gt; @@/);
+});
+
+// ── nextSessionKey:给 ws 算下一条不撞的并行 session key(desktop/mobile 共用)──
+test('nextSessionKey: 无现有 session → <ws>--2 起步', () => {
+  assert.equal(nextSessionKey('cc-workflow', []), 'cc-workflow--2');
+});
+
+test('nextSessionKey: 跳过已占用的序号,返回最小空位', () => {
+  // 已有 --2 --3 → 下一个是 --4
+  assert.equal(
+    nextSessionKey('repo', ['repo--2', 'repo--3']),
+    'repo--4',
+  );
+});
+
+test('nextSessionKey: 只看本 ws 前缀,默认/系统线不计入', () => {
+  // pwa-<ws> / cron loop 名 / 别的 ws 的 -- 都不该影响序号
+  assert.equal(
+    nextSessionKey('repo', ['pwa-repo', 'nightly', 'other--2']),
+    'repo--2',
+  );
+});
+
+test('nextSessionKey: 序号有空洞时取最小空洞(--2 缺则填 --2)', () => {
+  assert.equal(
+    nextSessionKey('repo', ['repo--3', 'repo--5']),
+    'repo--2',
+  );
+});
+
+test('nextSessionKey: ws 名本身含 -- 也不误判', () => {
+  // ws = "a--b",已有 "a--b--2" → 下一个 "a--b--3"(前缀精确匹配)
+  assert.equal(
+    nextSessionKey('a--b', ['a--b--2']),
+    'a--b--3',
+  );
+});
+
+test('nextSessionKey: existingKeys 缺省/为 null 时当空集', () => {
+  assert.equal(nextSessionKey('repo'), 'repo--2');
+  assert.equal(nextSessionKey('repo', null), 'repo--2');
 });

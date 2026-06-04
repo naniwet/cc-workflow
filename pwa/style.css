@@ -3177,6 +3177,44 @@ pre {
     padding: var(--space-4);
     border-radius: 0;
   }
+
+  /* sheet-only:这张 add-form 不再当右上角圆 FAB 用(那个位置让给 .mobile-new-chat-fab
+     = 新对话)。折叠态把 summary 收掉,所以它只以底部 sheet 形态出现(由新对话 dialog
+     的"或 + 新建 workspace"二级链 _revealMobileNewWsForm 唤起)。展开态沿用上面的
+     .add-form[open] 规则(含 sticky ✕ 头,点它收回 → summary 又 display:none)。 */
+  .add-form--sheet-only:not([open]) > summary { display: none; }
+
+  /* 新对话 FAB:复刻原 add-form 圆 + 按钮的位置 / 形态,主操作 = 起新对话。
+     位置跟 h1 对齐、避开轮播触发表单与底部导航(同 .add-form 圆 FAB 约束)。
+     依赖 main { position: relative }(上面 .add-form 规则已设)。 */
+  .mobile-new-chat-fab {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-3);
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+    padding: 0;
+    border-radius: 999px;
+    background: var(--accent-blue);
+    border: none;
+    box-shadow: var(--shadow-1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    z-index: 5;
+    transition: background var(--t-base), box-shadow var(--t-base);
+  }
+  .mobile-new-chat-fab:hover,
+  .mobile-new-chat-fab:active {
+    background: var(--accent-blue-hover);
+    box-shadow: var(--shadow-2);
+  }
 }
 
 /* ============================================================================

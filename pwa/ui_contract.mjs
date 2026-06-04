@@ -295,6 +295,17 @@ export function sessionChipLabel(ws, sessionKey) {
   return sessionKey.startsWith(prefix) ? sessionKey.slice(prefix.length) : sessionKey;
 }
 
+// 给 ws 算"下一条新对话"的并行 session key:<ws>--N(N≥2),取与 existingKeys
+// 都不撞的最小序号。desktop(_onPcNewChatClick)+ mobile(_startNewChatMobile)
+// 共用一份命名逻辑 —— 抽到这里避免两处漂移,并被单测钉死。existingKeys 缺省
+// 当空集;只比对完整 key,所以系统线(pwa-<ws> / cron 名)天然不影响序号。
+export function nextSessionKey(ws, existingKeys) {
+  const taken = new Set(existingKeys || []);
+  let n = 2;
+  while (taken.has(`${ws}--${n}`)) n += 1;
+  return `${ws}--${n}`;
+}
+
 // session_key → 文件系统安全段。必须跟 agent-run.sh 的 SESSION_SAFE
 // (tr -c 'A-Za-z0-9._-' '_')+ backend merge endpoint 的 re.sub 完全一致 ——
 // 三处派生同一个事实(review W3:别让 worktree 路径多处真相源漂移)。

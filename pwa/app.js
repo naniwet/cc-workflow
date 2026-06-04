@@ -28,6 +28,7 @@ import {
   filterTurnsBySession,
   isUserSession,
   sessionChipLabel,
+  nextSessionKey,
   sessionTileId,
   parseSessionTileId,
   tileKeyFor,
@@ -1689,7 +1690,11 @@ function renderMobileOverview() {
 
   view.innerHTML = `
     <h1>Workspaces</h1>
-    <details class="add-form" data-details-id="add-ws">
+    <!-- 右上角圆 + FAB:主操作 = 新对话(选 workspace 起新 session),对齐 desktop
+         #ws-new-btn。建 workspace 降级成 dialog 的"或 + 新建 workspace"二级链 →
+         _revealMobileNewWsForm 唤起下面这张 sheet-only 表单(折叠态不渲成 FAB)。 -->
+    <button class="mobile-new-chat-fab" id="m-new-chat-fab" type="button" aria-label="新对话">+</button>
+    <details class="add-form add-form--sheet-only" data-details-id="add-ws">
       <summary>New workspace</summary>
       <form data-form-id="new-ws">
         <label>name <input name="name" pattern="[A-Za-z0-9._\\-]+"
@@ -1715,11 +1720,21 @@ function renderMobileOverview() {
     </details>
     ${cards
       ? `<div class="ws-list">${cards}</div>`
-      : `<p class="muted">No workspaces yet. Use the form above.</p>`}
+      : `<p class="muted">还没有 workspace。点右上角 + → "或 + 新建 workspace"。</p>`}
   `;
 
   const newWsForm = view.querySelector('form[data-form-id="new-ws"]');
   newWsForm?.addEventListener('submit', onAddWorkspace);
+  // 圆 + FAB → 新对话 dialog(body-host,_isMobileViewport 决定 [开始] 走 mobile 分支)。
+  view.querySelector('#m-new-chat-fab')?.addEventListener('click', _openNewChatDialog);
+}
+
+// mobile 建 workspace 入口:新对话 dialog 的"或 + 新建 workspace"二级链调它 ——
+// 把 overview 里 sheet-only 的 New-workspace <details> 展开成底部 sheet。仅在
+// overview(#workspaces)DOM 里有这张表单;别处调到则优雅 no-op。
+function _revealMobileNewWsForm() {
+  const det = $('view').querySelector('details[data-details-id="add-ws"]');
+  if (det) det.open = true;
 }
 
 // Bind handlers that exist on every .ws-col-rendering view (PC overview,
@@ -2406,31 +2421,44 @@ function _togglePcRepo(ws) {
   restoreDrafts();
 }
 
-// + 新对话(决策 2):给 ws 声明一条自动命名的新 session(<ws>--2 起,取与该
-// ws 当前树里所有 session 都不撞的最小整数序号)→ 注入 _declaredEmptySessions
-// (复用现有空 session 机制,无后端改动)→ focus 到 active pane。
+// 该 ws 现有的全部 session_key(默认 tile + 用户建的并行线),给 nextSessionKey
+// 找不撞序号用。从侧边栏树取 —— 平台无关(buildSidebarTree 纯派生自 lastData)。
+function _existingSessionKeys(ws) {
+  const node = _pcSidebarTree().find((n) => n.ws === ws);
+  const keys = [];
+  if (!node) return keys;
+  // node.sessions 仅 expandable(≥2)时有;单 session repo 只有默认 tile。
+  if (node.sessions.length) {
+    for (const s of node.sessions) keys.push(s.sessionKey);
+  } else {
+    keys.push(parseSessionTileId(node.tileId).sessionKey);
+  }
+  return keys;
+}
+
+// + 新对话(desktop,决策 2):给 ws 声明一条自动命名的新 session(nextSessionKey
+// 算不撞序号)→ 注入 _declaredEmptySessions(复用现有空 session 机制,无后端改动)
+// → focus 到 active pane。
 function _onPcNewChatClick(ws) {
   if (!ws) return;
-  // 该 ws 现有的全部 session_key(默认 + 用户建的),用来找不撞的序号。
-  const tree = _pcSidebarTree();
-  const node = tree.find((n) => n.ws === ws);
-  const existing = new Set();
-  if (node) {
-    // node.sessions 仅 expandable(≥2)时有;单 session repo 只有默认 tile。
-    if (node.sessions.length) {
-      for (const s of node.sessions) existing.add(s.sessionKey);
-    } else {
-      const { sessionKey } = parseSessionTileId(node.tileId);
-      existing.add(sessionKey);
-    }
-  }
-  // <ws>--2 起递增,找第一个不撞的。
-  let n = 2;
-  while (existing.has(`${ws}--${n}`)) n += 1;
-  const newKey = `${ws}--${n}`;
+  const newKey = nextSessionKey(ws, _existingSessionKeys(ws));
   const tileId = sessionTileId(ws, newKey);
   _declaredEmptySessions.add(tileId);
   dispatchPane({ type: 'focus', tileId });
+}
+
+// + 新对话(mobile):同 desktop 的命名逻辑,但落点不是 pane 而是 hash 路由 +
+// workspaceActiveSession(mobile 无 pane 系统)。声明空 session → 设为该 ws 的
+// active(chip 条据此高亮,_sessionBarHtml 会把还没 run 的 active 补进 chip)→
+// 跳 #workspaces/<ws> detail。已在该 detail 时直接重画(setHash 同值不触发 render)。
+function _startNewChatMobile(ws) {
+  if (!ws) return;
+  const newKey = nextSessionKey(ws, _existingSessionKeys(ws));
+  _declaredEmptySessions.add(sessionTileId(ws, newKey));
+  workspaceActiveSession[ws] = newKey;
+  const target = `#workspaces/${encodeURIComponent(ws)}`;
+  if (location.hash === target) renderWorkspaceDetailView(ws);
+  else location.hash = target;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2516,21 +2544,29 @@ function _openNewChatDialog() {
 function _bindNewChatDialog() {
   const dlg = document.getElementById('new-chat-dialog');
   if (!dlg) return;
-  // 开始:取选中 ws → 复用 _onPcNewChatClick(建 session + focus)→ 关 dialog。
+  // 开始:取选中 ws → 按平台起新对话(desktop = pane focus / mobile = hash 跳)→
+  // 关 dialog。两路都复用 nextSessionKey 命名,差别只在落点。
   dlg.querySelector('form[data-form-id="new-chat"]')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const ws = e.target.querySelector('input[type="hidden"][name="workspace"]')?.value;
     if (!ws) { showError('请选择一个 workspace'); return; }
     dlg.close();
-    _onPcNewChatClick(ws);
+    if (_isMobileViewport) _startNewChatMobile(ws);
+    else _onPcNewChatClick(ws);
   });
   // 取消:关。
   dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
-  // 二级链:关本 dialog → 开现有 ws-new-dialog(建 repo 流程完全不改)。
+  // 二级链:关本 dialog → 建 repo 流程。desktop 开 ws-new-dialog(<dialog> 在
+  // renderDesktopSidebarLayout 里);mobile 没有那个 dialog —— 展开 overview 里
+  // sheet-only 的 "New workspace" <details>(fixed 底部 sheet,既有 mobile 建 ws 路径)。
   dlg.querySelector('.new-chat-to-ws')?.addEventListener('click', () => {
     dlg.close();
-    const wsDlg = $('ws-new-dialog');
-    if (wsDlg && !wsDlg.open) wsDlg.showModal();
+    if (_isMobileViewport) {
+      _revealMobileNewWsForm();
+    } else {
+      const wsDlg = $('ws-new-dialog');
+      if (wsDlg && !wsDlg.open) wsDlg.showModal();
+    }
   });
 }
 
