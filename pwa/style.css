@@ -1579,7 +1579,13 @@ pre {
      sidebar 一条竖栏(~230px):head(品牌 + 状态点 + « 收起)/ apps(4 个
      app tab,竖列)/ ctx(当前 tab 的上下文列表,Workspaces=repo 树)。
      同一块 --bg-surface 底色,apps 与 ctx 间至多一条极淡 divider,无中缝。 */
-  body { flex-direction: row; }
+  /* 锁视口高度:body 不滚,sidebar 钉住 100vh、其 .sidebar-ctx 列表内部滚;
+     长内容(Tasks / Roundtable detail / Settings 等文档流页)在 #view 内部滚
+     —— 跟 Workspaces 主区 timeline 内滚一致。原来 body 只 min-height:100vh 不封顶,
+     #view 长内容把 body 撑高 → sidebar(align-self:stretch)跟着拉长 → sidebar-ctx
+     的 overflow 失效、整页一起滚(用户反馈"左侧侧栏和右侧一起滚")。
+     Workspaces 之前侥幸不犯只因主区 .pc-main 高度锁死 + pane 内滚,#view 从不溢出。 */
+  body { flex-direction: row; height: 100vh; overflow: hidden; }
   .topbar { display: none; }
   .sidebar {
     display: flex;
@@ -1944,6 +1950,10 @@ pre {
     min-height: 0;
     display: flex;
     flex-direction: column;
+    /* 主区内部滚:body 已封顶 100vh,长内容(detail / settings 文档流)在这里
+       滚而不撑 body。Workspaces 的 .pc-main(flex:1 1 0 + pane 内滚)内容不溢出,
+       这条对它是 no-op。 */
+    overflow-y: auto;
   }
 
   /* ── 右侧主区(网格放 1~4 pane,布局阶梯 spec §3.3)──────────────
