@@ -1080,6 +1080,30 @@ test('navModelFromRoundtables: id 直接取 r.id,不带 data.tileId / tile 字�
   assert.equal(item.active, undefined);             // 调用方填
 });
 
+// status 字段(侧栏状态点用,Option B:只标"进行中 + 失败")。
+//   running → 'running'(青脉冲);error → 'failed'(红);done / queued / 未知 → null(不渲点)。
+// _navStatusDot 据此渲:'running'→脉冲、'failed'→STATUS_ACCENTS 红、null→空串。
+test('navModelFromRoundtables: status 映射 —— running → running', () => {
+  const item = navModelFromRoundtables([{ id: 'a', question: 'Q', status: 'running' }])
+    .sections[0].items[0];
+  assert.equal(item.status, 'running');
+});
+
+test('navModelFromRoundtables: status 映射 —— error → failed(命中 STATUS_ACCENTS 红)', () => {
+  const item = navModelFromRoundtables([{ id: 'a', question: 'Q', status: 'error' }])
+    .sections[0].items[0];
+  assert.equal(item.status, 'failed');
+});
+
+test('navModelFromRoundtables: status 映射 —— done / queued / 未知 → null(历史列表不显点)', () => {
+  const mk = (s) => navModelFromRoundtables([{ id: 'a', question: 'Q', status: s }])
+    .sections[0].items[0].status;
+  assert.equal(mk('done'), null);
+  assert.equal(mk('queued'), null);
+  assert.equal(mk('weird'), null);
+  assert.equal(mk(undefined), null);
+});
+
 // ---------- navModelFromLoops(cron loop 列表 → NavModel 适配器,spec §161 / §107-108)----------
 // 纯函数:输入 lastData.loops 数组,输出 NavModel = { sections:[{ items:[{ id, label,
 // running }] }] }。严格对齐 navModelFromRoundtables 的输出形状(同 NavItem 三字段 + 不带

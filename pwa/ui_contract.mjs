@@ -594,6 +594,16 @@ export function navModelFromTree(tree) {
 // 从不产 title(main.py:_roundtable_session_summary),所以没有 `|| r.title`。
 const _RT_LABEL_MAX = 40;
 const _RT_TERMINAL = new Set(['done', 'error']);
+// roundtable list status(queued/running/done/error)→ 侧栏状态点的 status。
+// Option B(用户选定 2026-06-04):历史列表大多 done,只标"进行中 + 失败"两类
+// 高信号:running → 'running'(青脉冲)、error → 'failed'(命中 STATUS_ACCENTS 红);
+// done / queued / 未知 → null(_navStatusDot 不渲点,列表保持干净)。
+function _rtNavStatus(s) {
+  if (s === 'running') return 'running';
+  if (s === 'error') return 'failed';
+  return null;
+}
+
 export function navModelFromRoundtables(roundtables) {
   const items = (roundtables || []).map((r) => {
     const raw = r.question || '(无标题)';
@@ -604,6 +614,9 @@ export function navModelFromRoundtables(roundtables) {
       id: r.id,
       label,
       running: !_RT_TERMINAL.has(r.status),
+      // 侧栏状态点用(_navStatusDot)。running 保留是为了跟 navModelFromLoops 的
+      // NavItem 形状对齐(那条注释钉死的契约);status 是本次新增的"哪类点"。
+      status: _rtNavStatus(r.status),
     };
   });
   return { sections: [{ items }] };
