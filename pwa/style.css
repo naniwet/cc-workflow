@@ -4441,8 +4441,12 @@ pre {
 .trigger-form.composer .composer-input:focus {
   outline: none;                /* 容器 :focus-within 已给蓝光,内框不再重复 */
 }
-/* 附件 chips:容器内顶部(order -1 保险,DOM 也在最前)。 */
-.trigger-form.composer .attach-chips { order: -1; }
+/* 附件 chips:容器内顶部(order -1 保险,DOM 也在最前)。
+   flex:0 0 auto 覆盖旧 row 布局的 `.ws-col .trigger-form .attach-chips{flex:0 0 100%}`
+   —— 那条为 flex-row wrap 写的(100% = 占满整行宽强制换行),但 composer 是
+   flex-column,flex-basis:100% 会被当成"占满高度",把 chips 拉成大方块、composer
+   撑高、#view 溢出出滚动条。column 下 chips 应自然高度(一排小 pill)。 */
+.trigger-form.composer .attach-chips { order: -1; flex: 0 0 auto; }
 .composer-toolbar {
   order: 1;
   display: flex;
