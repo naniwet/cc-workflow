@@ -641,6 +641,22 @@ export function navModelFromRoundtables(roundtables) {
 // (paused/failed/done)侧栏 nav 都映射到 running=false,只关心"是否进行中"这一位。
 const _LOOP_LABEL_MAX = 40;
 const _LOOP_RUNNING = new Set(['queued', 'running']);
+// loop → 侧栏状态点的 status(Option B:只标进行中 + 失败)。**镜像
+// app.js:_loopComputedStatus 的判定**(那是真相源;改一处必须同步另一处,否则
+// 侧栏点跟 detail badge 打架 —— paused×in-flight footgun 同款风险):
+//   !enabled → paused → null(不显点);latest queued/running → 'running';
+//   否则 (consecutive_errors≥3 stale 或 last_exit≠0) → 'failed';else done → null。
+// done / paused 不显点 —— 历史列表大多 done,只留高信号两类。
+function _loopNavStatus(loop) {
+  if (!loop.enabled) return null;                  // paused 优先,即便有 in-flight
+  const recentRuns = Array.isArray(loop.recent_runs) ? loop.recent_runs : [];
+  const latest = recentRuns[0] || null;
+  if (latest && _LOOP_RUNNING.has(latest.status)) return 'running';
+  const stale = (loop.consecutive_errors || 0) >= 3;
+  if (stale || (loop.last_exit != null && loop.last_exit !== 0)) return 'failed';
+  return null;                                      // done → 不显点
+}
+
 export function navModelFromLoops(loops) {
   const items = (loops || []).map((loop) => {
     const raw = loop.name || '(未命名)';
@@ -653,6 +669,9 @@ export function navModelFromLoops(loops) {
       id: loop.name,
       label,
       running: !!loop.enabled && !!latest && _LOOP_RUNNING.has(latest.status),
+      // 侧栏状态点用(_navStatusDot)。running 保留是为了 NavItem 形状契约;
+      // status 是"哪类点"(Option B:running / failed / null)。
+      status: _loopNavStatus(loop),
     };
   });
   return { sections: [{ items }] };

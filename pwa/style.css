@@ -1743,16 +1743,8 @@ pre {
   }
   .rt-sidebar-nav .shell-nav-item,
   .task-sidebar-nav .shell-nav-item { text-decoration: none; }
-  /* 评议 running 指示点 —— 跟 repo 树 .shell-nav-dot 同款青色脉冲,label 后 */
-  .rt-running-dot {
-    flex: 0 0 auto;
-    margin-left: var(--space-2);
-    width: 7px;
-    height: 7px;
-    border-radius: var(--radius-full);
-    background: var(--accent-cyan);
-    animation: shell-nav-pulse 1.4s ease-in-out infinite;
-  }
+  /* 评议 / Tasks 侧栏状态点改用 _navStatusDot(.shell-nav-dot / .shell-nav-status-dot),
+     跟 workspace 侧栏统一。旧 .rt-running-dot(只标 running)已无引用,删。 */
   /* 收起态:评议 / Tasks 列表整块隐掉(跟 settings 同款,列表项太多没 rail glyph 设计) */
   .sidebar.is-rail .rt-sidebar-nav,
   .sidebar.is-rail .rt-sidebar-toolbar,

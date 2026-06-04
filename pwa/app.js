@@ -4748,7 +4748,9 @@ function renderTaskSidebarNav(activeName) {
     ? items.map((it) => {
         const cls = 'shell-nav-item shell-nav-repo'
           + (it.id === activeName ? ' is-active' : '');
-        const dot = it.running ? '<span class="rt-running-dot"></span>' : '';
+        // 状态点复用 workspace / roundtable 那套 _navStatusDot(running 青脉冲 /
+        // failed 红 / null 不渲)—— Option B:只标进行中 + 失败,paused/done 不显。
+        const dot = _navStatusDot(it.status);
         return `<a class="${cls}" href="#tasks/${encodeURIComponent(it.id)}">`
           + `<span class="shell-nav-label">${esc(it.label)}</span>${dot}</a>`;
       }).join('')

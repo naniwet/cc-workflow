@@ -1183,6 +1183,40 @@ test('navModelFromLoops: running 只看最新一条(recent_runs[0])', () => {
   assert.equal(item.running, false);
 });
 
+// status 字段(侧栏状态点,Option B:只标进行中 + 失败)。镜像 _loopComputedStatus:
+//   !enabled → paused → null;latest running/queued → 'running';否则
+//   (stale 或 last_exit≠0)→ 'failed';else done → null。
+const _loopStatus = (loop) =>
+  navModelFromLoops([loop]).sections[0].items[0].status;
+
+test('navModelFromLoops: status —— enabled 且最新 running/queued → running', () => {
+  assert.equal(_loopStatus({ name: 'a', enabled: true, recent_runs: [{ status: 'running' }] }), 'running');
+  assert.equal(_loopStatus({ name: 'b', enabled: true, recent_runs: [{ status: 'queued' }] }), 'running');
+});
+
+test('navModelFromLoops: status —— enabled 且 last_exit≠0 → failed', () => {
+  assert.equal(_loopStatus({ name: 'a', enabled: true, last_exit: 1, recent_runs: [{ status: 'done' }] }), 'failed');
+});
+
+test('navModelFromLoops: status —— enabled 且 consecutive_errors≥3(stale)→ failed', () => {
+  assert.equal(_loopStatus({ name: 'a', enabled: true, consecutive_errors: 3, recent_runs: [{ status: 'done' }] }), 'failed');
+});
+
+test('navModelFromLoops: status —— done(enabled+last_exit 0)→ null(不显点)', () => {
+  assert.equal(_loopStatus({ name: 'a', enabled: true, last_exit: 0, recent_runs: [{ status: 'done' }] }), null);
+});
+
+test('navModelFromLoops: status —— paused(!enabled)→ null(即便有 in-flight / 错误)', () => {
+  // 与 running 同口径:!enabled 优先于一切,不显点(detail badge 显 paused)。
+  assert.equal(_loopStatus({ name: 'a', enabled: false, recent_runs: [{ status: 'running' }] }), null);
+  assert.equal(_loopStatus({ name: 'b', enabled: false, last_exit: 1 }), null);
+});
+
+test('navModelFromLoops: status —— enabled 但没跑过 → null', () => {
+  assert.equal(_loopStatus({ name: 'a', enabled: true }), null);
+  assert.equal(_loopStatus({ name: 'b', enabled: true, recent_runs: [] }), null);
+});
+
 test('navModelFromLoops: label 截断 40 字符(超长加省略号)', () => {
   const long = 'x'.repeat(50);
   const item = navModelFromLoops([{ name: long }]).sections[0].items[0];
