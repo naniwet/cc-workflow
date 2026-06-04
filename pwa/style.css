@@ -1839,6 +1839,13 @@ pre {
     width: 7px;
     height: 7px;
     border-radius: var(--radius-full);
+    box-sizing: border-box;
+  }
+  /* 久远 done(超 DONE_STALE_SEC):空心圆 —— 描边 + 透明填充,不再实心常亮抢眼。
+     border-color 由 _navStatusDot 内联给(同 STATUS_ACCENTS 绿)。 */
+  .shell-nav-status-dot.is-hollow {
+    background: transparent;
+    border: 1.5px solid;
   }
 
   /* ⇲ 并排打开:默认隐藏,父行 hover 才显现 */

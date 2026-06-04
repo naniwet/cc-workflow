@@ -6,6 +6,20 @@ export const STATUS_ACCENTS = Object.freeze({
   paused: 'var(--text-disabled)',
 });
 
+// workspace 侧栏 done 点"实心 → 空心圆"的时间阈值(秒)。完成超过这么久的会话
+// 不再实心绿点抢眼,改渲空心圆(完成但久远)。**可调**:改这一个常量即可。
+// 选 2h:当前这段工作里完成的保持实心提醒"刚做完",隔几小时 / 隔天回来变空心。
+export const DONE_STALE_SEC = 2 * 60 * 60;
+
+// done 状态是否已"久远"(该渲空心圆)。纯函数,now / 阈值都传入(不调 Date.now)。
+//   只对 'done' 生效;running / failed / queued / null 一律 false(它们自有样式)。
+//   latestAt 必须是有效正秒数(没跑过 = -Infinity / 0 / 缺 → false,不显空心)。
+export function isDoneStale(status, latestAt, nowSec, staleSec) {
+  if (status !== 'done') return false;
+  if (!Number.isFinite(latestAt) || latestAt <= 0) return false;
+  return (nowSec - latestAt) > staleSec;
+}
+
 export const ROUNDTABLE_PERSONAS = Object.freeze([
   Object.freeze({ key: 'minimalist', label: '极简派', short: '极', color: 'green' }),
   Object.freeze({ key: 'scenario', label: '场景派', short: '场', color: 'cyan' }),
@@ -487,8 +501,10 @@ export function buildSidebarTree(groups) {
     //      (= 最近活动的 session)的 status
     //   ③ 全没跑过 → null
     let status = null;
+    let latestAt = -Infinity;          // 该 ws 用于"空心圆"判定的活动时间(秒)
     if (running) {
       status = 'running';
+      latestAt = tiles.reduce((m, t) => Math.max(m, t.latestAt), -Infinity);
     } else {
       let best = null;
       for (const t of tiles) {
@@ -496,6 +512,7 @@ export function buildSidebarTree(groups) {
         if (!best || t.latestAt > best.latestAt) best = t;
       }
       status = best ? best.status : null;
+      latestAt = best ? best.latestAt : -Infinity;  // 选中那条 session 的最近 run 时间
     }
     return {
       ws,
@@ -504,13 +521,15 @@ export function buildSidebarTree(groups) {
       expandable,
       running,
       status,
+      latestAt,
       sessions: expandable
-        ? tiles.map(({ sessionKey, tileId, running: sessionRunning, status: sessionStatus }) => ({
+        ? tiles.map(({ sessionKey, tileId, running: sessionRunning, status: sessionStatus, latestAt: sessionLatestAt }) => ({
             sessionKey,
             label: sessionChipLabel(ws, sessionKey),
             tileId,
             running: sessionRunning,
             status: sessionStatus,
+            latestAt: sessionLatestAt,
           }))
         : [],
     };
@@ -558,6 +577,7 @@ export function navModelFromTree(tree) {
     label: node.ws,
     running: node.running,
     status: node.status,
+    latestAt: node.latestAt,            // 给 _navStatusDot 判"久远 done → 空心圆"
     data: { tileId: node.tileId },
     badge: node.sessionCount > 1 ? node.sessionCount : undefined,
     children: node.expandable
@@ -566,6 +586,7 @@ export function navModelFromTree(tree) {
           label: s.sessionKey === `pwa-${node.ws}` ? '默认' : s.label,
           running: s.running,
           status: s.status,
+          latestAt: s.latestAt,
           data: { tileId: s.tileId },
         }))
       : undefined,

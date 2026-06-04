@@ -34,6 +34,8 @@ import {
   tileKeyFor,
   buildSidebarTree,
   navModelFromTree,
+  isDoneStale,
+  DONE_STALE_SEC,
   navModelFromRoundtables,
   navModelFromLoops,
   loadShellState,
@@ -1315,12 +1317,18 @@ function _railGlyph(item) {
 //     STATUS_ACCENTS[status](与 mobile overview 同一套色板,单一真相源)。
 //   - null(没跑过)/ 未知 status → 不渲点(沉默是金,没活动不占视觉)。
 // status 由 buildSidebarTree → navModelFromTree 派生(纯函数,有单测)。
-function _navStatusDot(status) {
+function _navStatusDot(status, latestAt) {
   if (status === 'running') {
     return '<span class="shell-nav-dot" aria-label="运行中"></span>';
   }
   const color = STATUS_ACCENTS[status];
   if (!color) return '';   // null / 未知 → 不渲
+  // done 且距上次活动超过 DONE_STALE_SEC → 空心圆(完成但久远,不再实心常亮抢眼)。
+  // Date.now() 在这层(render)用没问题;判定逻辑 isDoneStale 是纯函数有单测。
+  // latestAt 缺省(roundtable / tasks 不传)→ isDoneStale 直接 false(它们也不出 done)。
+  if (isDoneStale(status, latestAt, Date.now() / 1000, DONE_STALE_SEC)) {
+    return `<span class="shell-nav-status-dot is-hollow" style="border-color:${color}" aria-label="${esc(status)} (久远)"></span>`;
+  }
   return `<span class="shell-nav-status-dot" style="background:${color}" aria-label="${esc(status)}"></span>`;
 }
 
@@ -1381,7 +1389,7 @@ function renderNavFull(navModel, opts = {}) {
       <div class="${cls}" data-tile-id="${esc(item.id)}" draggable="true">
         ${leadingHtml}
         <span class="shell-nav-label">${esc(item.label)}</span>
-        ${_navStatusDot(item.status)}
+        ${_navStatusDot(item.status, item.latestAt)}
         <button class="shell-nav-open-beside" type="button"
                 data-open-beside="${esc(item.id)}" title="并排打开" aria-label="并排打开">${ICONS.maximize}</button>
       </div>`;
@@ -1441,7 +1449,7 @@ function renderNavRail(navModel, opts = {}) {
       <div class="${cls}" data-tile-id="${esc(item.id)}" title="${esc(item.label)}">
         <span class="shell-nav-rail-glyph">${esc(_railGlyph(item))}</span>
         ${badge}
-        ${_navStatusDot(item.status)}
+        ${_navStatusDot(item.status, item.latestAt)}
       </div>`;
   }).join('');
 }

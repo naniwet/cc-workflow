@@ -31,6 +31,8 @@ import {
   hunkLineClass,
   hunksToHtml,
   nextSessionKey,
+  isDoneStale,
+  DONE_STALE_SEC,
 } from '../pwa/ui_contract.mjs';
 
 test('status accent mapping follows the mobile overview design', () => {
@@ -617,6 +619,7 @@ test('buildSidebarTree: 单 session repo → expandable:false, sessions:[]', () 
     expandable: false,
     running: false,
     status: null,
+    latestAt: -Infinity,           // 没跑过 → 无活动时间(空心圆判定:不显)
     sessions: [],
   });
 });
@@ -650,9 +653,9 @@ test('buildSidebarTree: 多 session(≥2)repo → expandable:true + 正确 child
   assert.equal(entry.expandable, true);
   // children 顺序 = groups 插入序(信任 groups,不重排)
   assert.deepEqual(entry.sessions, [
-    { sessionKey: 'pwa-cc-workflow', label: 'pwa-cc-workflow', tileId: sessionTileId('cc-workflow', 'pwa-cc-workflow'), running: false, status: null },
-    { sessionKey: 'cc-workflow--feat-x', label: 'feat-x', tileId: sessionTileId('cc-workflow', 'cc-workflow--feat-x'), running: false, status: null },
-    { sessionKey: 'cc-workflow--fix-bug', label: 'fix-bug', tileId: sessionTileId('cc-workflow', 'cc-workflow--fix-bug'), running: false, status: null },
+    { sessionKey: 'pwa-cc-workflow', label: 'pwa-cc-workflow', tileId: sessionTileId('cc-workflow', 'pwa-cc-workflow'), running: false, status: null, latestAt: -Infinity },
+    { sessionKey: 'cc-workflow--feat-x', label: 'feat-x', tileId: sessionTileId('cc-workflow', 'cc-workflow--feat-x'), running: false, status: null, latestAt: -Infinity },
+    { sessionKey: 'cc-workflow--fix-bug', label: 'fix-bug', tileId: sessionTileId('cc-workflow', 'cc-workflow--fix-bug'), running: false, status: null, latestAt: -Infinity },
   ]);
 });
 
@@ -1382,4 +1385,48 @@ test('nextSessionKey: ws 名本身含 -- 也不误判', () => {
 test('nextSessionKey: existingKeys 缺省/为 null 时当空集', () => {
   assert.equal(nextSessionKey('repo'), 'repo--2');
   assert.equal(nextSessionKey('repo', null), 'repo--2');
+});
+
+// ── isDoneStale + latestAt:workspace 侧栏久远 done → 空心圆(2026-06-04)──
+test('isDoneStale: done 且超过阈值 → true', () => {
+  assert.equal(isDoneStale('done', 1000, 1000 + 7200 + 1, 7200), true);
+});
+
+test('isDoneStale: done 但在阈值内 → false', () => {
+  assert.equal(isDoneStale('done', 1000, 1000 + 10, 7200), false);
+});
+
+test('isDoneStale: 非 done(running / failed / null)→ false', () => {
+  assert.equal(isDoneStale('running', 1000, 9_999_999, 7200), false);
+  assert.equal(isDoneStale('failed', 1000, 9_999_999, 7200), false);
+  assert.equal(isDoneStale(null, 1000, 9_999_999, 7200), false);
+});
+
+test('isDoneStale: 无有效时间戳(-Infinity / 0 / 缺)→ false', () => {
+  assert.equal(isDoneStale('done', -Infinity, 9_999_999, 7200), false);
+  assert.equal(isDoneStale('done', 0, 9_999_999, 7200), false);
+  assert.equal(isDoneStale('done', undefined, 9_999_999, 7200), false);
+});
+
+test('DONE_STALE_SEC 是正数(可调阈值常量)', () => {
+  assert.ok(typeof DONE_STALE_SEC === 'number' && DONE_STALE_SEC > 0);
+});
+
+test('buildSidebarTree: 单 session node 暴露 latestAt(最近 run started_at)', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'a', sessionKey: 'pwa-a', recent: [{ status: 'done', started_at: 5000 }] },
+  ));
+  assert.equal(tree[0].latestAt, 5000);
+});
+
+test('navModelFromTree: item + children 传递 latestAt', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'a', sessionKey: 'pwa-a', recent: [{ status: 'done', started_at: 5000 }] },
+    { ws: 'a', sessionKey: 'a--2',  recent: [{ status: 'done', started_at: 6000 }] },
+  ));
+  const item = navModelFromTree(tree).sections[0].items[0];
+  // ws node latestAt = 最近活动 session 的(a--2 的 6000)
+  assert.equal(item.latestAt, 6000);
+  const child = item.children.find((c) => c.id.endsWith('a--2'));
+  assert.equal(child.latestAt, 6000);
 });
