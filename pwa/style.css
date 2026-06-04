@@ -2237,6 +2237,12 @@ pre {
   border-radius: 0;
   background: transparent;
   overflow: hidden;
+  /* 扁平聊天流(2026-06-04):turn 不再是带边框/分隔线的"块",而是一段连续
+     消息流。turn 内 user 气泡 → AI 块用与 turn 之间一致的间距(stream gap 也是
+     space-3),整体读成"一条一条的消息",人右 / AI 左,无分块感。 */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 /* head = 折叠开关 + 用户气泡(spec §13.1)。chevron 在左,气泡靠右对齐
    (Claude 会话 UI 里用户消息靠右)。整行可点 → 折叠/展开。 */
@@ -2245,7 +2251,7 @@ pre {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: 0;                   /* 扁平流:间距交给 .turn / stream 的 gap,head 不再自带内边距 */
   background: transparent;
   border: 0;
   color: var(--text-primary);
@@ -2290,9 +2296,9 @@ pre {
 .turn-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--space-2);          /* AI 块内部(Claude 标 → events)稍紧 */
+  padding: 0;                   /* 扁平流:去内边距,间距交给 .turn 的 gap */
+  /* 去掉 border-top —— 那条分隔线是"分块感"的来源(spec 2026-06-04 扁平化)。 */
 }
 /* event 列表容器:顶层 event 块(.event-tool / .event-tool-result /
    .event-asst-md / 默认隐藏的 .event thinking)之间用 gap 分节奏 —— tool

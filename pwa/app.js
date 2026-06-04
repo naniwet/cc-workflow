@@ -938,12 +938,15 @@ function snapshotDrafts() {
     };
   }
   for (const s of document.querySelectorAll('.workspace-session-stream[data-ws]')) {
+    // 只存 scrollTop 供"用户曾向上翻"时 restoreDrafts 还原位置。
+    // **不在这里重算 / 覆盖 workspaceStreamState.atBottom** —— snapshotDrafts 每次
+    // render 开头跑,会读到异步加载途中的瞬时位置(events 已撑高但 rAF 还没贴底,
+    // scrollTop 仍 0)→ 误判 atBottom=false → 之后 restoreDrafts 据此"保持"在顶,
+    // 打开会话永远卡在最上面(mobile 打开不滚到底的真根因,harness 复现)。
+    // follow-bottom 意图只由真实 scroll 事件(_bindWorkspaceSessionHandlers 里的
+    // 监听)+ renderMobileWorkspaceDetail(保留上次意图)拥有,渲染快照不参与。
     const atBottom = Math.abs(s.scrollHeight - s.clientHeight - s.scrollTop) < 80;
     workspaceSessionScroll[s.dataset.ws] = { scrollTop: s.scrollTop, atBottom };
-    workspaceStreamState[s.dataset.ws] = workspaceAutoScrollState(
-      workspaceStreamState[s.dataset.ws],
-      { eventCount: Number(s.dataset.eventCount || 0), atBottom },
-    );
   }
 }
 
@@ -970,7 +973,7 @@ function restoreDrafts() {
   for (const t of document.querySelectorAll('.ws-timeline[data-ws]')) {
     const saved = timelineScroll[t.dataset.ws];
     if (!saved || saved.atBottom) {
-      t.scrollTop = t.scrollHeight;
+      _scrollToBottom(t);
     } else {
       t.scrollTop = saved.scrollTop;
     }
@@ -979,12 +982,26 @@ function restoreDrafts() {
     const state = workspaceStreamState[s.dataset.ws];
     const saved = workspaceSessionScroll[s.dataset.ws];
     if (!saved || state?.atBottom !== false) {
-      s.scrollTop = s.scrollHeight;
+      _scrollToBottom(s);
     } else {
       s.scrollTop = saved.scrollTop;
     }
     _syncWorkspaceNewEventsButton(s.dataset.ws);
   }
+}
+
+// 自动贴底:瞬时跳到底,**绕过** CSS `scroll-behavior: smooth`。打开会话 / 新
+// events 异步到达时,平滑动画会被多次重设互相打断、落不到真底(mobile 打开
+// 停在中间的根因 —— harness 复现:打开后约 2s 才慢慢滚到底)。这里临时把
+// scroll-behavior 置 auto 做瞬时跳,再还原 —— 比依赖 scrollTo({behavior:'instant'})
+// 的浏览器支持更稳(顾及国产 ROM WebView)。用户主动点"↓ N new"按钮的滚动
+// 不走这里(那条单独调,保留 smooth 手感)。
+function _scrollToBottom(el) {
+  if (!el) return;
+  const prev = el.style.scrollBehavior;
+  el.style.scrollBehavior = 'auto';
+  el.scrollTop = el.scrollHeight;
+  el.style.scrollBehavior = prev;
 }
 
 function clearDraft(formId) {
@@ -4059,11 +4076,12 @@ async function _loadTurnEvents(runId) {
     // 又 parse 一遍。
     container.dataset.renderedLines = String(allLines.length);
 
-    // 重 scroll 到底,如果之前就在底。requestAnimationFrame 等浏览器
-    // layout 完新 DOM 才量 scrollHeight,否则量的是 append 前的旧值。
-    if (wasAtBottom && stream) {
-      requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
-    }
+    // append 后立刻贴底(如果之前就在底)。读 stream.scrollHeight(_scrollToBottom
+    // 里)已强制同步 layout,拿到的是插入后的新高,**无需 requestAnimationFrame**。
+    // 原来用 rAF 等 layout,但 rAF 在后台 / 隐藏标签页被浏览器节流不触发 —— 正是它
+    // 让"打开时补滚"漏掉(harness 实测:wasAtBottom=true 但 rAF 回调从不跑 → 永远
+    // 停在顶,mobile 打开不滚到底的真根因)。
+    if (wasAtBottom && stream) _scrollToBottom(stream);
   } else if (already === 0 && allLines.length === 0) {
     // tail 文件存在但还没行
     _setLoadingText('Waiting for first event…');
