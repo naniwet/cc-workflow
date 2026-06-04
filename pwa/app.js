@@ -16,6 +16,7 @@
 // auth, browser caches the credential for the session.
 
 import {
+  STATUS_ACCENTS,
   foldToolResult,
   formatToolUse,
   nextRunLabel,
@@ -1183,17 +1184,12 @@ function renderDesktopSidebarLayout() {
   // new-ws form 提交绑定(复用现有 onAddWorkspace)。
   $('view').querySelector('form[data-form-id="new-ws"]')
     ?.addEventListener('submit', onAddWorkspace);
-  // Wire dialog open/close。原生 <dialog> 自带 backdrop / ESC,我们只
-  // 管 open(showModal) + cancel(close) + submit-after-success(close)。
-  const dlg = $('ws-new-dialog');
-  const openBtn = $('ws-new-btn');
-  if (dlg && openBtn) {
-    openBtn.addEventListener('click', () => {
-      // dialog.showModal 在已经 open 的状态再调一次会抛 InvalidStateError
-      if (!dlg.open) dlg.showModal();
-    });
-    dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
-  }
+  // ws-new-dialog 的 cancel(close)绑定。**它的 open 不再由 #ws-new-btn 直接触发**
+  //(方案 A:#ws-new-btn 改开"新对话" dialog,见 _bindSidebarNavHandlers / _openNewChatDialog);
+  // ws-new-dialog 现由新对话 dialog 的"或 + 新建 workspace"二级链 showModal。
+  // 原生 <dialog> 自带 backdrop / ESC,submit 成功后 close 由 onAddWorkspace 处理。
+  $('ws-new-dialog')?.querySelector('.ws-new-cancel')
+    ?.addEventListener('click', (e) => e.target.closest('dialog')?.close());
 
   // 主区 pane 交互(drop 落点 / × 关闭)绑在 #view。nav 交互(focus / 拖拽 /
   // ⇲ / 塌缩 / + 新对话)已由上面 _renderSidebarNav() 绑过(#sidebar-ctx),
@@ -1295,9 +1291,19 @@ function _railGlyph(item) {
   return /^[A-Za-z0-9]/.test(label) ? label.slice(0, 2) : Array.from(label)[0];
 }
 
-// running 脉冲点(spec §4.2:青色脉冲点)。running 为真才渲染。
-function _navRunningDot(running) {
-  return running ? '<span class="shell-nav-dot" aria-label="运行中"></span>' : '';
+// nav 行的状态点(spec §4.2 扩展:不止 running)。
+//   - 'running' → 青色脉冲点(.shell-nav-dot,复用现有脉冲 CSS + aria-label)。
+//   - 其它已知 status(done/failed/queued/paused)→ 静态小圆点,颜色内联
+//     STATUS_ACCENTS[status](与 mobile overview 同一套色板,单一真相源)。
+//   - null(没跑过)/ 未知 status → 不渲点(沉默是金,没活动不占视觉)。
+// status 由 buildSidebarTree → navModelFromTree 派生(纯函数,有单测)。
+function _navStatusDot(status) {
+  if (status === 'running') {
+    return '<span class="shell-nav-dot" aria-label="运行中"></span>';
+  }
+  const color = STATUS_ACCENTS[status];
+  if (!color) return '';   // null / 未知 → 不渲
+  return `<span class="shell-nav-status-dot" style="background:${color}" aria-label="${esc(status)}"></span>`;
 }
 
 // ── nav full 态(取代旧 _pcSidebarHtml)──────────────────────────────────
@@ -1317,7 +1323,8 @@ function _navRunningDot(running) {
 //   .shell-nav-label       行内文字
 //   .shell-nav-open-beside hover 出的 ⇲ 按钮(data-open-beside)
 //   .shell-nav-children    展开后的子行容器
-//   .shell-nav-dot         running 青色脉冲点
+//   .shell-nav-dot         running 青色脉冲点(status==='running')
+//   .shell-nav-status-dot  其它状态静态点(done/failed/queued/paused,色靠内联)
 //   .is-open / .is-active  高亮态
 // data 钩子(保持,_bindSidebarNavHandlers 依赖):data-tile-id / draggable /
 //   data-open-beside / data-toggle-repo / data-new-chat-ws。
@@ -1356,7 +1363,7 @@ function renderNavFull(navModel, opts = {}) {
       <div class="${cls}" data-tile-id="${esc(item.id)}" draggable="true">
         ${leadingHtml}
         <span class="shell-nav-label">${esc(item.label)}</span>
-        ${_navRunningDot(item.running)}
+        ${_navStatusDot(item.status)}
         <button class="shell-nav-open-beside" type="button"
                 data-open-beside="${esc(item.id)}" title="并排打开" aria-label="并排打开">${ICONS.maximize}</button>
       </div>`;
@@ -1416,7 +1423,7 @@ function renderNavRail(navModel, opts = {}) {
       <div class="${cls}" data-tile-id="${esc(item.id)}" title="${esc(item.label)}">
         <span class="shell-nav-rail-glyph">${esc(_railGlyph(item))}</span>
         ${badge}
-        ${_navRunningDot(item.running)}
+        ${_navStatusDot(item.status)}
       </div>`;
   }).join('');
 }
@@ -2355,6 +2362,12 @@ function _bindSidebarNavHandlers(ctx) {
   for (const btn of ctx.querySelectorAll('.shell-nav-new-chat[data-new-chat-ws]')) {
     btn.addEventListener('click', () => _onPcNewChatClick(btn.dataset.newChatWs));
   }
+
+  // ── 顶部 + 按钮(#ws-new-btn,renderNavFull 的 newAction):开"新对话" dialog
+  //    (方案 A)。**必须在这里绑** —— #ws-new-btn 在 #sidebar-ctx 里,收起/展开
+  //    只重渲 ctx(经 _renderSidebarNav),会重建这个钮;绑定跟它同生命周期才不丢
+  //    (task 第 4 点:重渲后要重新绑)。
+  ctx.querySelector('#ws-new-btn')?.addEventListener('click', _openNewChatDialog);
 }
 
 // 绑 #view 里的主区 pane 交互(.pc-main 的 drop 落点 / .pc-pane-close 的 ×)。
@@ -2418,6 +2431,107 @@ function _onPcNewChatClick(ws) {
   const tileId = sessionTileId(ws, newKey);
   _declaredEmptySessions.add(tileId);
   dispatchPane({ type: 'focus', tileId });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// "新对话" dialog(方案 A):顶部 + 按钮从"直接开 new-ws"改成"先选 workspace
+// 再起新对话"。建-session 逻辑复用 _onPcNewChatClick(ws)(不复制)。二级链
+// "或 + 新建 workspace" 关本 dialog → 开现有 ws-new-dialog(建 repo 流程不动)。
+//
+// 全局宿主三件套(照搬 _ensureTaskNewDialog / _openTaskNewDialog 套路):dialog
+// 挂 document.body,与 #view innerHTML 生灭解耦;workspace 下拉用打开那刻的
+// lastData.workspaces 现拉(每次打开比对重建)。**只在 PC Workspaces 路由可达**
+// (#ws-new-btn 只在 renderNavFull 渲),所以默认 ws / 二级链开的 ws-new-dialog
+// 都在那个上下文里成立。
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 默认选中 workspace:当前 active pane 的 ws → parseSessionTileId;取不到回落
+// lastData.workspaces 第一个;再没有 → 空串。
+function _activePaneWs() {
+  if (!paneState) loadPcLayout();
+  const tileId = paneState?.panes?.[paneState.activePaneIdx];
+  if (tileId) {
+    const { ws } = parseSessionTileId(tileId);
+    if (ws && (lastData.workspaces || []).includes(ws)) return ws;
+  }
+  return (lastData.workspaces || [])[0] || '';
+}
+
+function _newChatDialogHtml() {
+  const workspaces = lastData.workspaces || [];
+  const defaultWs = _activePaneWs();
+  return `
+    <dialog class="ws-new-dialog" id="new-chat-dialog">
+      <form data-form-id="new-chat" class="ws-new-form">
+        <h3>新对话</h3>
+        <label>workspace
+          ${_renderFormPicker({
+            name: 'workspace',
+            options: workspaces.map((w) => ({ value: w, label: w })),
+            value: defaultWs,
+          })}
+        </label>
+        <p class="muted" style="font-size:11px;margin:0">
+          在选中的 workspace 里起一条新对话(独立 worktree + 分支)。
+        </p>
+        <button type="button" class="new-chat-to-ws">或 + 新建 workspace</button>
+        <div class="ws-new-actions">
+          <button type="button" class="ws-new-cancel">取消</button>
+          <button type="submit">开始</button>
+        </div>
+      </form>
+    </dialog>`;
+}
+
+// 幂等挂 body(同 _ensureTaskNewDialog 纪律:已存在直接 return,不重渲/重绑)。
+function _ensureNewChatDialog() {
+  if (document.getElementById('new-chat-dialog')) return;
+  document.body.insertAdjacentHTML('beforeend', _newChatDialogHtml());
+  _bindNewChatDialog();
+}
+
+// 打开入口(#ws-new-btn 点它):ensure → 若 workspaces 列表 / 默认 ws 变了则重建
+// (反映最新 + 默认选中当前 pane 的 ws)→ showModal。重建只在没开着时做。
+function _openNewChatDialog() {
+  _ensureNewChatDialog();
+  let dlg = document.getElementById('new-chat-dialog');
+  if (!dlg) return;
+  if (!dlg.open) {
+    // snapshot 含 ws 列表 + 默认 ws —— 任一变了都重建(默认 ws 跟 active pane 走,
+    // 切了 pane 再开应反映新默认)。
+    const want = (lastData.workspaces || []).join('\n') + '|' + _activePaneWs();
+    if (dlg.dataset.snapshot !== want) {
+      dlg.remove();
+      document.body.insertAdjacentHTML('beforeend', _newChatDialogHtml());
+      dlg = document.getElementById('new-chat-dialog');
+      dlg.dataset.snapshot = want;
+      _bindNewChatDialog();
+    }
+  }
+  if (!dlg.open) dlg.showModal();
+}
+
+// 绑 dialog 逻辑(重建时调一次)。所有选择器锚 dialog 自身。workspace 的
+// form-picker 点击由 document 级 _onFormPickerClick 处理,无需在此绑。
+function _bindNewChatDialog() {
+  const dlg = document.getElementById('new-chat-dialog');
+  if (!dlg) return;
+  // 开始:取选中 ws → 复用 _onPcNewChatClick(建 session + focus)→ 关 dialog。
+  dlg.querySelector('form[data-form-id="new-chat"]')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const ws = e.target.querySelector('input[type="hidden"][name="workspace"]')?.value;
+    if (!ws) { showError('请选择一个 workspace'); return; }
+    dlg.close();
+    _onPcNewChatClick(ws);
+  });
+  // 取消:关。
+  dlg.querySelector('.ws-new-cancel')?.addEventListener('click', () => dlg.close());
+  // 二级链:关本 dialog → 开现有 ws-new-dialog(建 repo 流程完全不改)。
+  dlg.querySelector('.new-chat-to-ws')?.addEventListener('click', () => {
+    dlg.close();
+    const wsDlg = $('ws-new-dialog');
+    if (wsDlg && !wsDlg.open) wsDlg.showModal();
+  });
 }
 
 // Build the provider <option> list for the new-workspace form +

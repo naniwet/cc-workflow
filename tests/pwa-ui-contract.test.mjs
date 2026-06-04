@@ -592,11 +592,14 @@ test('paneStateReducer: 未知 action type 原样返回(不破坏不变量)', ()
 // 迭代顺序 = 插入序(JS string key),侧边栏 children 顺序忠实反映它。
 
 // fixture helper:按"插入序"组装 groups,跟 groupBySession 返回形状一致。
-// 每个 entry 用 sessionTileId 当 key,value 至少含 {ws, sessionKey}。
+// 每个 entry 用 sessionTileId 当 key,value 至少含 {ws, sessionKey};
+// active / recent 可选(缺省空数组,向后兼容老用例)。
 function groups(...tiles) {
   const g = {};
-  for (const { ws, sessionKey, active } of tiles) {
-    g[sessionTileId(ws, sessionKey)] = { ws, sessionKey, active: active || [], recent: [] };
+  for (const { ws, sessionKey, active, recent } of tiles) {
+    g[sessionTileId(ws, sessionKey)] = {
+      ws, sessionKey, active: active || [], recent: recent || [],
+    };
   }
   return g;
 }
@@ -612,6 +615,7 @@ test('buildSidebarTree: 单 session repo → expandable:false, sessions:[]', () 
     sessionCount: 1,
     expandable: false,
     running: false,
+    status: null,
     sessions: [],
   });
 });
@@ -645,9 +649,9 @@ test('buildSidebarTree: 多 session(≥2)repo → expandable:true + 正确 child
   assert.equal(entry.expandable, true);
   // children 顺序 = groups 插入序(信任 groups,不重排)
   assert.deepEqual(entry.sessions, [
-    { sessionKey: 'pwa-cc-workflow', label: 'pwa-cc-workflow', tileId: sessionTileId('cc-workflow', 'pwa-cc-workflow'), running: false },
-    { sessionKey: 'cc-workflow--feat-x', label: 'feat-x', tileId: sessionTileId('cc-workflow', 'cc-workflow--feat-x'), running: false },
-    { sessionKey: 'cc-workflow--fix-bug', label: 'fix-bug', tileId: sessionTileId('cc-workflow', 'cc-workflow--fix-bug'), running: false },
+    { sessionKey: 'pwa-cc-workflow', label: 'pwa-cc-workflow', tileId: sessionTileId('cc-workflow', 'pwa-cc-workflow'), running: false, status: null },
+    { sessionKey: 'cc-workflow--feat-x', label: 'feat-x', tileId: sessionTileId('cc-workflow', 'cc-workflow--feat-x'), running: false, status: null },
+    { sessionKey: 'cc-workflow--fix-bug', label: 'fix-bug', tileId: sessionTileId('cc-workflow', 'cc-workflow--fix-bug'), running: false, status: null },
   ]);
 });
 
@@ -748,6 +752,88 @@ test('buildSidebarTree.running: 单 session repo 有 active → repo node runnin
   assert.equal(tree[0].running, true);
 });
 
+// ---------- buildSidebarTree.status 派生(侧栏状态点)----------
+// session tile 的 status:有 active run → 'running';否则取 recent[0].status
+//   (后端 recent 最新在前)的原值('done'/'failed'/'queued'…);recent 空/无 → null。
+// ws 级 status 聚合口径(在测试里钉死):
+//   ① 任一 session running → 'running'
+//   ② 否则在所有 session 的 recent[0] 里取 started_at 最大的那条(= 最近活动的
+//      session)的 status;
+//   ③ 全都没跑过(无 recent)→ null。
+// 保留 running(bool)不动,新增 status(navModel / 现有 render 还在用 running)。
+
+test('buildSidebarTree.status: 有 active run → session + ws 都是 running', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes', active: [{ run_id: 'r1' }], recent: [{ status: 'done', started_at: 100 }] },
+  ));
+  assert.equal(tree[0].status, 'running');
+  // expandable=false 时 sessions 为 []，单 session 的 status 体现在 ws 级即可
+});
+
+test('buildSidebarTree.status: 无 active、recent[0] done → status done', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes', recent: [{ status: 'done', started_at: 100 }] },
+  ));
+  assert.equal(tree[0].status, 'done');
+});
+
+test('buildSidebarTree.status: 无 active、recent[0] failed → status failed', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes', recent: [{ status: 'failed', started_at: 100 }] },
+  ));
+  assert.equal(tree[0].status, 'failed');
+});
+
+test('buildSidebarTree.status: 没跑过(recent 空)→ status null', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'fresh', sessionKey: 'pwa-fresh' },
+  ));
+  assert.equal(tree[0].status, null);
+});
+
+test('buildSidebarTree.status: session child 各自带 status(running / done / null)', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc', sessionKey: 'pwa-cc', recent: [{ status: 'done', started_at: 100 }] },
+    { ws: 'cc', sessionKey: 'cc--feat', active: [{ run_id: 'r1' }], recent: [{ status: 'failed', started_at: 50 }] },
+    { ws: 'cc', sessionKey: 'cc--new' },   // 没跑过
+  ));
+  assert.deepEqual(tree[0].sessions.map((s) => s.status), ['done', 'running', null]);
+});
+
+test('buildSidebarTree.status: ws 级聚合 —— 任一 session running → ws running(压过 done)', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc', sessionKey: 'pwa-cc', recent: [{ status: 'done', started_at: 999 }] },
+    { ws: 'cc', sessionKey: 'cc--feat', active: [{ run_id: 'r1' }] },
+  ));
+  assert.equal(tree[0].status, 'running');
+});
+
+test('buildSidebarTree.status: ws 级聚合 —— 无 running,取 started_at 最新那条 session 的 status', () => {
+  // 默认线 recent done(started_at 50),用户线 recent failed(started_at 100,更新)
+  // → ws status = failed(最近活动的那条 session)。
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc', sessionKey: 'pwa-cc', recent: [{ status: 'done', started_at: 50 }] },
+    { ws: 'cc', sessionKey: 'cc--feat', recent: [{ status: 'failed', started_at: 100 }] },
+  ));
+  assert.equal(tree[0].status, 'failed');
+});
+
+test('buildSidebarTree.status: ws 级聚合 —— 部分 session 没跑过,只在跑过的里取最新', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc', sessionKey: 'pwa-cc', recent: [{ status: 'done', started_at: 100 }] },
+    { ws: 'cc', sessionKey: 'cc--new' },   // 没跑过(recent 空),不参与聚合
+  ));
+  assert.equal(tree[0].status, 'done');
+});
+
+test('buildSidebarTree.status: ws 级聚合 —— 全没跑过 → null', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc', sessionKey: 'pwa-cc' },
+    { ws: 'cc', sessionKey: 'cc--new' },
+  ));
+  assert.equal(tree[0].status, null);
+});
+
 // _prunePanes —— 持久化 pane 清洗(spec §3.5):repo / session 被删后,
 // localStorage 里残留的 tileId 要丢掉。validTileIds 可为 Set 或 array。
 test('_prunePanes: 丢掉已不存在的 tileId,保留存在的(保序)', () => {
@@ -819,7 +905,7 @@ test('navModelFromTree: newAction 形状 + sections 单组', () => {
     { ws: 'notes', sessionKey: 'pwa-notes' },
   ));
   const model = navModelFromTree(tree);
-  assert.deepEqual(model.newAction, { label: '+ 新建 workspace', data: {} });
+  assert.deepEqual(model.newAction, { label: '+ 新对话', data: {} });
   assert.equal(model.sections.length, 1);
   assert.equal(model.sections[0].items.length, 1);
 });
@@ -873,6 +959,25 @@ test('navModelFromTree: running 透传 —— repo node + session child', () => 
   assert.equal(item.children[1].running, true);      // 用户线在跑
 });
 
+test('navModelFromTree: status 透传 —— repo node + session child', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'cc', sessionKey: 'pwa-cc', recent: [{ status: 'done', started_at: 50 }] },
+    { ws: 'cc', sessionKey: 'cc--feat', active: [{ run_id: 'r1' }] },
+  ));
+  const item = navModelFromTree(tree).sections[0].items[0];
+  assert.equal(item.status, 'running');                 // repo node 任一在跑
+  assert.equal(item.children[0].status, 'done');        // 默认线最近 done
+  assert.equal(item.children[1].status, 'running');     // 用户线在跑
+});
+
+test('navModelFromTree: 单 session repo status 透传(没跑过 → null)', () => {
+  const tree = buildSidebarTree(groups(
+    { ws: 'notes', sessionKey: 'pwa-notes' },
+  ));
+  const item = navModelFromTree(tree).sections[0].items[0];
+  assert.equal(item.status, null);
+});
+
 test('navModelFromTree: icon 不填(nav 组件取 label 首字)', () => {
   const tree = buildSidebarTree(groups(
     { ws: 'notes', sessionKey: 'pwa-notes' },
@@ -882,7 +987,7 @@ test('navModelFromTree: icon 不填(nav 组件取 label 首字)', () => {
 
 test('navModelFromTree: 空 tree → newAction 仍在,items 空', () => {
   const model = navModelFromTree([]);
-  assert.deepEqual(model.newAction, { label: '+ 新建 workspace', data: {} });
+  assert.deepEqual(model.newAction, { label: '+ 新对话', data: {} });
   assert.deepEqual(model.sections[0].items, []);
 });
 

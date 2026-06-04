@@ -438,15 +438,29 @@ export function paneStateReducer(state, action) {
 //   sessions 仅 expandable 时填,元素 {sessionKey, label, tileId},顺序严格保
 //   groups 插入序(= 墙的顺序,天然一致)。顶层 tileId = 该 ws 默认 tile
 //   (pwa-<ws>);groups 里没有默认 tile 时退到该 ws 第一个 tile。
+// session tile 的状态点 status(纯派生,只读 groups 行):
+//   有 active run → 'running';否则 recent[0].status(后端 recent 最新在前)
+//   的原值('done'/'failed'/'queued'…);recent 空/无 → null(没跑过)。
+function _tileStatus(active, recent) {
+  if (Array.isArray(active) && active.length > 0) return 'running';
+  const latest = Array.isArray(recent) ? recent[0] : null;
+  return latest?.status ?? null;
+}
+
 export function buildSidebarTree(groups) {
-  // ws → 该 ws 的 {sessionKey, tileId, running} 列表(按 groups 插入序累积)。
-  // session child 的 running = 该 tile 有 active run(groups[tileId].active.length > 0)。
+  // ws → 该 ws 的 {sessionKey, tileId, running, status, latestAt} 列表
+  // (按 groups 插入序累积)。session child 的 running = 该 tile 有 active run
+  // (groups[tileId].active.length > 0);status 见 _tileStatus;latestAt = 该
+  // tile recent[0].started_at(用于 ws 级"最近活动的 session"聚合)。
   const byWs = new Map();
   for (const tileId of Object.keys(groups || {})) {
-    const { ws, sessionKey, active } = groups[tileId];
+    const { ws, sessionKey, active, recent } = groups[tileId];
     const running = Array.isArray(active) && active.length > 0;
+    const status = _tileStatus(active, recent);
+    const latest = Array.isArray(recent) ? recent[0] : null;
+    const latestAt = latest ? Number(latest.started_at || 0) : -Infinity;
     if (!byWs.has(ws)) byWs.set(ws, []);
-    byWs.get(ws).push({ sessionKey, tileId, running });
+    byWs.get(ws).push({ sessionKey, tileId, running, status, latestAt });
   }
 
   return Array.from(byWs.entries()).map(([ws, tiles]) => {
@@ -456,18 +470,36 @@ export function buildSidebarTree(groups) {
     const hasDefault = tiles.some((t) => t.tileId === defaultTileId);
     // repo node 的 running = 该 ws 任一 session(含默认)有 active run。
     const running = tiles.some((t) => t.running);
+    // ws 级 status 聚合口径(测试钉死):
+    //   ① 任一 session running → 'running'
+    //   ② 否则在所有"跑过的"session(status != null)里取 started_at 最大的那条
+    //      (= 最近活动的 session)的 status
+    //   ③ 全没跑过 → null
+    let status = null;
+    if (running) {
+      status = 'running';
+    } else {
+      let best = null;
+      for (const t of tiles) {
+        if (t.status == null) continue;            // 没跑过的不参与聚合
+        if (!best || t.latestAt > best.latestAt) best = t;
+      }
+      status = best ? best.status : null;
+    }
     return {
       ws,
       tileId: hasDefault ? defaultTileId : tiles[0].tileId,
       sessionCount,
       expandable,
       running,
+      status,
       sessions: expandable
-        ? tiles.map(({ sessionKey, tileId, running: sessionRunning }) => ({
+        ? tiles.map(({ sessionKey, tileId, running: sessionRunning, status: sessionStatus }) => ({
             sessionKey,
             label: sessionChipLabel(ws, sessionKey),
             tileId,
             running: sessionRunning,
+            status: sessionStatus,
           }))
         : [],
     };
@@ -514,6 +546,7 @@ export function navModelFromTree(tree) {
     id: node.tileId,
     label: node.ws,
     running: node.running,
+    status: node.status,
     data: { tileId: node.tileId },
     badge: node.sessionCount > 1 ? node.sessionCount : undefined,
     children: node.expandable
@@ -521,12 +554,15 @@ export function navModelFromTree(tree) {
           id: s.tileId,
           label: s.sessionKey === `pwa-${node.ws}` ? '默认' : s.label,
           running: s.running,
+          status: s.status,
           data: { tileId: s.tileId },
         }))
       : undefined,
   }));
   return {
-    newAction: { label: '+ 新建 workspace', data: {} },
+    // 顶部按钮点击在 app.js 改成开"新对话" dialog(方案 A);label 同步成
+    // "+ 新对话"。dialog 里仍有"或 + 新建 workspace"二级入口(开 ws-new-dialog)。
+    newAction: { label: '+ 新对话', data: {} },
     sections: [{ items }],
   };
 }

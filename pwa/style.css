@@ -532,6 +532,18 @@ main {
   color: var(--text-secondary);
   border: 1px solid var(--border-subtle);
 }
+/* "新对话" dialog 的二级链("或 + 新建 workspace"):无边框文字链,
+   关本 dialog → 开 ws-new-dialog(建 repo 流程)。 */
+.new-chat-to-ws {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .provider-inline {
   width: auto;
   padding: 2px var(--space-2);
@@ -1821,6 +1833,16 @@ pre {
     50%      { opacity: 0.35; }
   }
 
+  /* 非 running 的状态点(done/failed/queued/paused):静态小圆,颜色由
+     行内 style 给(STATUS_ACCENTS,单一色板真相源)。无脉冲 —— 脉冲只
+     留给"在跑"(.shell-nav-dot)。尺寸 / 位置跟脉冲点一致,视觉统一。 */
+  .shell-nav-status-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+  }
+
   /* ⇲ 并排打开:默认隐藏,父行 hover 才显现 */
   .shell-nav-open-beside {
     flex: 0 0 auto;
@@ -1902,8 +1924,9 @@ pre {
     line-height: 14px;
     text-align: center;
   }
-  /* rail 态 running 点:左上角 */
-  .shell-nav-rail-item .shell-nav-dot {
+  /* rail 态状态点(running 脉冲 + 其它静态):左上角,同一锚点 */
+  .shell-nav-rail-item .shell-nav-dot,
+  .shell-nav-rail-item .shell-nav-status-dot {
     position: absolute;
     top: 4px;
     left: 6px;
@@ -2135,6 +2158,13 @@ pre {
     height: 7px;
     border-radius: var(--radius-full);
     background: var(--accent-cyan);
+  }
+  /* 非 running 状态点(颜色靠行内 STATUS_ACCENTS)— 移动端 drawer 兜底尺寸 */
+  .shell-nav-status-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
   }
   /* 移动端 drawer 里不需要 ⇲(无多 pane)/ 三角缩进沿用,但弱化显示 */
   .shell-nav-open-beside { display: none; }
