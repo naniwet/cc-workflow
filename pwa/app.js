@@ -3323,7 +3323,6 @@ function workspaceColHtml(name, data, opts = {}) {
   // "Pull latest (git pull)" vs "Pull latest")都漂移,Display 段(Show
   // all events toggle)也只 mobile 有。用户反馈"pc 端的菜单怎么跟移动
   // 端不一样 保持一致吧" —— 这里以 mobile 版为准重写 PC body。
-  const trustOnPC = effectiveTrust(name);
   const providerEngineBlock = `
     <div class="ws-meta-mobile">
       ${providerLabel}
@@ -3331,20 +3330,11 @@ function workspaceColHtml(name, data, opts = {}) {
       <details class="ws-actions-menu" data-details-id="ws-menu-${esc(name)}">
         <summary class="ws-actions-trigger" aria-label="More actions">${ICONS.more}</summary>
         <div class="ws-actions-menu-body">
-          <div class="ws-menu-section">
-            <span class="ws-menu-section-label">Provider</span>
-            ${_providerRadioListHtml(name, wsProvider)}
-          </div>
+          <!-- Provider / Trust 已下沉到 composer(可点模型 chip + Trust chip);
+               Pull latest / Create PR 已移除(2026-06-04 控制区重构)。菜单只留
+               低频 + 管理动作。 -->
           <div class="ws-menu-section">
             <span class="ws-menu-section-label">Workspace</span>
-            <button class="ws-trust-toggle ws-menu-item" type="button"
-                    data-ws="${esc(name)}" data-trusted="${trustOnPC ? '1' : '0'}">
-              ${trustOnPC ? ICONS.unlock : ICONS.lock}
-              <span>Trust workspace <strong>${trustOnPC ? 'ON' : 'OFF'}</strong></span>
-            </button>
-            <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}">
-              ${ICONS.download} <span>Pull latest</span>
-            </button>
             <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
               ${ICONS.refresh} <span>Sync /commands</span>
             </button>
@@ -3358,9 +3348,6 @@ function workspaceColHtml(name, data, opts = {}) {
           </div>
           <div class="ws-menu-section">
             <span class="ws-menu-section-label">Session</span>
-            <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}"${skAttr}>
-              ${ICONS.download} <span>Create PR</span>
-            </button>
             <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}"${skAttr}>
               ${ICONS.rewind} <span>New chat</span>
             </button>
@@ -3415,9 +3402,16 @@ function _composerHtml(name, colKey, skAttr, opts = {}) {
   const activeRun = opts.activeRun || null;
   const showSendHint = !!opts.showSendHint;
   const model = lastData.wsSettings[name]?.provider || lastData.globalProvider || 'default';
+  const wsProvider = lastData.wsSettings[name]?.provider || '';
+  const trustOn = effectiveTrust(name);
   const runOrStop = activeRun
     ? `<button class="run-cancel-btn composer-stop" type="button" data-run-id="${esc(activeRun.id)}">⏹ Stop</button>`
     : `<button class="composer-send" type="submit">Run</button>`;
+  // 高频两个控件下沉到 composer(用户要求 2026-06-04):
+  //   · 模型 chip:可点 → 向上弹 provider 单选(复用 ws-actions-menu 的关闭逻辑
+  //     + _providerRadioListHtml + .ws-menu-radio→_onProviderRadioClick handler)。
+  //   · Trust chip("模式"):点切自动批准(复用 .ws-trust-toggle→onTrustToggleClick)。
+  // 都复用既有 handler,bindWorkspaceColHandlers 已按 class 委托绑定,无需新绑。
   return `
     <form class="trigger-form composer" data-workspace="${esc(name)}"${skAttr} data-form-id="ws-${esc(colKey)}">
       <div class="attach-chips" data-ws="${esc(name)}"></div>
@@ -3425,7 +3419,20 @@ function _composerHtml(name, colKey, skAttr, opts = {}) {
       <textarea name="prompt" class="composer-input" rows="1" placeholder="Message…"></textarea>
       <div class="composer-toolbar">
         <button type="button" class="attach-btn" data-ws="${esc(name)}" aria-label="Attach files">📎</button>
-        <span class="composer-model-chip" title="Provider (read-only here; change in ⋯ menu)">${esc(model)}</span>
+        <details class="ws-actions-menu composer-model-menu" data-details-id="composer-model-${esc(colKey)}">
+          <summary class="composer-model-chip" title="切换模型 / provider">${esc(model)} ▾</summary>
+          <div class="ws-actions-menu-body composer-model-body">
+            <div class="ws-menu-section">
+              <span class="ws-menu-section-label">Provider</span>
+              ${_providerRadioListHtml(name, wsProvider)}
+            </div>
+          </div>
+        </details>
+        <button type="button" class="composer-trust-chip ws-trust-toggle${trustOn ? ' is-on' : ''}"
+                data-ws="${esc(name)}" data-trusted="${trustOn ? '1' : '0'}"
+                title="自动批准工具调用(关 = 每个工具调用弹 Approve / Deny)">
+          ${trustOn ? ICONS.unlock : ICONS.lock}<span>${trustOn ? '自动批准' : '需批准'}</span>
+        </button>
         <span class="composer-spacer"></span>
         ${showSendHint ? '<span class="composer-hint">↵ 发送 · ⇧↵ 换行</span>' : ''}
         ${runOrStop}
@@ -3807,10 +3814,6 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning, activ
   const state = workspaceStreamState[name] || {};
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
-  const trustOn = effectiveTrust(name);
-  const providerRows = isRunning
-    ? _providerRadioListHtml(name, wsProvider).replace(/<button /g, '<button disabled ')
-    : _providerRadioListHtml(name, wsProvider);
   const disabledAttr = isRunning ? 'disabled' : '';
   const turnsHtml = turns.length
     ? turns.map(_workspaceTurnHtml).join('')
@@ -3830,20 +3833,10 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning, activ
         <details class="workspace-gear ws-actions-menu" data-details-id="ws-detail-menu-${esc(name)}">
           <summary class="workspace-gear-trigger ws-actions-trigger" aria-label="Workspace settings">${ICONS.settings}</summary>
           <div class="workspace-menu ws-actions-menu-body">
-            <div class="ws-menu-section">
-              <span class="ws-menu-section-label">Provider</span>
-              ${providerRows}
-            </div>
+            <!-- Provider / Trust 下沉到 composer;Pull latest / Create PR 已移除
+                 (2026-06-04 控制区重构)。菜单只留低频 + 管理。 -->
             <div class="ws-menu-section">
               <span class="ws-menu-section-label">Workspace</span>
-              <button class="ws-trust-toggle ws-menu-item" type="button"
-                      data-ws="${esc(name)}" data-trusted="${trustOn ? '1' : '0'}">
-                ${trustOn ? ICONS.unlock : ICONS.lock}
-                <span>Trust workspace <strong>${trustOn ? 'ON' : 'OFF'}</strong></span>
-              </button>
-              <button class="ws-pull-latest ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
-                ${ICONS.download} <span>Pull latest</span>
-              </button>
               <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
                 ${ICONS.refresh} <span>Sync /commands</span>
               </button>
@@ -3857,9 +3850,6 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning, activ
             </div>
             <div class="ws-menu-section">
               <span class="ws-menu-section-label">Session</span>
-              <button class="ws-merge-to-main ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
-                ${ICONS.download} <span>Create PR</span>
-              </button>
               <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
                 ${ICONS.rewind} <span>New chat</span>
               </button>
