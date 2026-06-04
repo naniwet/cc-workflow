@@ -3891,9 +3891,8 @@ function _workspaceTurnHtml(turn) {
   //   ① 用户气泡 ×1(右对齐圆角弱底,仅 prompt 文本 + 弱时间戳)
   //   ② 助手文档(全宽流动 markdown,顶一个极轻 CLAUDE 指示)
   //   ③ 行末 meta(助手块末尾 ✓ 用时 · tokens,由 result event 渲染)
-  const cancelBtn = status === 'running' && turn.id
-    ? `<button class="run-cancel-btn turn-cancel" type="button" data-run-id="${esc(turn.id)}">✕ Cancel</button>`
-    : '';
+  // running turn 不再在用户气泡旁渲大"✕ Cancel" —— 底部 composer 的 ⏹ Stop
+  // 已覆盖取消(activeRun 时显示,投同一个 run_id),turn 内再放一个是冗余 + 占地。
   const approvals = pendingApprovalsFor(turn.id || '').map(approvalBlockHtml).join('');
   const startedRel = turn.started_at ? timeAgo(turn.started_at) : '';
   const startedAbs = turn.started_at ? new Date(turn.started_at * 1000).toLocaleString() : '';
@@ -3925,7 +3924,6 @@ function _workspaceTurnHtml(turn) {
           ${startedRel ? `<span class="turn-user-time" title="${esc(startedAbs)}">${esc(startedRel)}</span>` : ''}
         </div>
       </div>
-      ${cancelBtn}
       <div class="turn-body">
         ${asstIndicatorHtml}
         ${eventsHtml}

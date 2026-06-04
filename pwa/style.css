@@ -2282,17 +2282,8 @@ pre {
 .status-icon-failed,
 .status-icon-error   { color: var(--accent-red); }
 .status-icon-paused  { color: var(--text-disabled); }
-.turn-cancel {
-  position: absolute;
-  top: 9px;
-  right: var(--space-3);
-  min-height: 34px;
-  padding: var(--space-1) var(--space-2);
-  z-index: 2;
-}
-/* running turn:Cancel 按钮绝对定位在右上,给 head 右侧让出空间,
-   免得用户气泡(靠右)被 Cancel 盖住。 */
-.turn:has(.turn-cancel) .turn-head { padding-right: 108px; }
+/* .turn-cancel / `.turn:has(.turn-cancel)` 已删 —— running turn 不再在用户气泡旁
+   放大 Cancel 按钮,取消改走底部 composer 的 ⏹ Stop(2026-06-04)。 */
 .turn-body {
   display: flex;
   flex-direction: column;
