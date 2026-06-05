@@ -255,6 +255,17 @@ _RUN_SUMMARY_COLS = (
     "END AS output_preview"
 )
 
+# list_sessions_view 的 recent 用 window function 时,外层 SELECT 要按"列名"
+# 重选(剥掉内层算的 rn)。这里是 _RUN_SUMMARY_COLS 产出的列名(prompt /
+# output_preview 是 AS 别名,其余原名)。改 _RUN_SUMMARY_COLS 的列要同步这里。
+_RECENT_OUTER_COLS = (
+    "id, workspace, engine, session_key, status, "
+    "exit_code, started_at, finished_at, elapsed_s, source, "
+    "prompt, output_preview"
+)
+# 每个 workspace 在 recent 里保留的最近 done|failed 条数上限。
+_RECENT_PER_WS = 20
+
 
 def list_sessions_view() -> dict:
     """Shape: {active, queued, recent} — dev-plan §4.2.
@@ -278,12 +289,22 @@ def list_sessions_view() -> dict:
                 "WHERE status='queued' ORDER BY started_at DESC"
             )
         ]
+        # recent = 每个 workspace 各保留最近 N 条 done|failed(按 workspace 分区,
+        # 不是全局 LIMIT)。旧版全局 LIMIT 10 有个数据可见性 bug:别的 workspace
+        # 跑 10+ 次就把安静 workspace 的历史挤出 top-10 → 该 workspace 时间线变空
+        # (用户报"昨天对话今天刷新没了")。window function 按 workspace 分区取
+        # 各自最近 N,payload 仍有界(N × workspace 数,单用户场景很小)。
+        # ORDER BY started_at DESC, id DESC:同秒入库的 run 用 id 做稳定 tiebreaker。
         recent = [
             dict(r)
             for r in c.execute(
-                f"SELECT {_RUN_SUMMARY_COLS} FROM runs "
-                "WHERE status IN ('done','failed') "
-                "ORDER BY started_at DESC LIMIT 10"
+                f"SELECT {_RECENT_OUTER_COLS} FROM ("
+                f"  SELECT {_RUN_SUMMARY_COLS}, ROW_NUMBER() OVER ("
+                "     PARTITION BY workspace ORDER BY started_at DESC, id DESC"
+                "  ) AS rn "
+                "  FROM runs WHERE status IN ('done','failed')"
+                ") WHERE rn <= ? ORDER BY started_at DESC, id DESC",
+                (_RECENT_PER_WS,),
             )
         ]
     return {"active": active, "queued": queued, "recent": recent}

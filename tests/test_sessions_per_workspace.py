@@ -163,3 +163,55 @@ class SessionsEndpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListSessionsViewRecentTests(unittest.TestCase):
+    """db.list_sessions_view 的 recent —— 应按 workspace 各保留最近 N 条,
+    不再全局 LIMIT 10。bug:别的 workspace 跑 10+ 次会把安静 workspace 昨天的
+    对话挤出 top-10 → 该 workspace 时间线变空(用户报"昨天对话今天刷新没了")。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "runs.db"
+        self.p = patch.object(config, "RUNS_DB", self.db_path)
+        self.p.start()
+        db.init()
+
+    def tearDown(self):
+        self.p.stop()
+        self.tmp.cleanup()
+
+    def _seed_done(self, *, ws, run_id, started_at):
+        db.insert_queued_run(
+            run_id=run_id, workspace=ws, engine="claude",
+            session_key=f"pwa-{ws}", prompt="p", source="pwa",
+        )
+        with db._conn() as c:
+            c.execute(
+                "UPDATE runs SET started_at=?, status='done' WHERE id=?",
+                (started_at, run_id),
+            )
+
+    def test_recent_keeps_each_workspace_not_global_top10(self):
+        # ws-a:3 条"昨天"(started_at 小)
+        for i in range(3):
+            self._seed_done(ws="ws-a", run_id=f"a{i}", started_at=1000 + i)
+        # ws-b:15 条"今天"(started_at 大)。旧逻辑全局 LIMIT 10 → ws-a 被挤光。
+        for i in range(15):
+            self._seed_done(ws="ws-b", run_id=f"b{i}", started_at=2000 + i)
+
+        recent = db.list_sessions_view()["recent"]
+        ws_a = [r for r in recent if r["workspace"] == "ws-a"]
+        ws_b = [r for r in recent if r["workspace"] == "ws-b"]
+        self.assertEqual(len(ws_a), 3, "ws-a 的 3 条不该被 ws-b 的 15 条挤掉")
+        self.assertEqual(len(ws_b), 15)
+
+    def test_recent_caps_per_workspace(self):
+        # 单个 workspace 跑很多次 → 每个 workspace 仍有上限(不无限返回)。
+        for i in range(40):
+            self._seed_done(ws="busy", run_id=f"x{i}", started_at=1000 + i)
+        recent = db.list_sessions_view()["recent"]
+        busy = [r for r in recent if r["workspace"] == "busy"]
+        self.assertLessEqual(len(busy), 20)        # 每 ws 上限 20
+        self.assertGreaterEqual(len(busy), 20)     # 跑够 40 次 → 恰好留 20
