@@ -2477,6 +2477,13 @@ pre {
   font-size: var(--text-micro);
 }
 .turn-meta-mark { color: var(--accent-green); }
+/* error result(subtype != success):mark 红 ✗ + 附 subtype 说明(error_max_turns 等)。 */
+.turn-meta-foot.is-error .turn-meta-mark { color: var(--accent-red); }
+.turn-meta-err {
+  margin-left: var(--space-2);
+  color: var(--accent-red);
+  font-variant-numeric: tabular-nums;
+}
 .turn-meta-elapsed,
 .turn-meta-tokens { font-variant-numeric: tabular-nums; }
 /* running/queued turn 还没 result event → 助手区给个"处理中…"占位,

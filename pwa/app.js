@@ -4503,10 +4503,17 @@ function _renderTurnEvent(ev, elapsedS) {
     const elapsedHtml = elapsedS != null && elapsedS !== ''
       ? `<span class="turn-meta-elapsed">${esc(elapsedS)}s</span> · `
       : '';
+    // 行末 mark 按 result subtype 显:成功(或老日志缺 subtype 向后兼容)→ ✓,
+    // 明确 error_* → ✗ + 红 + 附 subtype。原来无条件 ✓,失败的 run 也显成功,
+    // 跟侧栏红点打架(用户反馈"正常对话完了怎么红色")。注:红点本身来自后端
+    // run.status(exit_code),这里只让 footer 诚实反映 claude 自己报的结果。
+    const ok = !ev.subtype || ev.subtype === 'success';
+    const errTag = ok ? '' : `<span class="turn-meta-err">${esc(ev.subtype || 'error')}</span>`;
     return `
-      <div class="turn-meta-foot">
-        <span class="turn-meta-mark">✓</span>
+      <div class="turn-meta-foot${ok ? '' : ' is-error'}">
+        <span class="turn-meta-mark">${ok ? '✓' : '✗'}</span>
         ${elapsedHtml}<span class="turn-meta-tokens">${esc(ev.inTokens)}→${esc(ev.outTokens)} tok</span>
+        ${errTag}
       </div>`;
   }
   return '';
