@@ -2120,11 +2120,6 @@ function bindWorkspaceColHandlers(root) {
     btn.addEventListener('click', _onMergeToMainClick);
     _addTapFallback(btn, _onMergeToMainClick);
   }
-  // "+ 新 session(同 repo)" —— 在该 session tile 的 ⋯ 菜单里,给同一个
-  // workspace 开一条新工作线(<ws>--<name>)。
-  for (const btn of root.querySelectorAll('.ws-new-session')) {
-    btn.addEventListener('click', _onNewSessionClick);
-  }
   // Delete workspace button — extra destructive. Removes the entire
   // ~/workspaces/<name>/ directory + per-ws settings + session.
   for (const btn of root.querySelectorAll('.ws-delete-workspace')) {
@@ -2712,8 +2707,8 @@ function _onFormPickerClick(e) {
 document.addEventListener('click', _onFormPickerClick);
 
 // 多 session chip 条点击(delegation:mobile + desktop detail 共用)。
-// 切 active session(空 data-session = "全部")→ 重画。新建 session 走
-// overview tile 的 ⋯ 菜单"+新 session"(_onNewSessionClick),不在 chip 条里。
+// 切 active session(空 data-session = "全部")→ 重画。新建 session 走侧栏的
+// "+ 新对话"(_onPcNewChatClick / _startNewChatMobile),不在 chip 条里。
 document.addEventListener('click', (e) => {
   const chip = e.target.closest('.ws-session-chip');
   if (!chip) return;
@@ -3191,19 +3186,6 @@ function groupBySession(workspaces, sessions) {
   return g;
 }
 
-// "+ 新 session" 处理:提示名 → 声明 <ws>--<name> 空 session → 重画(出新 tile)。
-function _onNewSessionClick(e) {
-  const btn = e.currentTarget;
-  const ws = btn.dataset.ws;
-  if (!ws) return;
-  _closeAncestorMenu(btn);
-  const raw = prompt(`在 "${ws}" 新建一条 session(独立 worktree + 分支)。名字(字母/数字/-):`, '');
-  if (raw == null) return;
-  const clean = raw.trim().replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '');
-  if (!clean) { showError('session 名不能为空 / 只含非法字符'); return; }
-  _declaredEmptySessions.add(sessionTileId(ws, `${ws}--${clean}`));
-  render();
-}
 
 function groupByWorkspace(workspaces, sessions) {
   // Start from filesystem-backed workspace names (what /workspaces returns).
@@ -3339,21 +3321,20 @@ function workspaceColHtml(name, data, opts = {}) {
               ${ICONS.refresh} <span>Sync /commands</span>
             </button>
           </div>
+          <!-- + 新 session 已移除:新建对话走侧栏的"+ 新对话"(2026-06-04)。 -->
+          <div class="ws-menu-section">
+            <span class="ws-menu-section-label">Session</span>
+            <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}"${skAttr}>
+              ${ICONS.rewind} <span>New chat</span>
+            </button>
+          </div>
+          <!-- Show all events 挪到底部(用户要求):它是显示偏好,不是常用动作。 -->
           <div class="ws-menu-section">
             <span class="ws-menu-section-label">Display</span>
             <button class="event-filter-toggle ws-menu-item" type="button"
                     data-show-all="${eventFilterShowAll() ? '1' : '0'}">
               ${ICONS.refresh} <span>Show all events <strong>${eventFilterShowAll() ? 'ON' : 'OFF'}</strong></span>
             </button>
-          </div>
-          <div class="ws-menu-section">
-            <span class="ws-menu-section-label">Session</span>
-            <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}"${skAttr}>
-              ${ICONS.rewind} <span>New chat</span>
-            </button>
-            ${sessionKey ? `<button class="ws-new-session ws-menu-item" type="button" data-ws="${esc(name)}">
-              ${ICONS.more} <span>+ 新 session(同 repo)</span>
-            </button>` : ''}
           </div>
           <button class="ws-delete-workspace ws-menu-item ws-menu-item-danger" type="button" data-ws="${esc(name)}">
             ${ICONS.trash} <span>Delete workspace</span>
@@ -3842,16 +3823,17 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning, activ
               </button>
             </div>
             <div class="ws-menu-section">
+              <span class="ws-menu-section-label">Session</span>
+              <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
+                ${ICONS.rewind} <span>New chat</span>
+              </button>
+            </div>
+            <!-- Show all events 挪到底部(用户要求):显示偏好,不是常用动作。 -->
+            <div class="ws-menu-section">
               <span class="ws-menu-section-label">Display</span>
               <button class="event-filter-toggle ws-menu-item" type="button"
                       data-show-all="${eventFilterShowAll() ? '1' : '0'}">
                 ${ICONS.refresh} <span>Show all events <strong>${eventFilterShowAll() ? 'ON' : 'OFF'}</strong></span>
-              </button>
-            </div>
-            <div class="ws-menu-section">
-              <span class="ws-menu-section-label">Session</span>
-              <button class="ws-reset-session ws-menu-item" type="button" data-ws="${esc(name)}" ${disabledAttr}>
-                ${ICONS.rewind} <span>New chat</span>
               </button>
             </div>
             <button class="ws-delete-workspace ws-menu-item ws-menu-item-danger" type="button" data-ws="${esc(name)}">
