@@ -4879,23 +4879,10 @@ function renderTasksView() {
   const loops = lastData.loops || [];
   const view = $('view');
 
-  // desktop(spec §161):loop 列表已搬去 sidebar(renderTaskSidebarNav),#view
-  // 只渲空态提示。dialog 不再渲进 #view —— 由 _ensureTaskNewDialog 挂在 body 上
-  // (全局唯一,与 #view 生灭解耦)。幂等:已渲过空态就不重画(避免轮询 render
-  // 重写 #view),但每次都调 _ensureTaskNewDialog(它幂等)保证 dialog 在。mobile
-  // 走下面老逻辑(list + diff-patch + foldout turns),一字不动。跟 Roundtable 同款。
-  if (!window.matchMedia('(max-width: 768px)').matches) {
-    if (view.querySelector('.task-desktop-empty')) { _ensureTaskNewDialog(); return; }
-    view.innerHTML = `
-      <p class="muted task-desktop-empty">
-        左侧选一个 task 查看,或点侧栏 <strong>+ New</strong> 建一个。<br>
-        cron loop = 一条定时触发的 prompt。State 落在 <code>~/.cc-state/jobs/&lt;name&gt;.json</code>,
-        cron 行写 <code>/etc/cron.d/cc-loops</code>;Engine 跟 workspace 设置走。
-      </p>`;
-    _ensureTaskNewDialog();
-    return;
-  }
-
+  // 裸 #tasks(没选具体 task):#view 渲 task 卡片列表(desktop + mobile 同款,
+  // 2026-06-04 用户要求"切到 task 把现有 task 卡片式列到右侧")。点卡片或点左侧
+  // sidebar 项都进 #tasks/<name> detail(detail 自带 ← 返回)。desktop 同时有
+  // sidebar 列表 + 右侧卡片,两边都可点。dialog 由 _ensureTaskNewDialog 全局宿主。
   const existingList = view.querySelector('.task-list');
 
   // Patch path: .task-list already rendered → diff loops by name.
