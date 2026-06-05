@@ -3810,6 +3810,16 @@ pre {
   margin: 0 0 var(--space-2);
   font-size: var(--text-sm);
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 角色"小人"头像:继承 .rt-cell-<slug> h4 的角色配色(currentColor)。 */
+.rt-cell-avatar {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 .rt-cell-empty { opacity: 0.6; }
 .rt-content {

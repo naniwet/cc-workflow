@@ -6215,18 +6215,26 @@ function _rtRoundBlock(title, cellsHtml) {
   `;
 }
 
+// 角色头像:一个"小人"轮廓(头 + 肩),stroke:currentColor → 继承
+// .rt-cell-<slug> h4 的角色配色(用户要求 2026-06-04:每个角色真的是一个小人)。
+const _RT_PERSON_SVG =
+  '<svg class="rt-cell-avatar" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>';
+
 function _rtCell(role, content) {
+  const head = `<h4>${_RT_PERSON_SVG}<span>${esc(role)}</span></h4>`;
   if (!content) {
     return `
       <div class="rt-cell rt-cell-${_roleSlug(role)} rt-cell-empty">
-        <h4>${esc(role)}</h4>
+        ${head}
         <p class="muted">…等待中</p>
       </div>
     `;
   }
   return `
     <div class="rt-cell rt-cell-${_roleSlug(role)}">
-      <h4>${esc(role)}</h4>
+      ${head}
       <div class="rt-content">${_renderInlineMd(content)}</div>
     </div>
   `;
