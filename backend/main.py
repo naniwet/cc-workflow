@@ -58,11 +58,11 @@ from typing import Optional
 import uuid
 
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import agents_store, approvals, auth, config, cron_state, db, git_view, im_feishu, llm, runner, skills, ws_settings
+from . import agents_store, approvals, auth, config, cron_state, db, file_download, git_view, im_feishu, llm, runner, skills, ws_settings
 from .roundtable import decider as roundtable_decider
 from .roundtable import io as roundtable_io
 from .roundtable import model as roundtable_model
@@ -718,6 +718,36 @@ def get_workspace_git_diff(
     branch = git_view.parse_branch(sb_first)
     return git_view.build_git_file_diff(
         git_view.run_git, cwd, base, branch, file, bool(uncommitted),
+    )
+
+
+# 下载 workspace 里的文件(AI 写的文档等,2026-06-04)。前端入口:对话里
+# Write/Edit 工具事件旁的 ⬇ + Git 区改动文件旁的 ⬇,都拼这个 URL。
+_DOWNLOAD_MAX_BYTES = 50 * 1024 * 1024  # 50MB 兜底,避免误下超大文件
+
+
+@app.get("/workspaces/{ws}/file", dependencies=PROTECT)
+def download_workspace_file(ws: str, path: str):
+    """流式下载 ws 内的一个文件。path 绝对 / 相对都行,解析后必须落在
+    ~/workspaces/<ws>/ 或它的 worktree 内(file_download 校验 traversal /
+    symlink 越权)。当附件返回(Content-Disposition: attachment)。"""
+    from . import ui_cards
+    if ws not in set(ui_cards._discover_workspaces()):
+        raise HTTPException(404, {"error": "workspace not found", "ws": ws})
+    ws_root = config.WORKSPACES_DIR / ws
+    worktrees = file_download.list_worktree_dirs(config.WORKSPACES_DIR, ws)
+    target = file_download.resolve_download_target(ws_root, worktrees, path)
+    if target is None:
+        raise HTTPException(400, {"error": "invalid or missing file path", "path": path})
+    try:
+        if target.stat().st_size > _DOWNLOAD_MAX_BYTES:
+            raise HTTPException(413, {"error": "file too large", "path": path})
+    except OSError:
+        raise HTTPException(404, {"error": "file not found", "path": path})
+    return FileResponse(
+        str(target),
+        media_type="application/octet-stream",
+        filename=target.name,
     )
 
 

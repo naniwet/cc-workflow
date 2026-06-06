@@ -4020,7 +4020,7 @@ async function _loadTurnEvents(runId) {
     // 把 turn 级用时(挂在容器 data-elapsed)传给每个 event —— result event
     // 渲染行末 meta 要用它出"用时"。
     const elapsedS = container.dataset.elapsed;
-    const html = newEvents.map((ev) => _renderTurnEvent(ev, elapsedS)).join('');
+    const html = newEvents.map((ev) => _renderTurnEvent(ev, elapsedS, _ws)).join('');
 
     // 只有 html 真有内容才 remove loading + 插入。html 可能为空 ——
     // 比如 system init 行被 parser 过滤,或 thinking/tool 被 "Show all
@@ -4262,12 +4262,16 @@ function _gitFilesHtml(name, session, data) {
     }
     return `
       <div class="git-file-row${diffOpen ? ' is-open' : ''}">
-        <button class="git-file" type="button"
-                data-ws="${esc(name)}" data-git-session="${esc(session)}" data-file="${esc(d.file)}">
-          <span class="git-file-status git-status-${esc(status)}">${esc(status)}</span>
-          <span class="git-file-name">${esc(d.file)}</span>
-          <span class="git-file-stat"><span class="git-add">${esc(adds)}</span>${esc(dels)}</span>
-        </button>
+        <div class="git-file-head">
+          <button class="git-file" type="button"
+                  data-ws="${esc(name)}" data-git-session="${esc(session)}" data-file="${esc(d.file)}">
+            <span class="git-file-status git-status-${esc(status)}">${esc(status)}</span>
+            <span class="git-file-name">${esc(d.file)}</span>
+            <span class="git-file-stat"><span class="git-add">${esc(adds)}</span>${esc(dels)}</span>
+          </button>
+          ${d.status === 'D' ? '' : `<a class="git-file-dl" href="${esc(_fileDownloadHref(name, d.file))}"`
+            + ` download title="下载 ${esc(d.file)}">${ICONS.download}</a>`}
+        </div>
         ${inline}
       </div>
     `;
@@ -4437,9 +4441,28 @@ function _bindGitSectionHandlers(sectionEl) {
   }
 }
 
+// 拼 workspace 文件下载 URL(后端 GET /workspaces/<ws>/file?path=)。缺 ws/path → ''。
+// 对话 Write/Edit ⬇ + Git 区改动文件 ⬇ 共用。
+function _fileDownloadHref(ws, path) {
+  if (!ws || !path) return '';
+  return `/workspaces/${encodeURIComponent(ws)}/file?path=${encodeURIComponent(path)}`;
+}
+
+// Write/Edit/MultiEdit 工具事件 → ⬇ 下载链(file_path 是工具 input 里的精确路径)。
+// ws 传进来可能是 colKey(desktop pane 的 .ws-timeline[data-ws] = tileId,含分隔符)
+// 或纯 ws 名(mobile stream) —— 统一 parseSessionTileId 取纯 ws 名喂给下载 URL。
+function _toolFileDownloadHtml(ws, name, input) {
+  const filePath = (input && input.file_path) || '';
+  if (!ws || !filePath) return '';
+  if (name !== 'Write' && name !== 'Edit' && name !== 'MultiEdit') return '';
+  const wsName = parseSessionTileId(ws).ws;
+  return `<a class="event-tool-dl" href="${esc(_fileDownloadHref(wsName, filePath))}"`
+    + ` download title="下载 ${esc(filePath)}">${ICONS.download}</a>`;
+}
+
 // elapsedS:turn 级用时(秒),由 _loadTurnEvents 从 .turn-events 容器的
 //   data-elapsed 取出传入 —— result event 自己只带 tokens,没有 elapsed。
-function _renderTurnEvent(ev, elapsedS) {
+function _renderTurnEvent(ev, elapsedS, ws) {
   // 全局过滤(spec §14.2 默认显示内部执行过程):tool_use / tool_result 默认
   // 紧凑显示 —— agent 读了啥、跑了啥、改了啥都要看得见。只有 thinking 默认
   // 隐藏(英文 prose,长且噪),用户在 ⚙ 打开 "Show all events" 才显示。
@@ -4469,12 +4492,16 @@ function _renderTurnEvent(ev, elapsedS) {
     // Write 额外在下面渲染 diff(全删旧 + 全增新两块,精确 LCS 留后)。
     const { verb, target, glyph } = formatToolUse(ev.name, ev.input || {});
     const diffHtml = _toolUseDiffHtml(ev.name, ev.input || {});
+    // Write/Edit/MultiEdit 写到了文件 → 旁边给个 ⬇ 下载链(file_path 就是工具
+    // 调用里的精确路径,不猜)。href 指向后端 GET /workspaces/<ws>/file。
+    const dlHtml = _toolFileDownloadHtml(ws, ev.name, ev.input || {});
     return `
       <div class="event-tool event-tool-${esc(verb)}">
         <div class="event-tool-call">
           <span class="tool-glyph">${esc(glyph)}</span>
           <span class="tool-verb">${esc(verb)}</span>
           <code class="tool-target">${esc(target)}</code>
+          ${dlHtml}
         </div>
         ${diffHtml}
       </div>`;
