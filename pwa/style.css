@@ -2273,15 +2273,6 @@ pre {
   text-align: left;
   border-radius: 0;
 }
-.turn-caret {
-  flex: 0 0 auto;
-  width: 14px;
-  margin-top: 3px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 1;
-  text-align: center;
-}
 /* head meta 区的极简状态指示:只有 icon,无文字、无背景(其它地方仍用,
    如 mobile overview / loop 列表)。 */
 .status-icon {
