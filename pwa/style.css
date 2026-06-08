@@ -143,12 +143,6 @@ a:hover { color: var(--accent-blue-hover); }
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
 }
-.brand {
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text-primary);
-  font-size: var(--text-lg);
-}
 .tabs { display: flex; gap: var(--space-1); flex: 1; }
 .tab {
   position: relative;
@@ -270,19 +264,6 @@ main {
   font-weight: 600;
   color: var(--text-primary);
 }
-.ws-provider {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  color: var(--text-tertiary);
-  flex-wrap: wrap;        /* graceful fallback on very narrow screens */
-  row-gap: var(--space-1);
-}
-/* "as" label was removed in favor of a colored engine chip — the
-   workspace's identity is now visually anchored by the engine pill,
-   not a small English word. Class kept around in case of future use. */
-.ws-provider-label { display: none; }
 
 /* Engine chip — small colored pill that anchors the workspace's
    identity. claude/codex are immutable post-create, so the chip
@@ -332,11 +313,6 @@ main {
 }
 .ws-trust-toggle svg { width: 12px; height: 12px; display: block; }
 .ws-trust-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); border-color: var(--border-subtle); }
-.ws-trust-toggle.is-trusted {
-  color: var(--accent-amber);
-  border-color: rgba(245, 158, 11, 0.30);
-  background: rgba(245, 158, 11, 0.10);
-}
 .ws-trust-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-blue-faint); }
 /* .ws-trust-toggle.is-locked removed 2026-05-14 along with codex support
    (codex was the only thing that locked trust). */
@@ -759,48 +735,6 @@ main {
   border-color: #d63838;
 }
 
-/* ============================================================================
- *  Run-detail "Tool approvals" audit panel — collapsible read-only list
- *  of every PreToolUse hook firing for the run, including the trust=on
- *  auto_approved entries that the user never had to click. The point of
- *  this panel is *visibility*: under trust=on the .approval-pending
- *  block (above) never appears, but the user still wants to know what
- *  claude actually ran.
- * ============================================================================ */
-.a-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  line-height: var(--lh-normal);
-  flex-wrap: wrap;
-}
-.a-row .a-icon { flex-shrink: 0; font-weight: 700; width: 1.2em; text-align: center; }
-.a-row .a-label {
-  font-size: var(--text-micro);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  flex-shrink: 0;
-  opacity: 0.85;
-}
-.a-row .a-tool {
-  font-family: var(--font-mono);
-  font-size: var(--text-micro);
-  background: var(--bg-canvas);
-  padding: 2px var(--space-1);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  word-break: break-all;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.a-row .a-time { font-size: var(--text-micro); flex-shrink: 0; }
-/* Color the icon + label per status — keeps the row scannable. */
-.a-row.a-ok    .a-icon, .a-row.a-ok    .a-label { color: var(--accent-green); }
-.a-row.a-auto  .a-icon, .a-row.a-auto  .a-label { color: var(--accent-green); opacity: 0.75; }
-.a-row.a-deny  .a-icon, .a-row.a-deny  .a-label { color: var(--accent-red); }
-.a-row.a-warn  .a-icon, .a-row.a-warn  .a-label { color: var(--accent-amber); }
-
 /* Transcript panel — lazy-loaded full conversation history for one run.
  * Shares <details>/<summary> visual language with .run-approvals so they
  * read as a "drill-deeper" pair. Body is <pre> (whitespace preserved)
@@ -1068,19 +1002,9 @@ label {
   flex-direction: column;
   gap: var(--space-2);
 }
-.form-row { display: flex; gap: var(--space-3); }
-.form-row > label { flex: 1; }
 .parse-row { display: flex; gap: var(--space-2); align-items: flex-end; }
 .parse-row > input { flex: 1; }
 .parse-row > button { white-space: nowrap; }
-
-.add-loop-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-}
 .inline-check {
   display: flex;
   align-items: center;
@@ -1320,12 +1244,6 @@ pre {
   background: transparent !important;
 }
 .ws-menu-readonly:hover { background: transparent !important; }
-.loop-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
 .loop-name {
   color: var(--text-primary) !important;  /* override .row code's accent-blue */
   font-size: var(--text-md);
@@ -1488,13 +1406,6 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-/* Pending-approval indicator on the mobile overview card. Red matches the
-   topbar global pending badge: this is the one thing asking the user to act. */
-.ws-card-pending-row {
-  display: flex;
-  align-items: center;
-}
 .ws-card-pending {
   display: inline-flex;
   align-items: center;
@@ -1616,16 +1527,6 @@ pre {
     gap: var(--space-2);
     padding: var(--space-3) var(--space-3) var(--space-2);
   }
-  .sidebar-brand {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    color: var(--accent-blue);
-    flex: 0 0 auto;
-  }
-  .sidebar-brand svg { width: 22px; height: 22px; }
   .sidebar-status {
     flex: 1 1 auto;
     display: inline-flex;
@@ -1634,54 +1535,6 @@ pre {
   }
   /* 待审批角标:复用 .pending-badge 视觉(红描边 + 数字),侧栏里收窄。 */
   .sidebar-pending { padding: 2px 6px; cursor: pointer; }
-  .sidebar-collapse-btn {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--space-5);
-    height: var(--space-5);
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: var(--text-tertiary);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--text-lg);
-    line-height: 1;
-    border-radius: var(--radius-sm);
-  }
-  .sidebar-collapse-btn:hover {
-    color: var(--text-primary);
-    background: var(--bg-elevated);
-  }
-
-  /* ── app 导航区(4 tab,竖列)──────────────────────────────── */
-  .sidebar-apps {
-    flex: 0 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 0 var(--space-2) var(--space-2);
-  }
-  .sidebar-app {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2);
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
-    text-decoration: none;
-    font-size: var(--text-base);
-    transition: color var(--t-base), background var(--t-base);
-  }
-  .sidebar-app svg { flex: 0 0 auto; width: 18px; height: 18px; display: block; }
-  .sidebar-app span {
-    flex: 1 1 auto; min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .sidebar-app:hover { color: var(--text-primary); background: var(--bg-elevated); }
-  .sidebar-app.active { color: var(--accent-blue); background: var(--accent-blue-faint); }
 
   /* ── 上下文区(当前 tab 的列表;Workspaces=repo 树)──────────
      apps 与 ctx 之间一条极淡 divider(border-top),不是两栏中缝。
@@ -1711,14 +1564,7 @@ pre {
     gap: var(--space-1);
     padding: var(--space-2) 0;
   }
-  .sidebar.is-rail .sidebar-status { display: none; }   /* rail 太窄,状态点省略 */
-  .sidebar.is-rail .sidebar-apps { padding: 0 var(--space-1) var(--space-2); }
-  .sidebar.is-rail .sidebar-app {
-    flex-direction: column;
-    justify-content: center;
-    gap: 0;
-  }
-  .sidebar.is-rail .sidebar-app span { display: none; }  /* rail 只留图标 */
+  .sidebar.is-rail .sidebar-status { display: none; }  /* rail 只留图标 */
   .sidebar.is-rail .sidebar-ctx { padding: var(--space-2) 0; }
   /* 收起态:Settings 的 section 链整块隐掉,rail 只剩 app 图标(section
      太少,没有 rail glyph 设计,直接收起 → 展开再选) */
@@ -2811,7 +2657,6 @@ pre {
   /* Topbar simplifies — title only, tabs go to bottom-nav */
   .topbar { gap: var(--space-3); padding: var(--space-3); }
   .topbar .tabs { display: none; }
-  .brand { font-size: var(--text-md); }
   .status { font-size: 10px; }
 
   /* Page padding leaves room for bottom-nav */
@@ -2868,103 +2713,6 @@ pre {
 
   /* Detail page <pre>: stay readable on narrow viewport */
   pre { font-size: var(--text-sm); padding: var(--space-3); }
-
-  /* ──────────────────────────────────────────────────────────
-   *  Mobile single-workspace view — header arrows + ONE card.
-   *
-   *  Was a horizontal carousel (.ws-grid) — replaced 2026-05-15 with
-   *  an explicit header nav bar to avoid three carousel quirks: dots
-   *  flashing on re-render, first-card scrollLeft=0 ambiguity, and
-   *  scroll-snap mis-align. See renderMobileWorkspaceDetail in app.js.
-   *
-   *  Marker class: .ws-mobile-nav (only appears in this view), used
-   *  via :has() to scope topbar-hide + back-link-<p>-hide etc.
-   * ────────────────────────────────────────────────────────── */
-  body:has(.ws-mobile-nav) .topbar { display: none; }
-  body:has(.ws-mobile-nav) main {
-    padding-top: var(--space-1);
-    padding-left: var(--space-2);
-    padding-right: var(--space-2);
-  }
-  /* The `<p>` wrapper around the (hidden) back-link sits at the top of
-   * #view but the link is `display: none` on mobile. The <p> itself
-   * still claims ~32px from default browser <p> margin. Yank it. */
-  body:has(.ws-mobile-nav) main > p:has(.back-link) {
-    display: none;
-  }
-
-  /* Top nav bar: [← prev] [current name] [next →]
-   * Sticky-feel by sitting flush at the top of main now that the
-   * topbar is hidden. Arrows are big tap targets; name is the focus. */
-  .ws-mobile-nav {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-1);
-    margin-bottom: var(--space-2);
-    border-bottom: 1px solid var(--border-subtle);
-  }
-  .ws-mobile-nav-title {
-    flex: 1;
-    text-align: center;
-    font-size: var(--text-lg);
-    font-weight: 600;
-    color: var(--text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .ws-nav-arrow {
-    flex: 0 0 auto;
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-full);
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    border: 1px solid var(--border-subtle);
-    font-size: 22px;
-    line-height: 1;
-    padding: 0;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    touch-action: manipulation;
-  }
-  .ws-nav-arrow:hover,
-  .ws-nav-arrow:active {
-    background: var(--bg-elevated);
-    border-color: var(--border-strong);
-  }
-  .ws-nav-arrow:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-
-  /* The single card below the nav bar. Fills available height. */
-  .ws-mobile-body {
-    display: flex;
-    flex-direction: column;
-    height: calc(100dvh - 140px);   /* nav bar 60 + bottom-nav 64 + safety 16 */
-  }
-  .ws-mobile-body > .ws-col {
-    flex: 1;
-    height: 100%;
-    min-height: 0;
-    padding: var(--space-2);
-  }
-  .ws-mobile-body > .ws-col .ws-timeline {
-    flex: 1 1 0;
-    max-height: none;
-    min-height: 0;
-  }
-  /* Shorter reply textarea — 60px wall on a focused single-card view
-   * was wasteful; 44px is the platform tap-target minimum, textarea
-   * still grows as user types. */
-  .ws-mobile-body > .ws-col .trigger-form textarea {
-    min-height: 44px;
-  }
 
   /* Run-detail page on mobile: keep the back-link visible. The global
    * mobile rule above (`.back-link { display: none }`) made sense when
@@ -3088,7 +2836,6 @@ pre {
     font-weight: 650;
     margin-bottom: var(--space-2);
   }
-
 
   .workspace-new-events {
     position: fixed;
@@ -3592,11 +3339,6 @@ pre {
   color: var(--text-secondary);
   margin: 0;    /* override the form-level <label> indent */
 }
-.rt-rounds-select {
-  flex: 1;
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2);
-}
 /* The .rt-rounds-row now embeds a .form-picker; make it flex naturally
  * so the picker fills remaining space next to the label. */
 .rt-rounds-row > .form-picker { flex: 1; }
@@ -3962,20 +3704,6 @@ pre {
   gap: var(--space-2);
 }
 
-/* Provider <select> row inside the menu — now only used in the
-   new-workspace form; the per-ws menu uses .ws-menu-radio rows below. */
-.ws-menu-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-}
-.ws-menu-row > .muted { flex: 0 0 auto; font-size: var(--text-sm); }
-.ws-menu-row .provider-inline {
-  flex: 1;
-  min-width: 0;
-}
-
 /* Provider radio-list (replaces native <select> inside the ⋯ menu —
    native popups break the dark theme). Each provider is a clickable
    row with a colored dot indicating selection. */
@@ -4063,7 +3791,6 @@ pre {
 .ws-menu-item svg { width: 14px; height: 14px; flex-shrink: 0; }
 .ws-menu-item > span { flex: 1; }
 .ws-menu-item:hover { background: var(--bg-elevated); }
-.ws-menu-item.is-trusted { color: var(--accent-amber); }
 .ws-menu-item-danger:hover {
   background: rgba(239, 68, 68, 0.18);
   border-color: var(--accent-red);
