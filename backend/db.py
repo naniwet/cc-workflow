@@ -202,31 +202,34 @@ def list_sessions_for_workspace(workspace: str) -> list[dict]:
     worktree 探测(有没有 .wt/<ws>-<key>/ 目录)不在这里 —— 那是 filesystem
     层,留给 main.py endpoint 拼,db 只管 runs 表聚合。
     """
+    # 单条 window function 查询(跟 list_sessions_view 同 pattern):内层给每个
+    # session_key 的 run 按 started_at 降序编号 + 算 COUNT,外层只取 rn=1(最新)
+    # 那行。过去 GROUP BY 取不到"最新行的 status",靠 per-session 再查一次 →
+    # N+1;rn=1 行的 started_at 即 MAX(started_at),last_started_at 语义不变。
     with _conn() as c:
         rows = c.execute(
-            "SELECT session_key, "
-            "COUNT(*) AS run_count, "
-            "MAX(started_at) AS last_started_at "
-            "FROM runs WHERE workspace = ? AND session_key IS NOT NULL "
-            "GROUP BY session_key "
+            "SELECT session_key, run_count, last_started_at, last_status FROM ("
+            "  SELECT session_key, "
+            "         COUNT(*) OVER (PARTITION BY session_key) AS run_count, "
+            "         started_at AS last_started_at, "
+            "         status AS last_status, "
+            "         ROW_NUMBER() OVER ("
+            "           PARTITION BY session_key ORDER BY started_at DESC, id DESC"
+            "         ) AS rn "
+            "  FROM runs WHERE workspace = ? AND session_key IS NOT NULL"
+            ") WHERE rn = 1 "
             "ORDER BY last_started_at DESC",
             (workspace,),
         ).fetchall()
-        out = []
-        for r in rows:
-            # 最近一条 run 的 status —— 单独查(GROUP BY 里取不到"最新行的列")
-            last = c.execute(
-                "SELECT status FROM runs WHERE workspace = ? AND session_key = ? "
-                "ORDER BY started_at DESC LIMIT 1",
-                (workspace, r["session_key"]),
-            ).fetchone()
-            out.append({
+        return [
+            {
                 "session_key": r["session_key"],
                 "run_count": r["run_count"],
                 "last_started_at": r["last_started_at"],
-                "last_status": last["status"] if last else None,
-            })
-        return out
+                "last_status": r["last_status"],
+            }
+            for r in rows
+        ]
 
 
 # Columns returned by /sessions endpoint.
