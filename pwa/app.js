@@ -2108,6 +2108,10 @@ function bindWorkspaceColHandlers(root) {
   for (const btn of root.querySelectorAll('.ws-sync-skills')) {
     btn.addEventListener('click', _onSyncSkillsClick);
   }
+  // 手动下载文件按钮 — tool 事件 / Git 区都没列出目标文件时的兜底入口。
+  for (const btn of root.querySelectorAll('.ws-download-file')) {
+    btn.addEventListener('click', _onDownloadFileClick);
+  }
   // Reset session button — destructive, confirm first. Clears
   // claude session_id so the next run starts a fresh conversation.
   for (const btn of root.querySelectorAll('.ws-reset-session')) {
@@ -3320,6 +3324,9 @@ function workspaceColHtml(name, data, opts = {}) {
             <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
               ${ICONS.refresh} <span>Sync /commands</span>
             </button>
+            <button class="ws-download-file ws-menu-item" type="button" data-ws="${esc(name)}">
+              ${ICONS.download} <span>下载文件…</span>
+            </button>
           </div>
           <!-- + 新 session 已移除:新建对话走侧栏的"+ 新对话"(2026-06-04)。 -->
           <div class="ws-menu-section">
@@ -3820,6 +3827,9 @@ function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning, activ
               <span class="ws-menu-section-label">Workspace</span>
               <button class="ws-sync-skills ws-menu-item" type="button" data-ws="${esc(name)}">
                 ${ICONS.refresh} <span>Sync /commands</span>
+              </button>
+              <button class="ws-download-file ws-menu-item" type="button" data-ws="${esc(name)}">
+                ${ICONS.download} <span>下载文件…</span>
               </button>
             </div>
             <div class="ws-menu-section">
@@ -4458,6 +4468,41 @@ function _toolFileDownloadHtml(ws, name, input) {
   const wsName = parseSessionTileId(ws).ws;
   return `<a class="event-tool-dl" href="${esc(_fileDownloadHref(wsName, filePath))}"`
     + ` download title="下载 ${esc(filePath)}">${ICONS.download}</a>`;
+}
+
+// 手动下载兜底:tool 事件 / Git 区都看不到目标文件时(对话太久被 compact、
+// 文件没经过 Write/Edit 落盘等),让用户直接填路径下载。走已有的安全端点
+// /workspaces/{ws}/file(realpath + relative_to 兜越权)。先 fetch 探状态 →
+// 404 / 越权能弹明确 toast,而不是默默下一个装着错误 JSON 的文件。
+async function _onDownloadFileClick(e) {
+  const ws = e.currentTarget?.dataset?.ws;
+  if (!ws) return;
+  const raw = window.prompt('文件路径(相对 workspace 根,或绝对路径):');
+  if (!raw || !raw.trim()) return;
+  const path = raw.trim();
+  try {
+    const r = await fetch(_fileDownloadHref(ws, path));
+    if (!r.ok) {
+      let msg = `下载失败 (${r.status})`;
+      try {
+        const j = await r.json();
+        msg = j?.detail?.msg || (typeof j?.detail === 'string' ? j.detail : msg);
+      } catch { /* 非 JSON 错误体,保留状态码 */ }
+      showError(msg);
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = path.split('/').pop() || 'download';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showError(`下载失败:${err.message}`);
+  }
 }
 
 // elapsedS:turn 级用时(秒),由 _loadTurnEvents 从 .turn-events 容器的
