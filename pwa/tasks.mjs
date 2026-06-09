@@ -6,7 +6,8 @@
 import { $, esc, api, showToast, showError, clearError, lastData, requestRender as render, requestRefresh as refreshAll } from './core.mjs';
 import { ICONS } from './icons.mjs';
 import { nextRunLabel, navModelFromLoops } from './ui_contract.mjs';
-import { _bindSidebarNavHandlers, _bindTurnInteractions, _navStatusDot, _onFormPickerClick, _renderFormPicker, _workspaceTurnHtml, bindWorkspaceColHandlers, humanizeCron, clearDraft, clearDetails } from './app.js';
+import { humanizeCron } from './app.js';
+import { _bindSidebarNavHandlers, _bindTurnInteractions, _navStatusDot, _onFormPickerClick, _renderFormPicker, _workspaceTurnHtml, bindWorkspaceColHandlers, clearDraft, clearDetails } from './workspaces.mjs';
 
 // ---------- Tasks view ----------
 // Per-loop HTML cache so the patch path in renderTasksView can detect

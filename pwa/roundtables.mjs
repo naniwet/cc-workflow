@@ -5,7 +5,8 @@
 // 只读或函数,app↔view 运行时循环,函数体内调用,ESM 安全)。
 import { $, esc, api, showToast, showError, clearError, lastData, requestRender as render, requestRefresh as refreshAll } from './core.mjs';
 import { roundtablePersonaAvatarsHtml, navModelFromRoundtables } from './ui_contract.mjs';
-import { _bindSidebarNavHandlers, _isMobileViewport, _lastPaintedStatus, _mobileCardCache, _navStatusDot, _onFormPickerClick, _renderFormPicker, parseRoute, statusTag } from './app.js';
+import { parseRoute, statusTag } from './app.js';
+import { _bindSidebarNavHandlers, _isMobileViewport, _lastPaintedStatus, _mobileCardCache, _navStatusDot, _onFormPickerClick, _renderFormPicker } from './workspaces.mjs';
 
 // ============================================================================
 // Roundtable (third tab — multi-agent debate)

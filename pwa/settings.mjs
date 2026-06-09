@@ -4,7 +4,7 @@
 // _bindSidebarNavHandlers(共享侧栏 nav 绑定 —— app↔settings 运行时循环,只在
 // 函数体内调用,模块 init 期不碰,ESM 安全)。
 import { $, esc, api, showToast, showError, clearError, lastData, requestRender as render, requestRefresh as refreshAll } from './core.mjs';
-import { _bindSidebarNavHandlers } from './app.js';
+import { _bindSidebarNavHandlers } from './workspaces.mjs';
 
 // ---------- Settings views (#settings / #settings/providers) ----------
 // 配置可视化第一弹:providers.json 可以在 PWA 里加 / 改 / 删 / 测连通性,
