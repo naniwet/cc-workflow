@@ -7,7 +7,8 @@ import { $, esc, api, showToast, showError, clearError, lastData, requestRender 
 import { ICONS } from './icons.mjs';
 import { nextRunLabel, navModelFromLoops } from './ui_contract.mjs';
 import { humanizeCron } from './app.js';
-import { _bindSidebarNavHandlers, _bindTurnInteractions, _workspaceTurnHtml, bindWorkspaceColHandlers, clearDraft, clearDetails } from './workspaces.mjs';
+import { _bindSidebarNavHandlers, bindWorkspaceColHandlers, clearDraft, clearDetails, drafts } from './workspaces.mjs';
+import { _bindTurnInteractions, _workspaceTurnHtml } from './turn_stream.mjs';
 import { _navStatusDot, _onFormPickerClick, _renderFormPicker } from './components.mjs';
 
 // ---------- Tasks view ----------
