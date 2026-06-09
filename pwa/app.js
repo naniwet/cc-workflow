@@ -45,7 +45,7 @@ import {
   _prunePanes,
 } from './ui_contract.mjs';
 import { ICONS } from './icons.mjs';
-import { $, esc, api, showToast, showError, clearError, lastData, setLastData, _redirectingToLogin } from './core.mjs';
+import { $, esc, api, showToast, showError, clearError, lastData, setLastData, _redirectingToLogin, setRender, setRefresh } from './core.mjs';
 
 // $ / esc → ./core.mjs
 
@@ -7012,6 +7012,9 @@ async function _onProviderTestClick(e) {
 }
 
 // ---------- boot ----------
+// 给 core 的 render-bus 登记真函数 —— 拆出去的 view 模块靠它转发调 render/refreshAll
+setRender(render);
+setRefresh(refreshAll);
 bindSidebarCollapse();   // 常驻 #sidebar 收起钮,绑一次(不随 render 重建)
 render();
 refreshAll();

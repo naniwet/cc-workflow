@@ -186,8 +186,22 @@ let lastData = {
 };
 function setLastData(v) { lastData = v; }
 
+// ---------- render bus ----------
+// view 模块在用户操作后要重渲 / 重拉数据,但 render() / refreshAll() 住在 app.js
+//(它们依赖 app.js 的 router + 队列逻辑)。view 模块直接 import app.js 会成循环。
+// 所以 core 给一个登记点:app.js boot 时 setRender(render) / setRefresh(refreshAll),
+// view 模块 `import { requestRender as render, requestRefresh as refreshAll }`,调用
+// 时转发到登记的真函数 —— 打断 view↔app 循环,且 view 内调用点不用改名。
+let _render = () => {};
+let _refresh = () => {};
+function setRender(fn) { _render = fn; }
+function setRefresh(fn) { _refresh = fn; }
+function requestRender() { return _render(); }
+function requestRefresh() { return _refresh(); }
+
 export {
   $, esc, api,
   showToast, dismissToast, showError, clearError,
   lastData, setLastData, _redirectingToLogin,
+  setRender, setRefresh, requestRender, requestRefresh,
 };
