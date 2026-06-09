@@ -92,6 +92,22 @@ def referenced(name: str, body: str) -> bool:
     return re.search(r"(?<![.\w$])" + re.escape(name) + r"\b", body) is not None
 
 
+IMPORT_FROM = re.compile(r"^import\s*\{([\s\S]*?)\}\s*from\s*['\"]([^'\"]+)['\"]", re.M)
+
+
+def import_pairs(src: str):
+    """[(orig_name, modpath)] —— 每个 import 在【来源模块】里的原名 + 来源路径。
+    `X as Y`:校验来源是否导出要用 X(as 左边),不是本地别名 Y。"""
+    out = []
+    for m in IMPORT_FROM.finditer(src):
+        mod = m.group(2)
+        for part in m.group(1).split(","):
+            orig = part.strip().split(" as ")[0].strip()
+            if re.fullmatch(r"[A-Za-z_$][\w$]*", orig or ""):
+                out.append((orig, mod))
+    return out
+
+
 def main():
     files = sorted(list(PWA.glob("*.mjs")) + [PWA / "app.js"])
     files = [f for f in files if f.exists()]
@@ -106,8 +122,11 @@ def main():
     imports = {f: imported_names(src[f]) for f in files}
     decls = {f: set(TOPLEVEL_DECL.findall(src[f])) | param_names(src[f]) for f in files}
     bodies = {f: remove_imports(src[f]) for f in files}
+    # 每个本仓模块的导出名(按文件名查):用于校验 import 的名字真存在
+    file_exports = {f.name: exported_names(src[f]) for f in files if f.suffix == ".mjs"}
 
     errors = []
+    # 检查 1:引用了某导出符号却没 import(漏 import)
     for f in files:
         for name, home in export_home.items():
             if f == home:
@@ -116,6 +135,13 @@ def main():
                 continue
             if referenced(name, bodies[f]):
                 errors.append(f"{f.name}: 引用了 {name}(由 {home.name} 导出)但未 import,也未本地声明")
+    # 检查 2:import 了一个来源模块根本没导出的名字(bogus import —— ESM 加载期
+    # SyntaxError,node --check 抓不到,曾漏到 harness 才暴露)。
+    for f in files:
+        for name, mod in import_pairs(src[f]):
+            base = mod.rsplit("/", 1)[-1]
+            if base in file_exports and name not in file_exports[base]:
+                errors.append(f"{f.name}: import 了 {name} from {base},但 {base} 并未导出它(bogus import)")
 
     if errors:
         print("✗ 静态符号闸:发现漏 import")
