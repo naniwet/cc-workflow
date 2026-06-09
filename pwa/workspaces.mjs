@@ -6,6 +6,7 @@
 // 纯 util/router(_runPreviewLine, parseRoute, renderMarkdown, statusTag, timeAgo —— app↔ws 仅函数循环,无状态,ESM 安全)。
 import { $, esc, api, showToast, showError, clearError, dismissToast, lastData, setLastData, requestRender as render, requestRefresh as refreshAll } from './core.mjs';
 import { ICONS } from './icons.mjs';
+import { _renderFormPicker, _onFormPickerClick, _navStatusDot } from './components.mjs';
 import { DONE_STALE_SEC, STATUS_ACCENTS, _prunePanes, buildSidebarTree, filterTurnsBySession, foldToolResult, formatToolUse, gitBadgeText, hunksToHtml, isDoneStale, isUserSession, loadShellState, navModelFromTree, nextSessionKey, paneStateReducer, parseSessionTileId, parseStreamLinesToEvents, resolveRunSessionKey, sessionChipLabel, sessionTileId, tileKeyFor, workspaceAutoScrollState, workspaceTurnExpansion } from './ui_contract.mjs';
 import { _runPreviewLine, parseRoute, renderMarkdown, statusTag, timeAgo } from './app.js';
 
@@ -667,26 +668,7 @@ function _railGlyph(item) {
   return /^[A-Za-z0-9]/.test(label) ? label.slice(0, 2) : Array.from(label)[0];
 }
 
-// nav 行的状态点(spec §4.2 扩展:不止 running)。
-//   - 'running' → 青色脉冲点(.shell-nav-dot,复用现有脉冲 CSS + aria-label)。
-//   - 其它已知 status(done/failed/queued/paused)→ 静态小圆点,颜色内联
-//     STATUS_ACCENTS[status](与 mobile overview 同一套色板,单一真相源)。
-//   - null(没跑过)/ 未知 status → 不渲点(沉默是金,没活动不占视觉)。
-// status 由 buildSidebarTree → navModelFromTree 派生(纯函数,有单测)。
-function _navStatusDot(status, latestAt) {
-  if (status === 'running') {
-    return '<span class="shell-nav-dot" aria-label="运行中"></span>';
-  }
-  const color = STATUS_ACCENTS[status];
-  if (!color) return '';   // null / 未知 → 不渲
-  // done 且距上次活动超过 DONE_STALE_SEC → 空心圆(完成但久远,不再实心常亮抢眼)。
-  // Date.now() 在这层(render)用没问题;判定逻辑 isDoneStale 是纯函数有单测。
-  // latestAt 缺省(roundtable / tasks 不传)→ isDoneStale 直接 false(它们也不出 done)。
-  if (isDoneStale(status, latestAt, Date.now() / 1000, DONE_STALE_SEC)) {
-    return `<span class="shell-nav-status-dot is-hollow" style="border-color:${color}" aria-label="${esc(status)} (久远)"></span>`;
-  }
-  return `<span class="shell-nav-status-dot" style="background:${color}" aria-label="${esc(status)}"></span>`;
-}
+// _navStatusDot → ./components.mjs
 
 // ── nav full 态(取代旧 _pcSidebarHtml)──────────────────────────────────
 //
@@ -2009,62 +1991,7 @@ function _newWsProviderPickerHtml() {
 //
 // Event handling is via document-level delegation (bound once at module
 // init below), so callers don't need to bind anything after rendering.
-function _renderFormPicker({ name, options, value, detailsId }) {
-  const safeOpts = options.length > 0 ? options : [{ value: '', label: '(none)' }];
-  const current = safeOpts.find((o) => o.value === value) || safeOpts[0];
-  const dIdAttr = detailsId ? ` data-details-id="${esc(detailsId)}"` : '';
-  const rows = safeOpts.map((o) => {
-    const isSel = o.value === current.value;
-    const rowClass = isSel
-      ? 'ws-menu-radio form-picker-radio is-selected'
-      : 'ws-menu-radio form-picker-radio';
-    const dotClass = isSel ? 'ws-radio-dot is-selected' : 'ws-radio-dot';
-    return `
-      <button type="button" class="${rowClass}"
-              data-field="${esc(name)}" data-value="${esc(o.value)}">
-        <span class="${dotClass}"></span>
-        <span class="ws-radio-label">${esc(o.label)}</span>
-      </button>
-    `;
-  }).join('');
-  return `
-    <details class="form-picker"${dIdAttr}>
-      <summary class="form-picker-summary">
-        <span class="form-picker-current">${esc(current.label)}</span>
-      </summary>
-      <div class="form-picker-list">${rows}</div>
-      <input type="hidden" name="${esc(name)}" value="${esc(current.value)}">
-    </details>
-  `;
-}
-
-function _onFormPickerClick(e) {
-  const btn = e.target.closest('.form-picker-radio');
-  if (!btn) return;
-  const picker = btn.closest('details.form-picker');
-  if (!picker) return;
-  const fieldName = btn.dataset.field;
-  const value = btn.dataset.value;
-  // 1. Update hidden input → form.submit / FormData see the new value
-  const hidden = picker.querySelector(`input[type="hidden"][name="${fieldName}"]`);
-  if (hidden) hidden.value = value;
-  // 2. Repaint summary text
-  const newLabel = btn.querySelector('.ws-radio-label')?.textContent || value;
-  const summary = picker.querySelector('.form-picker-current');
-  if (summary) summary.textContent = newLabel;
-  // 3. Repaint is-selected state on every row in this picker
-  for (const r of picker.querySelectorAll('.form-picker-radio')) {
-    const isSel = r === btn;
-    r.classList.toggle('is-selected', isSel);
-    r.querySelector('.ws-radio-dot')?.classList.toggle('is-selected', isSel);
-  }
-  // 4. Click-to-pick-and-close (matches workspace ⋯ menu UX)
-  picker.open = false;
-}
-
-// Document-level click delegation — bound once at module load. Lets every
-// form-picker work without renderXxx needing to wire its own handlers.
-document.addEventListener('click', _onFormPickerClick);
+// form-picker + _navStatusDot → ./components.mjs(2026-06-09 抽出)
 
 // 多 session chip 条点击(delegation:mobile + desktop detail 共用)。
 // 切 active session(空 data-session = "全部")→ 重画。新建 session 走侧栏的

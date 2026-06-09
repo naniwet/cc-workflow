@@ -6,7 +6,8 @@
 import { $, esc, api, showToast, showError, clearError, lastData, requestRender as render, requestRefresh as refreshAll } from './core.mjs';
 import { roundtablePersonaAvatarsHtml, navModelFromRoundtables } from './ui_contract.mjs';
 import { parseRoute, statusTag } from './app.js';
-import { _bindSidebarNavHandlers, _isMobileViewport, _lastPaintedStatus, _mobileCardCache, _navStatusDot, _onFormPickerClick, _renderFormPicker } from './workspaces.mjs';
+import { _bindSidebarNavHandlers, _isMobileViewport, _lastPaintedStatus, _mobileCardCache } from './workspaces.mjs';
+import { _navStatusDot, _onFormPickerClick, _renderFormPicker } from './components.mjs';
 
 // ============================================================================
 // Roundtable (third tab — multi-agent debate)
