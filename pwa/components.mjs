@@ -84,4 +84,48 @@ function _onFormPickerClick(e) {
 // form-picker work without renderXxx needing to wire its own handlers.
 document.addEventListener('click', _onFormPickerClick);
 
-export { _renderFormPicker, _onFormPickerClick, _navStatusDot };
+// Generic helper: turn a finger tap (≤ 15px movement, ≤ 600ms) into a
+// click handler invocation. Skips when the touch turned into a scroll
+// gesture so we don't fire on swipe-pass-through. Pairs WITH a regular
+// click listener, not instead of — on platforms where click works
+// normally (i.e. PC), touchend simply isn't fired.
+function _addTapFallback(el, handler) {
+  let start = null;
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { start = null; return; }
+    const t = e.touches[0];
+    start = { x: t.clientX, y: t.clientY, t: Date.now() };
+  }, { passive: true });
+  el.addEventListener('touchend', (e) => {
+    if (!start) return;
+    const begin = start;
+    start = null;
+    const end = e.changedTouches[0];
+    if (!end) return;
+    const dx = end.clientX - begin.x;
+    const dy = end.clientY - begin.y;
+    if (Math.hypot(dx, dy) > 15 || Date.now() - begin.t > 600) return;
+    // Only fire if the corresponding 'click' didn't already — set a flag
+    // on the element and clear in next microtask.
+    if (el.dataset.tapHandled === '1') return;
+    el.dataset.tapHandled = '1';
+    setTimeout(() => { delete el.dataset.tapHandled; }, 400);
+    e.preventDefault();
+    handler({ currentTarget: el, preventDefault() {}, stopPropagation() {} });
+  });
+  // If a normal click fires (PC, Android Chrome usually), claim the
+  // tap-handled flag so the touchend fallback above doesn't double-fire.
+  el.addEventListener('click', () => {
+    el.dataset.tapHandled = '1';
+    setTimeout(() => { delete el.dataset.tapHandled; }, 400);
+  }, { capture: true });
+}
+
+// 拼 workspace 文件下载 URL(后端 GET /workspaces/<ws>/file?path=)。缺 ws/path → ''。
+// 对话 Write/Edit ⬇ + Git 区改动文件 ⬇ 共用。
+function _fileDownloadHref(ws, path) {
+  if (!ws || !path) return '';
+  return `/workspaces/${encodeURIComponent(ws)}/file?path=${encodeURIComponent(path)}`;
+}
+
+export { _renderFormPicker, _onFormPickerClick, _navStatusDot, _addTapFallback, _fileDownloadHref };
