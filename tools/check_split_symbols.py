@@ -29,11 +29,18 @@ from pathlib import Path
 
 PWA = Path(__file__).resolve().parents[1] / "pwa"
 
-IMPORT_BLOCK = re.compile(r"import\s*\{([\s\S]*?)\}\s*from\s*['\"][^'\"]+['\"]\s*;?")
-IMPORT_DEFAULT = re.compile(r"import\s+([A-Za-z_$][\w$]*)\s+from\s*['\"][^'\"]+['\"]\s*;?")
-EXPORT_DECL = re.compile(r"\bexport\s+(?:const|let|var|function|async\s+function|class)\s+([A-Za-z_$][\w$]*)")
-EXPORT_LIST = re.compile(r"\bexport\s*\{([^}]*)\}")
+# import/export 一律行首锚定(^ + re.M):真 ESM import 在语句位置=行首;注释里
+# 的示例 `import { X }`(mid-line)不会被误匹配 —— 否则非贪婪 [\s\S]*? 会从注释
+# 的 import { 一路吃到真 import,把整段捕获弄乱(踩过)。
+IMPORT_BLOCK = re.compile(r"^import\s*\{([\s\S]*?)\}\s*from\s*['\"][^'\"]+['\"]\s*;?", re.M)
+IMPORT_DEFAULT = re.compile(r"^import\s+([A-Za-z_$][\w$]*)\s+from\s*['\"][^'\"]+['\"]\s*;?", re.M)
+EXPORT_DECL = re.compile(r"^export\s+(?:const|let|var|function|async\s+function|class)\s+([A-Za-z_$][\w$]*)", re.M)
+EXPORT_LIST = re.compile(r"^export\s*\{([^}]*)\}", re.M)
 TOPLEVEL_DECL = re.compile(r"^\s*(?:export\s+)?(?:const|let|var|function|async\s+function|class)\s+([A-Za-z_$][\w$]*)", re.M)
+# 函数参数 = 本地声明(纯函数模块如 ui_contract 把 esc 当参数注入,不是漏 import)
+FUNC_PARAMS = re.compile(r"function\s+[\w$]*\s*\(([^)]*)\)")
+ARROW_PARAMS = re.compile(r"\(([^)]*)\)\s*=>")
+ARROW_SINGLE = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>")
 
 
 def _names_from_clause(clause: str) -> set:
@@ -63,7 +70,21 @@ def imported_names(src: str) -> set:
 def remove_imports(src: str) -> str:
     src = IMPORT_BLOCK.sub(" ", src)
     src = IMPORT_DEFAULT.sub(" ", src)
+    # 剥 // 行注释:避免注释里提到的导出符号名(我插的指针注释 / 别人文档)被当成
+    # "使用"。只剥 //(到行尾),不碰 /* */(块注释里的 /* 可能在 regex 字面量里,
+    # 会把整段吃掉 —— 见模块 docstring)。URL/regex 里的 // 极少正好带某导出符号名,
+    # 误剥的影响仅限"少看一处引用",可接受。
+    src = re.sub(r"//[^\n]*", "", src)
     return src
+
+
+def param_names(src: str) -> set:
+    names = set()
+    for rx in (FUNC_PARAMS, ARROW_PARAMS):
+        for clause in rx.findall(src):
+            names |= set(re.findall(r"[A-Za-z_$][\w$]*", clause))
+    names |= set(ARROW_SINGLE.findall(src))
+    return names
 
 
 def referenced(name: str, body: str) -> bool:
@@ -83,7 +104,7 @@ def main():
                 export_home[name] = f
 
     imports = {f: imported_names(src[f]) for f in files}
-    decls = {f: set(TOPLEVEL_DECL.findall(src[f])) for f in files}
+    decls = {f: set(TOPLEVEL_DECL.findall(src[f])) | param_names(src[f]) for f in files}
     bodies = {f: remove_imports(src[f]) for f in files}
 
     errors = []
