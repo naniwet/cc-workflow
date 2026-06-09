@@ -60,7 +60,7 @@
 - **预估:** ~5 min
 - **可并行:** 否(依赖 Task 3)
 
-> **Review checkpoint A:** Task 2 + 4 后 dispatch `code-review` 审一次两个纯函数(签名 / 不变量 / 与现有 `tileKeyFor` 归桶语义一致性),通过再进 DOM 层。两个纯函数是地基,DOM 全靠它们,在这里钉死收益最大。
+> **Review checkpoint A:** Task 2 + 4 后 dispatch `code-reviewer` 审一次两个纯函数(签名 / 不变量 / 与现有 `tileKeyFor` 归桶语义一致性),通过再进 DOM 层。两个纯函数是地基,DOM 全靠它们,在这里钉死收益最大。
 
 ### Task 5: 删卡片墙代码(核查依赖 → 删孤儿)
 - **做什么:** 删 `pwa/app.js` 中**仅 PC overview 用**的墙代码(spec §4)。删前已核查过依赖边界(见本 plan 顶部"关键事实"),删除清单:
@@ -138,7 +138,7 @@
 - **预估:** ~5 min
 - **可并行:** 否
 
-> **Review checkpoint B:** Task 11 后 dispatch `code-review` 审一次整体(删除是否干净无残留 / 新 DOM 与纯函数契约对齐 / mobile 路径确实没被波及 / CSS 没误删 detail 共用段)。通过再 smoke + commit。
+> **Review checkpoint B:** Task 11 后 dispatch `code-reviewer` 审一次整体(删除是否干净无残留 / 新 DOM 与纯函数契约对齐 / mobile 路径确实没被波及 / CSS 没误删 detail 共用段)。通过再 smoke + commit。
 
 ### Task 12: 整体 smoke + SW bump + commit
 - **做什么:** bump `pwa/sw.js` `VERSION` `cc-v107` → `cc-v108`(改了 app.js / style.css 这两个 shell 文件,SW 必须 bump,见 CLAUDE.md §5)。跑全套 smoke。

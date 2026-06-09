@@ -187,7 +187,7 @@ PWA 打成 Android APK 有两个脚本,共享 keystore / SDK / gradle wrapper:
 | `spec-writer` | 模糊需求 → spec md(含 PM brainstorm)| 写代码 / 写 plan |
 | `plan-writer` | spec → bite-size task 列表 | 写代码 / 评判 spec 对错 |
 | `code-dev` | 写代码 + 写测试(TDD,同一只手)| 最终 review |
-| `code-review` | 独立审计代码 / 设计 | 写代码 / 改代码 |
+| `code-reviewer` | 独立审计代码 / 设计 | 写代码 / 改代码 |
 | `user-acceptance-tester` | 模拟用户走 E2E + 报 bug | 写 unit test / 修 bug |
 
 **Manager pipeline(主会话收到代码需求时的默认流程):**
@@ -195,7 +195,7 @@ PWA 打成 Android APK 有两个脚本,共享 keystore / SDK / gradle wrapper:
 1. **Brainstorm** 模糊需求(沟通底线:列假设 / 列选项 / 等用户 confirm 方向)
 2. dispatch `spec-writer` → 用户 review spec → 改 / 确认
 3. dispatch `plan-writer` → 用户 review plan → 改 / 确认
-4. for each task in plan:dispatch `code-dev` → dispatch `code-review` → 修 Block 后再 review → 通过
+4. for each task in plan:dispatch `code-dev` → dispatch `code-reviewer` → 修 Block 后再 review → 通过
 5. dispatch `user-acceptance-tester` 走查 E2E(能跑的环境)
 6. 全部绿 → commit + push,给用户总结
 

@@ -251,7 +251,7 @@ v2 真机后两条:报文 doc-flow 半拉子(turn 外壳没动 → 提示词显�
 
 ### 13.3 renderMarkdown 增强(让助手正文读起来像文档)
 - 现 `renderMarkdown` 只做 code-block / bullet / p。补:**标题(`#`/`##`/`###`)、粗体 `**`、inline `\`code\``、有序列表 `1.`**(表格留 1b)。
-- **保持 esc-before-replace 纪律**(先全文 esc 再正则,防 XSS —— code-review 已确认现有实现安全,增强时不破坏)。
+- **保持 esc-before-replace 纪律**(先全文 esc 再正则,防 XSS —— code-reviewer 已确认现有实现安全,增强时不破坏)。
 
 **验证**:render harness 真渲染,死盯"一句问答只出现一次 + 像 Claude 文档流 + 侧边栏一块不割裂"。
 

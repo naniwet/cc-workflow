@@ -8,7 +8,7 @@
 
 ## 1. Motivation
 
-用户已经手工建了 `code-dev` / `code-review` 两个 subagent(分工:dev 写代码 + 测试,review 独立审计)。Claude Code 引擎自动读 `~/.claude/agents/*.md`,main agent 通过 Task tool dispatch 给它们。
+用户已经手工建了 `code-dev` / `code-reviewer` 两个 subagent(分工:dev 写代码 + 测试,review 独立审计)。Claude Code 引擎自动读 `~/.claude/agents/*.md`,main agent 通过 Task tool dispatch 给它们。
 
 **痛点:** 编辑这些 agent 文件要 ssh + vim:
 - prompt tune 不顺手
@@ -33,7 +33,7 @@
 
 ```markdown
 ---
-name: code-review
+name: code-reviewer
 description: 独立审计员 subagent. Use when...
 tools: Read, Glob, Grep, Bash
 ---
@@ -304,7 +304,7 @@ def delete_agent(name: str) -> dict:
 // renderSettingsView 加一张卡:
 <a class="settings-card" href="#settings/agents">
   <div class="settings-card-title"><strong>Subagents</strong></div>
-  <div class="muted">管理 ~/.claude/agents/ 下的 Claude Code 子代理(code-dev / code-review / 你自己加的)</div>
+  <div class="muted">管理 ~/.claude/agents/ 下的 Claude Code 子代理(code-dev / code-reviewer / 你自己加的)</div>
 </a>
 
 // renderSettingsSectionView 加 dispatch:

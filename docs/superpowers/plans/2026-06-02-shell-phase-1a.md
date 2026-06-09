@@ -87,7 +87,7 @@
 - **预估:** ~5 min
 - **可并行:** 否
 
-> **Review checkpoint A(Task 2+4 后):** dispatch `code-review` 审纯函数地基 —— ① `buildSidebarTree.running` 派生跟 `groupBySession` 的 active 语义一致;② `NavModel` 形状严格对齐 spec §4.2 契约(id/label/icon/badge/active/running/data/children);③ shell 状态校验坏数据回 false。**这是 nav 组件 + 全 4 tab 的契约地基(spec §3.2 几乎不可逆,80% 心思),钉死收益最大。** 通过再进 DOM。
+> **Review checkpoint A(Task 2+4 后):** dispatch `code-reviewer` 审纯函数地基 —— ① `buildSidebarTree.running` 派生跟 `groupBySession` 的 active 语义一致;② `NavModel` 形状严格对齐 spec §4.2 契约(id/label/icon/badge/active/running/data/children);③ shell 状态校验坏数据回 false。**这是 nav 组件 + 全 4 tab 的契约地基(spec §3.2 几乎不可逆,80% 心思),钉死收益最大。** 通过再进 DOM。
 
 ### ── 第二段:shell + nav 组件 DOM(app.js + CSS)──
 
@@ -138,7 +138,7 @@
 - **预估:** ~5 min
 - **可并行:** 否
 
-> **Review checkpoint B(Task 9 后):** dispatch `code-review` 审 shell+nav DOM —— ① `renderShell` 不碰业务数据(spec §4.2 职责边界);② nav full/rail/drawer 三态都对、active/running 正确;③ Workspaces 接入后 pane 阶梯/reducer/深链确实没动;④ 旧 `_pcSidebarHtml` 残留清干净。通过再进去卡片+composer+移动端。
+> **Review checkpoint B(Task 9 后):** dispatch `code-reviewer` 审 shell+nav DOM —— ① `renderShell` 不碰业务数据(spec §4.2 职责边界);② nav full/rail/drawer 三态都对、active/running 正确;③ Workspaces 接入后 pane 阶梯/reducer/深链确实没动;④ 旧 `_pcSidebarHtml` 残留清干净。通过再进去卡片+composer+移动端。
 
 ### ── 第三段:去卡片 + composer + 移动端退役 ──
 
@@ -178,7 +178,7 @@
 - **预估:** ~5 min(主要是核查依赖 + 改分支)
 - **可并行:** 否
 
-> **Review checkpoint C(Task 12 后):** dispatch `code-review` 审第三段 —— ① 去卡片没误删 `.ws-col` / detail 共用段、没叠阴影;② composer Run↔Stop 确实复用 cancel 委托没造新后端、📎/slash 复用现成;③ 移动端 overview/carousel 退役的依赖核查正确、孤儿删干净、`renderMobileWorkspaceDetail` 未被波及;④ `_renderTurnEvent` 逻辑确实没动(1a 边界)。通过再 smoke + commit。
+> **Review checkpoint C(Task 12 后):** dispatch `code-reviewer` 审第三段 —— ① 去卡片没误删 `.ws-col` / detail 共用段、没叠阴影;② composer Run↔Stop 确实复用 cancel 委托没造新后端、📎/slash 复用现成;③ 移动端 overview/carousel 退役的依赖核查正确、孤儿删干净、`renderMobileWorkspaceDetail` 未被波及;④ `_renderTurnEvent` 逻辑确实没动(1a 边界)。通过再 smoke + commit。
 
 ### Task 13: 整体 smoke + SW bump + commit
 - **做什么:** bump `pwa/sw.js` `VERSION` `cc-v109` → `cc-v110`(改了 app.js + style.css,SW 必须 bump,CLAUDE.md §5)。跑全套 smoke。

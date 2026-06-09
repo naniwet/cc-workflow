@@ -41,7 +41,7 @@
 
 ---
 
-> **review checkpoint A:** Task 2 后 dispatch code-review 审一次纯函数契约(NavItem 形状是否跟 spec §4.2 一致、running 语义、是否误带 tileId)。通过再进 Task 3。
+> **review checkpoint A:** Task 2 后 dispatch code-reviewer 审一次纯函数契约(NavItem 形状是否跟 spec §4.2 一致、running 语义、是否误带 tileId)。通过再进 Task 3。
 
 ---
 
@@ -105,7 +105,7 @@
 
 ---
 
-> **review checkpoint B:** Task 7 后 dispatch code-review 审接线(render() 块是否漏路由 / mobile 分支是否真没动 / dialog 是否只实现一次 / 误绑 tileId 排查 / 收起态与 ctx 清空时序)。通过再进 Task 8。
+> **review checkpoint B:** Task 7 后 dispatch code-reviewer 审接线(render() 块是否漏路由 / mobile 分支是否真没动 / dialog 是否只实现一次 / 误绑 tileId 排查 / 收起态与 ctx 清空时序)。通过再进 Task 8。
 
 ---
 

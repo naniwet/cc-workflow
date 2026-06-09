@@ -56,7 +56,7 @@ function renderSettingsView() {
       </a>
       <a class="settings-card" href="#settings/agents">
         <div class="settings-card-title"><strong>Subagents</strong></div>
-        <div class="muted">管理 <code>~/.claude/agents/</code> 下的 Claude Code 子代理(code-dev / code-review / 你自己加的)</div>
+        <div class="muted">管理 <code>~/.claude/agents/</code> 下的 Claude Code 子代理(code-dev / code-reviewer / 你自己加的)</div>
       </a>
       <div class="settings-card is-disabled">
         <div class="settings-card-title"><strong>Secrets</strong> <span class="tag">soon</span></div>

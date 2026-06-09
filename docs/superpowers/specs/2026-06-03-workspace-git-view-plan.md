@@ -94,7 +94,7 @@
 - **可并行:** 与 Task 9 并行(两个端点独立,但都汇聚 Task 1-8)
 
 ### ⛳ REVIEW CHECKPOINT A(Task 9 + 10 后)
-- **dispatch code-review** 审:后端拼出的 `GET .../git` JSON schema 是否**逐字段对齐 spec §3.2**(1 级几乎不可逆,反悔成本最高,spec §10 标了);三层分离是否守住(run_git 是唯一 IO、parse 全纯);边缘 case 是否全降级不报 500(spec §7 逐条)。**Block 修完再继续前端。**
+- **dispatch code-reviewer** 审:后端拼出的 `GET .../git` JSON schema 是否**逐字段对齐 spec §3.2**(1 级几乎不可逆,反悔成本最高,spec §10 标了);三层分离是否守住(run_git 是唯一 IO、parse 全纯);边缘 case 是否全降级不报 500(spec §7 逐条)。**Block 修完再继续前端。**
 
 ---
 
@@ -127,7 +127,7 @@
 - **可并行:** 与 Task 13 并行
 
 ### ⛳ REVIEW CHECKPOINT B(Task 11-14 后)
-- **dispatch code-review** 审:前端是否落实 spec §5.2 方案 A(复用 CSS 视觉层、**没**复用语义不符的 `_toolUseDiffHtml`);折叠态确实不打端点(§4.3);desktop + mobile 共用一个 `_gitSectionHtml`(§4.4);CSS 全用主 token 没引失效 token;纯函数确实下沉到 ui_contract.mjs。
+- **dispatch code-reviewer** 审:前端是否落实 spec §5.2 方案 A(复用 CSS 视觉层、**没**复用语义不符的 `_toolUseDiffHtml`);折叠态确实不打端点(§4.3);desktop + mobile 共用一个 `_gitSectionHtml`(§4.4);CSS 全用主 token 没引失效 token;纯函数确实下沉到 ui_contract.mjs。
 
 ### Task 15: SW bump + 整体 smoke + commit
 - **做什么:** `pwa/sw.js` `VERSION` `cc-v126` → `cc-v127`。跑全套 smoke。git add + commit(中文 message)。

@@ -161,7 +161,7 @@ install -m 755 /root/projects/cc-workflow/agent-run.sh /usr/local/bin/agent-run
 ## 3.1. Sync subagent team into ~/.claude/agents/
 
 The repo ships a version-controlled subagent team under `.claude/agents/`
-(code-dev / code-review / spec-writer / plan-writer / user-acceptance-tester).
+(code-dev / code-reviewer / spec-writer / plan-writer / user-acceptance-tester).
 Both the PWA `#settings/agents` CRUD **and** the claude CLI's subagent
 dispatch read from `~/.claude/agents/` — NOT the repo dir. Symlink them:
 

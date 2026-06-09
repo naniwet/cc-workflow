@@ -656,7 +656,7 @@ export function navModelFromRoundtables(roundtables) {
 // 这与 app.js:_loopComputedStatus 返回 'running' **严格等价**:那段先 `if (!enabled)
 // return 'paused'`、再 `if (latestRunning) return 'running'` —— 即 running ⟺
 // enabled && latestRunning。**enabled 这一项不能漏**,否则一个被 pause 但恰有 in-flight
-// run 的 loop,侧栏点会亮 running 而 detail badge 显 paused,口径打架(code-review 抓到)。
+// run 的 loop,侧栏点会亮 running 而 detail badge 显 paused,口径打架(code-reviewer 抓到)。
 // _loopComputedStatus 读 DOM globals 不便在纯函数测试里 import,故此处内联同一判定,
 // 两边语义必须一致 —— 改 running 定义时同步改 _loopComputedStatus。其余状态
 // (paused/failed/done)侧栏 nav 都映射到 running=false,只关心"是否进行中"这一位。

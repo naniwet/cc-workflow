@@ -63,8 +63,26 @@ for src in "$SRC_DIR"/*.md; do
     fi
 done
 
+# 清理孤儿:repo 删掉某 agent(如 code-review→code-reviewer 改名)后,
+# ~/.claude/agents/ 里指向 repo 的旧 symlink 会变悬空 —— 上面主循环只遍历当前
+# repo 文件,碰不到它,于是残留成悬空链接(version skew)。这里补一趟,只删
+# 【指向本 repo SRC_DIR 且目标已不存在】的悬空 symlink:不碰真文件(机器本地
+# agent)、不碰指向别处的 symlink。
+pruned=0
+for dst in "$DST_DIR"/*.md; do
+    # -L 且 ! -e = 悬空 symlink(是链接,但目标解不开)
+    if [[ -L "$dst" && ! -e "$dst" ]]; then
+        target="$(readlink "$dst")"
+        if [[ "$target" == "$SRC_DIR/"* ]]; then
+            rm -f "$dst"
+            echo "  pruned    $(basename "$dst")  (repo 已删 → $target)"
+            pruned=$((pruned + 1))
+        fi
+    fi
+done
+
 echo "---"
-echo "synced: ${linked} linked, ${skipped} already ok, ${warned} skipped (non-symlink conflict)"
+echo "synced: ${linked} linked, ${skipped} already ok, ${pruned} pruned (repo 已删), ${warned} skipped (non-symlink conflict)"
 if [[ $warned -gt 0 ]]; then
     echo "有同名真文件未被覆盖。如果想用 repo 版本,先手动删 ~/.claude/agents/<name>.md 再重跑。" >&2
 fi

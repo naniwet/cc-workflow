@@ -683,7 +683,7 @@ Find `renderSettingsView` in `pwa/app.js`(search `<a class="settings-card" href=
 ```html
 <a class="settings-card" href="#settings/agents">
   <div class="settings-card-title"><strong>Subagents</strong></div>
-  <div class="muted">管理 <code>~/.claude/agents/</code> 下的 Claude Code 子代理(code-dev / code-review / 你自己加的)</div>
+  <div class="muted">管理 <code>~/.claude/agents/</code> 下的 Claude Code 子代理(code-dev / code-reviewer / 你自己加的)</div>
 </a>
 ```
 
@@ -918,12 +918,12 @@ Expected:
 ssh 上服务器:
 1. `git pull && systemctl daemon-reload && systemctl restart cc-workflow`
 2. PWA 打开 `#settings` → 看到 "Subagents" 卡
-3. 点进去 → 看到现有 agents(如 code-dev / code-review)
+3. 点进去 → 看到现有 agents(如 code-dev / code-reviewer)
 4. 展开 code-dev → 改 description 一行 → 点保存 → toast + 页面刷新,新值仍在
 5. ssh `cat ~/.claude/agents/code-dev.md | head -10` 验证文件已变,frontmatter 完整
 6. 点 "+ New agent" → 输入 `tester` → desc / tools / prompt → 保存 → ssh 看 `~/.claude/agents/tester.md` 出现
 7. 在 PWA 删掉 tester → ssh 看文件消失
-8. 在某个 workspace 里跑 claude → 让它 Task tool dispatch 给 code-dev / code-review → 验证 customized prompt 生效(质量验证)
+8. 在某个 workspace 里跑 claude → 让它 Task tool dispatch 给 code-dev / code-reviewer → 验证 customized prompt 生效(质量验证)
 
 ---
 
