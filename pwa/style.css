@@ -583,6 +583,23 @@ main {
 .ws-timeline::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-full); }
 .ws-timeline::-webkit-scrollbar-track { background: transparent; }
 
+/* "加载更早" —— detail timeline 顶部揭开更老 turn 的按钮(detail 默认只渲染
+   最近 10 条,点一次 +10)。全宽、低调虚线框,不抢眼。flex-shrink:0 防止它在
+   flex 列里被压扁。PC .ws-timeline 与 mobile .workspace-session-stream 共用。 */
+.load-earlier {
+  flex-shrink: 0;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1);
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  font-size: 0.85em;
+  cursor: pointer;
+}
+.load-earlier:hover { color: var(--text); border-color: var(--text-tertiary); }
+
 .ws-timeline .muted { font-size: var(--text-sm); padding: var(--space-2) 0; }
 
 /* Generic row — used by Tasks tab loop list */

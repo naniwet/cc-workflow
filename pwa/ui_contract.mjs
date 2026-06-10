@@ -150,6 +150,20 @@ export function workspaceTurnExpansion(turns, manual = {}, opts = {}) {
   });
 }
 
+// detail timeline 默认只渲染最近 shownCount 条 turn —— 历史已被后端封在
+// _RECENT_PER_WS(20)条,但全摊开 + expandAll 会并发拉每条的 event 流,开面板很慢。
+// turns 已按 started_at 升序(老→新),所以"最近 N 条" = 末尾 N 条;更老的折在
+// 上方"加载更早"里,点一次把 shownCount +10 再切片(纯前端,在已缓存的 20 条内)。
+// 返回 { visible: 要渲染的 turn 数组, hidden: 上方还藏着的更老条数 }。
+//   注意:cap=0 时**不能** slice(-0)(=== slice(0) 会返回全量,JS 陷阱),
+//   故用 cap>0 三元短路。
+export function detailVisibleTurns(turns, shownCount) {
+  const safe = Array.isArray(turns) ? turns : [];
+  const cap = Math.max(0, Math.min(shownCount, safe.length));
+  const visible = cap > 0 ? safe.slice(-cap) : [];
+  return { visible, hidden: safe.length - visible.length };
+}
+
 // 工具调用 → 紧凑报文三元组(coding 报文流 §14.2)。纯函数:0 IO,
 // 给定 (name, input) 返回 {verb, target, glyph}。
 //   - verb 是显示动词(Edit/MultiEdit 都归 'Edit',Grep/Glob 都归 'Search'),

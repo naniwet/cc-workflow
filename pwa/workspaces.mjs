@@ -9,7 +9,7 @@ import { ICONS } from './icons.mjs';
 import { _renderFormPicker, _onFormPickerClick, _navStatusDot, _addTapFallback, _fileDownloadHref } from './components.mjs';
 import { _gitSectionHtml, _bindGitSectionHandlers } from './git_view.mjs';
 import { _bindTurnInteractions, _loadTurnEvents, _renderTurnEvent, _stopAllTurnEventsPolls, _syncWorkspaceNewEventsButton, _workspaceTurnHtml } from './turn_stream.mjs';
-import { DONE_STALE_SEC, STATUS_ACCENTS, _prunePanes, buildSidebarTree, filterTurnsBySession, foldToolResult, formatToolUse, gitBadgeText, hunksToHtml, isDoneStale, isUserSession, loadShellState, navModelFromTree, nextSessionKey, paneStateReducer, parseSessionTileId, parseStreamLinesToEvents, resolveRunSessionKey, sessionChipLabel, sessionTileId, tileKeyFor, workspaceAutoScrollState, workspaceTurnExpansion } from './ui_contract.mjs';
+import { DONE_STALE_SEC, STATUS_ACCENTS, _prunePanes, buildSidebarTree, detailVisibleTurns, filterTurnsBySession, foldToolResult, formatToolUse, gitBadgeText, hunksToHtml, isDoneStale, isUserSession, loadShellState, navModelFromTree, nextSessionKey, paneStateReducer, parseSessionTileId, parseStreamLinesToEvents, resolveRunSessionKey, sessionChipLabel, sessionTileId, tileKeyFor, workspaceAutoScrollState, workspaceTurnExpansion } from './ui_contract.mjs';
 import { _runPreviewLine, parseRoute, renderMarkdown, statusTag, timeAgo } from './app.js';
 
 const runDetailCache = {};                          // id → row (status=done/failed only)
@@ -20,6 +20,8 @@ const runDetailCache = {};                          // id → row (status=done/f
 const drafts = {};                                  // key: form-id, val: name → value
 const detailsOpen = {};                             // key: details-id, val: bool
 const timelineScroll = {};                          // key: ws name → {scrollTop, atBottom}
+const _detailShownCount = {};                       // colKey → detail timeline 已露出的 turn 数(默认 10,"加载更早" +10)
+const DETAIL_DEFAULT_ROWS = 10;                      // detail 默认显示 + 每次"加载更早"的步长
 const workspaceSessionScroll = {};                  // key: ws name → {scrollTop, atBottom}
 const workspaceStreamState = {};                     // key: ws name → {eventCount,newEvents,atBottom}
 const workspaceTurnOverrides = {};                   // key: run id → expanded bool
@@ -48,6 +50,38 @@ function activeSessionKey(ws) {
 }
 function _filterTurnsBySession(ws, turns) {
   return filterTurnsBySession(ws, turns, workspaceActiveSession[ws]);
+}
+
+// detail timeline 两个渲染路径(PC workspaceColHtml / mobile
+// renderMobileWorkspaceDetail)共用:把全量 turns 截到"已露出的最近 N 条" +
+// 算顶部"加载更早"按钮 html。历史已被后端封在 _RECENT_PER_WS(20)条,但全摊开
+// 开面板要并发拉每条 event 流(PC expandAll)/ 渲染全部卡(mobile),很慢 ——
+// 默认只露最近 DETAIL_DEFAULT_ROWS 条,更老的折在按钮里,点一次 +10(纯前端,
+// 在已缓存的 ≤20 条内切片,见 ui_contract.detailVisibleTurns)。
+function _detailTurnsWithEarlier(colKey, turns) {
+  const shown = _detailShownCount[colKey] ?? DETAIL_DEFAULT_ROWS;
+  const { visible, hidden } = detailVisibleTurns(turns, shown);
+  let earlierHtml = '';
+  if (hidden > 0) {
+    const step = Math.min(hidden, DETAIL_DEFAULT_ROWS);
+    earlierHtml =
+      `<button type="button" class="load-earlier" data-ws="${esc(colKey)}">`
+      + `↑ 加载更早 ${step} 条(还有 ${hidden})</button>`;
+  }
+  return { turnsToShow: visible, earlierHtml };
+}
+
+// "加载更早":把该 colKey 已露出的 turn 数 +DETAIL_DEFAULT_ROWS,重渲染。
+// detailVisibleTurns 内部已对 turns.length 封顶,不会越界。重渲染后
+// timelineScroll 恢复机制把用户大致留在原处(新内容长在上方)。
+function _onLoadEarlierClick(e) {
+  const btn = e.target.closest('.load-earlier');
+  if (!btn) return;
+  e.preventDefault();
+  const colKey = btn.dataset.ws;
+  if (!colKey) return;
+  _detailShownCount[colKey] = (_detailShownCount[colKey] ?? DETAIL_DEFAULT_ROWS) + DETAIL_DEFAULT_ROWS;
+  render();
 }
 
 // 追踪上次 render 时每个 turn 的 status,用来 detect "刚结束" 的 turn
@@ -1445,6 +1479,9 @@ function bindWorkspaceColHandlers(root) {
   for (const btn of root.querySelectorAll('.ws-pull-latest')) {
     btn.addEventListener('click', _onPullLatestClick);
   }
+  for (const btn of root.querySelectorAll('.load-earlier')) {
+    btn.addEventListener('click', _onLoadEarlierClick);
+  }
   for (const btn of root.querySelectorAll('.ws-sync-skills')) {
     btn.addEventListener('click', _onSyncSkillsClick);
   }
@@ -2484,7 +2521,11 @@ function workspaceColHtml(name, data, opts = {}) {
   const allTurns = _workspaceSessionTurns(data);
   const turns = sessionKey ? allTurns
     : (detail ? _filterTurnsBySession(name, allTurns) : allTurns);
-  const turnsToShow = detail ? turns : turns.slice(-maxRows);
+  // detail:默认只露最近 N 条 + 顶部"加载更早"(见 _detailTurnsWithEarlier,
+  // 治 expandAll 并发拉全部 event 流的卡顿);overview:维持 slice(-maxRows)。
+  const { turnsToShow, earlierHtml } = detail
+    ? _detailTurnsWithEarlier(colKey, turns)
+    : { turnsToShow: turns.slice(-maxRows), earlierHtml: '' };
   _pinJustFinishedTurns(turnsToShow);
   const expandedTurns = workspaceTurnExpansion(
     turnsToShow,
@@ -2492,7 +2533,7 @@ function workspaceColHtml(name, data, opts = {}) {
     { expandAll: detail },
   );
   timelineHtml = expandedTurns.length
-    ? expandedTurns.map(_workspaceTurnHtml).join('')
+    ? earlierHtml + expandedTurns.map(_workspaceTurnHtml).join('')
     : '<p class="muted" style="margin:8px 0">(no runs yet — type a prompt below and hit Run)</p>';
 
   const wsProvider = lastData.wsSettings[name]?.provider || '';
@@ -2931,19 +2972,23 @@ function renderMobileWorkspaceDetail(startName, opts = {}) {
   const currentIdx = Math.max(0, sortedNames.indexOf(startName));
   const currentName = sortedNames[currentIdx];
   const data = groups[currentName] || { active: [], queued: [], recent: [] };
-  const turns = _filterTurnsBySession(currentName, _workspaceSessionTurns(data));
-  _pinJustFinishedTurns(turns);
-  const expandedTurns = workspaceTurnExpansion(turns, workspaceTurnOverrides);
+  const allTurns = _filterTurnsBySession(currentName, _workspaceSessionTurns(data));
+  // detail:默认只露最近 N 条 + 顶部"加载更早"(同 PC,见 _detailTurnsWithEarlier)。
+  const { turnsToShow, earlierHtml } = _detailTurnsWithEarlier(currentName, allTurns);
+  _pinJustFinishedTurns(turnsToShow);
+  const expandedTurns = workspaceTurnExpansion(turnsToShow, workspaceTurnOverrides);
   const eventCount = expandedTurns.length + pendingApprovalsForWorkspace(currentName).length;
   workspaceStreamState[currentName] = workspaceAutoScrollState(workspaceStreamState[currentName], {
     eventCount,
     atBottom: workspaceStreamState[currentName]?.atBottom !== false,
   });
-  const isRunning = turns.some((t) => t.status === 'running' || t.status === 'queued');
+  // "在跑"看全量(running turn 恒在最新、必在已露出的 N 条内,但语义上是
+  // "这个 workspace 是否有进行中的 run",取全量更准)。
+  const isRunning = allTurns.some((t) => t.status === 'running' || t.status === 'queued');
 
   const view = $('view');
   view.innerHTML = _workspaceSessionDetailHtml(currentName, expandedTurns, {
-    eventCount, isRunning, activeRun: (data.active || [])[0],
+    eventCount, isRunning, activeRun: (data.active || [])[0], earlierHtml,
   });
   bindWorkspaceColHandlers(view);
   _bindWorkspaceSessionHandlers(view, currentName);
@@ -2997,13 +3042,13 @@ function _sessionBarHtml(name) {
   return `<div class="ws-session-bar" data-ws="${esc(name)}">${chips.join('')}</div>`;
 }
 
-function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning, activeRun }) {
+function _workspaceSessionDetailHtml(name, turns, { eventCount, isRunning, activeRun, earlierHtml = '' }) {
   const state = workspaceStreamState[name] || {};
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const wsEngine = lastData.wsSettings[name]?.engine || 'claude';
   const disabledAttr = isRunning ? 'disabled' : '';
   const turnsHtml = turns.length
-    ? turns.map(_workspaceTurnHtml).join('')
+    ? earlierHtml + turns.map(_workspaceTurnHtml).join('')
     : `<div class="workspace-empty">
          <div class="workspace-empty-title">New chat</div>
          <p class="muted">Send the first prompt to start this workspace session.</p>

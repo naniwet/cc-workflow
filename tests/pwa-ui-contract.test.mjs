@@ -11,6 +11,7 @@ import {
   roundtablePersonaAvatarsHtml,
   workspaceAutoScrollState,
   workspaceTurnExpansion,
+  detailVisibleTurns,
   resolveRunSessionKey,
   filterTurnsBySession,
   isUserSession,
@@ -160,6 +161,38 @@ test('workspaceTurnExpansion expandAll opens every turn(PC detail 模式)', () =
     workspaceTurnExpansion(turns, { r2: false }, { expandAll: true }).map((t) => [t.id, t.expanded]),
     [['r1', true], ['r2', false], ['r3', true]],
   );
+});
+
+test('detailVisibleTurns: 多于上限时只露最近 N 条,其余记 hidden', () => {
+  const turns = Array.from({ length: 15 }, (_, i) => ({ id: `r${i}` }));
+  const { visible, hidden } = detailVisibleTurns(turns, 10);
+  assert.equal(visible.length, 10);
+  assert.equal(visible[0].id, 'r5');          // 最近 10 = r5..r14(升序,末尾 N 条)
+  assert.equal(visible[9].id, 'r14');
+  assert.equal(hidden, 5);
+});
+
+test('detailVisibleTurns: 不足上限时全显示,hidden=0', () => {
+  const turns = Array.from({ length: 8 }, (_, i) => ({ id: `r${i}` }));
+  assert.deepEqual(detailVisibleTurns(turns, 10), { visible: turns, hidden: 0 });
+});
+
+test('detailVisibleTurns: 露出数增长逐步揭开更老的(加载更早)', () => {
+  const turns = Array.from({ length: 20 }, (_, i) => ({ id: `r${i}` }));
+  assert.equal(detailVisibleTurns(turns, 10).hidden, 10);
+  const all = detailVisibleTurns(turns, 20);
+  assert.equal(all.hidden, 0);
+  assert.equal(all.visible.length, 20);
+});
+
+test('detailVisibleTurns: 空 / 非数组安全', () => {
+  assert.deepEqual(detailVisibleTurns([], 10), { visible: [], hidden: 0 });
+  assert.deepEqual(detailVisibleTurns(undefined, 10), { visible: [], hidden: 0 });
+});
+
+test('detailVisibleTurns: shownCount=0 不踩 slice(-0) 全量陷阱', () => {
+  const turns = [{ id: 'a' }, { id: 'b' }];
+  assert.deepEqual(detailVisibleTurns(turns, 0), { visible: [], hidden: 2 });
 });
 
 test('foldToolResult keeps the first five lines and reports hidden lines', () => {
