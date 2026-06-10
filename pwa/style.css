@@ -143,6 +143,9 @@ a:hover { color: var(--accent-blue-hover); }
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
 }
+/* .brand:顶栏品牌字。2026-06-10 恢复(被死 CSS 清扫 3263405 误删 —— 只在
+   index.html 静态用,清扫器没查 HTML)。 */
+.brand { font-weight: 600; letter-spacing: -0.01em; color: var(--text-primary); font-size: var(--text-lg); }
 .tabs { display: flex; gap: var(--space-1); flex: 1; }
 .tab {
   position: relative;
@@ -1569,6 +1572,35 @@ pre {
   /* ctx 为空时(Workspaces 外的 tab)不显 divider,免留一条孤零横线。 */
   .sidebar-ctx:empty { border-top: none; }
 
+  /* app 导航(4 tab)—— 2026-06-10 恢复:被早先死 CSS 清扫(commit 3263405)
+     误删,因 .sidebar-app 只在 index.html 静态标记里用、清扫器只查 .js/.mjs
+     没查 HTML。丢的 .sidebar-app svg{18px} 让图标撑满整宽(用户报"样式坏了")。 */
+  .sidebar-apps { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; padding: 0 var(--space-2) var(--space-2); }
+  .sidebar-app {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2); border-radius: var(--radius-sm);
+    color: var(--text-secondary); text-decoration: none;
+    font-size: var(--text-base);
+    transition: color var(--t-base), background var(--t-base);
+  }
+  .sidebar-app svg { flex: 0 0 auto; width: 18px; height: 18px; display: block; }
+  .sidebar-app span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar-app:hover { color: var(--text-primary); background: var(--bg-elevated); }
+  .sidebar-app.active { color: var(--accent-blue); background: var(--accent-blue-faint); }
+  .sidebar-brand {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; color: var(--accent-blue); flex: 0 0 auto;
+  }
+  .sidebar-brand svg { width: 22px; height: 22px; }
+  .sidebar-collapse-btn {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: var(--space-5); height: var(--space-5); padding: 0;
+    border: none; background: transparent; color: var(--text-tertiary);
+    cursor: pointer; font: inherit; font-size: var(--text-lg); line-height: 1;
+    border-radius: var(--radius-sm);
+  }
+  .sidebar-collapse-btn:hover { color: var(--text-primary); background: var(--bg-elevated); }
+
   /* ── 收起态 rail(52px:app 图标 + repo 首字母,spec §13.2)──────
      .sidebar.is-rail 整条收窄;head 只留收起钮、apps 只留图标、ctx 走
      .shell-nav-rail-* 图标块。 */
@@ -1583,6 +1615,9 @@ pre {
   }
   .sidebar.is-rail .sidebar-status { display: none; }  /* rail 只留图标 */
   .sidebar.is-rail .sidebar-ctx { padding: var(--space-2) 0; }
+  .sidebar.is-rail .sidebar-apps { padding: 0 var(--space-1) var(--space-2); }
+  .sidebar.is-rail .sidebar-app { flex-direction: column; justify-content: center; gap: 0; }
+  .sidebar.is-rail .sidebar-app span { display: none; }  /* rail 只留图标 */
   /* 收起态:Settings 的 section 链整块隐掉,rail 只剩 app 图标(section
      太少,没有 rail glyph 设计,直接收起 → 展开再选) */
   .sidebar.is-rail .settings-sidebar-nav { display: none; }
@@ -2653,6 +2688,7 @@ pre {
   /* Topbar simplifies — title only, tabs go to bottom-nav */
   .topbar { gap: var(--space-3); padding: var(--space-3); }
   .topbar .tabs { display: none; }
+  .brand { font-size: var(--text-md); }                  /* 恢复:3263405 误删 */
   .status { font-size: 10px; }
 
   /* Page padding leaves room for bottom-nav */
