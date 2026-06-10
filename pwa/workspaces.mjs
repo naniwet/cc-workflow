@@ -22,6 +22,14 @@ const detailsOpen = {};                             // key: details-id, val: boo
 const timelineScroll = {};                          // key: ws name → {scrollTop, atBottom}
 const _detailShownCount = {};                       // colKey → detail timeline 已露出的 turn 数(默认 10,"加载更早" +10)
 const DETAIL_DEFAULT_ROWS = 10;                      // detail 默认显示 + 每次"加载更早"的步长
+// 跨 render 保住流式 events 的 DOM 内容(key: run-id → {html, renderedLines})。
+// 全局 render() 在系统任何状态变(approval / 别的 run / status 翻)时整段重写
+// #view,会把 .turn-events 容器重建成空的,_loadTurnEvents 再异步 refetch 填回
+// → 中间空窗 = 闪烁("输出一段又没了又重渲")。snapshotDrafts 存、restoreDrafts
+// 塞回 → 内容原地存活、无空窗;之后异步 refetch 读回 renderedLines 只 append 新行。
+const _turnEventsCache = {};
+const _hasRenderedEvents = (c) =>
+  [...c.children].some((ch) => !ch.classList.contains('turn-events-loading'));
 const workspaceSessionScroll = {};                  // key: ws name → {scrollTop, atBottom}
 const workspaceStreamState = {};                     // key: ws name → {eventCount,newEvents,atBottom}
 const workspaceTurnOverrides = {};                   // key: run id → expanded bool
@@ -422,6 +430,17 @@ function snapshotDrafts() {
     const atBottom = Math.abs(s.scrollHeight - s.clientHeight - s.scrollTop) < 80;
     workspaceSessionScroll[s.dataset.ws] = { scrollTop: s.scrollTop, atBottom };
   }
+  // 流式 events 内容(见 _turnEventsCache 注释)。每次重建缓存 → 只留当前可见
+  // turn,不无限涨。只存真渲染过内容的(排掉只有 loading placeholder 的空容器)。
+  for (const k of Object.keys(_turnEventsCache)) delete _turnEventsCache[k];
+  for (const c of document.querySelectorAll('.turn-events[data-run-id]')) {
+    if (c.dataset.runId && _hasRenderedEvents(c)) {
+      _turnEventsCache[c.dataset.runId] = {
+        html: c.innerHTML,
+        renderedLines: c.dataset.renderedLines || '0',
+      };
+    }
+  }
 }
 
 function restoreDrafts() {
@@ -461,6 +480,18 @@ function restoreDrafts() {
       s.scrollTop = saved.scrollTop;
     }
     _syncWorkspaceNewEventsButton(s.dataset.ws);
+  }
+  // 还原流式 events 内容:render 把 .turn-events 重建成空容器(顶多一个 loading
+  // placeholder),这里按 run-id 把上一帧渲好的内容 + renderedLines 塞回 → 内容
+  // 原地存活、无空窗(消除"输出一段又没了又重渲"的闪烁)。同步发生在 render 收尾、
+  // 浏览器 paint 之前,所以用户看不到中间空态;之后 _loadTurnEvents 的异步 refetch
+  // 读回 renderedLines,只 append 比缓存更新的行。
+  for (const c of document.querySelectorAll('.turn-events[data-run-id]')) {
+    const saved = _turnEventsCache[c.dataset.runId];
+    if (saved && !_hasRenderedEvents(c)) {
+      c.innerHTML = saved.html;
+      c.dataset.renderedLines = saved.renderedLines;
+    }
   }
 }
 

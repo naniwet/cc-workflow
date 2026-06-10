@@ -136,7 +136,6 @@ async function _loadTurnEvents(runId) {
 
   const status = container.dataset.status || '';
   const isRunning = status === 'running' || status === 'queued';
-  const already = Number(container.dataset.renderedLines || 0);
 
   // 统一管 loading placeholder:容器里没渲染过任何 .event 时,显示一条
   // muted 文字。这样 "Loading… → Waiting… → 真 event" 三态切换不会
@@ -172,6 +171,11 @@ async function _loadTurnEvents(runId) {
   }
 
   const allLines = data.lines || [];
+  // renderedLines 在本次 await 期间可能被 restoreDrafts 改过(全量重渲后把上一帧
+  // 已渲的 events 原地塞回 + 设 renderedLines):这里读「当下」值,而不是 bind 时
+  // 的旧值(0)—— 否则会把全部行重复 append 在 restore 塞回的内容之上(闪烁修复
+  // 的连带去重)。正常 poll 路径读到的值不变,行为一致。
+  const already = Number(container.dataset.renderedLines || 0);
   if (allLines.length > already) {
     // 关键:在 append 前记录 stream 当前是不是在底部。append 完如果之前
     // 在底部就把 scrollTop 重新设到 scrollHeight 拉回去 —— 否则新 events
