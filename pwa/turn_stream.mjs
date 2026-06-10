@@ -1,28 +1,24 @@
 // Turn 渲染/流式模块(2026-06-09 从 workspaces.mjs 抽出)。
 // 一个 run 的事件流渲染 + 增量轮询 + 折叠 + 工具事件(diff/下载)+ 审批块。
-// 自带状态(_turnEventsTimers/_foldState)。被 workspace / task / roundtable 三处
+// 自带状态(_turnEventsTimers)。被 workspace / task / roundtable 三处
 // detail 复用 —— 抽出后它们直接 import 这里,不再借 workspaces 内部件。
 // 依赖:core + ICONS + ui_contract + components + workspaces 的少量共享件
 // (_scrollToBottom/cssQuoteEsc/eventFilterShowAll + const 对象 timelineScroll/
 // workspaceStreamState,只读/属性改,ESM 共享引用安全)。
 import { $, esc, api, showToast, showError, lastData, requestRender as render, requestRefresh as refreshAll } from './core.mjs';
 import { ICONS } from './icons.mjs';
-import { foldToolResult, formatToolUse, parseSessionTileId, parseStreamLinesToEvents } from './ui_contract.mjs';
-import { _addTapFallback, _fileDownloadHref } from './components.mjs';
+import { formatToolUse, parseSessionTileId, parseStreamLinesToEvents } from './ui_contract.mjs';
+import { _fileDownloadHref } from './components.mjs';
 import { renderMarkdown, timeAgo } from './app.js';
 import { _scrollToBottom, cssQuoteEsc, eventFilterShowAll, timelineScroll, workspaceStreamState } from './workspaces.mjs';
 
-// Turn 交互的子绑定(tool-result-fold + bootstrap)。
+// Turn 交互的子绑定(已展开 turn 的 _loadTurnEvents bootstrap)。
 // 抽出来是因为 cron 的 patch path(只换一个 loop-row,不整页重画)也要
 // rewire 新 row 里的 turn 元素,但不能跟着调 _stopAllTurnEventsPolls
 // —— 那会把别的 loop-row 还活着的 poll 一起干掉。
-// v4 去折叠(spec §14.1):turn 永远展开,没有 turn-toggle 可绑;只剩
-// tool-result-fold 绑定 + `.turn.turn-expanded` 的 _loadTurnEvents bootstrap。
+// 永远全展开(2026-06-10):turn + tool 输出都不折叠,没有任何收起按钮可绑;
+// 只剩 `.turn.turn-expanded` 的 _loadTurnEvents bootstrap。
 function _bindTurnInteractions(root) {
-  for (const btn of root.querySelectorAll('.tool-result-fold')) {
-    btn.addEventListener('click', _onToolResultFoldToggle);
-    _addTapFallback(btn, _onToolResultFoldToggle);
-  }
   for (const turn of root.querySelectorAll('.turn.turn-expanded')) {
     const runId = turn.dataset.runId;
     if (runId) _loadTurnEvents(runId);
@@ -215,21 +211,6 @@ async function _loadTurnEvents(runId) {
       const loading = container.querySelector('.turn-events-loading');
       if (loading) loading.remove();
       container.insertAdjacentHTML('beforeend', html);
-      for (const btn of container.querySelectorAll('.tool-result-fold:not([data-bound])')) {
-        btn.addEventListener('click', _onToolResultFoldToggle);
-        _addTapFallback(btn, _onToolResultFoldToggle);
-        btn.dataset.bound = '1';
-      }
-      // 还原跨重渲保留的 fold 展开态(_foldState):数据变化触发的 #view 重写
-      // 会把 fold 重建成折叠态,这里把用户之前展开过的重新展开。幂等:已展开的
-      // (full.hidden=false)跳过,所以 running turn 增量 append 多次调用无副作用。
-      for (const wrap of container.querySelectorAll('.tool-result-wrap')) {
-        const key = _foldKeyForWrap(wrap);
-        if (key && _foldState[key]) {
-          const full = wrap.querySelector('.tool-result-full');
-          if (full && full.hidden) _setFoldExpanded(wrap, true);
-        }
-      }
     } else {
       // 全过滤掉了,placeholder 文案 mark 一下,让用户知道流是动的
       // 但当前模式下没东西显示。
@@ -257,24 +238,10 @@ async function _loadTurnEvents(runId) {
   // 不 running 的 turn:渲染完一次性结束,不留 timer。
 }
 
-// 长 prose 折叠:5 行以内直接展示;超过 5 行先显示前 5 行 + "↓ Expand N
-// lines" 按钮。复用 .tool-result-wrap / .tool-result-preview /
-// .tool-result-full / .tool-result-fold 4 个 class —— 这样
-// _onToolResultFoldToggle 现有 handler 自动 work,不写新的展开逻辑。
-// 跟 _workspaceOutputHtml 的区别:这里输出 div.event-text-block(flow
-// 文本),不是 <pre>(monospace 块)—— thinking / text 是英文 prose,
-// 用 pre 会看着像代码。
+// thinking / text 是英文 prose,用 div.event-text-block(flow 文本)而非 <pre>
+//(<pre> 会看着像代码)。永远全展开:不折叠,直接输出完整文本。
 function _foldedTextHtml(text) {
-  const folded = foldToolResult(text || '', 5);
-  if (!folded.truncated) {
-    return `<div class="event-text-block">${esc(folded.preview)}</div>`;
-  }
-  return `
-    <div class="tool-result-wrap">
-      <div class="event-text-block tool-result-preview">${esc(folded.preview)}</div>
-      <div class="event-text-block tool-result-full" hidden>${esc(text || '')}</div>
-      <button class="tool-result-fold" type="button">↓ Expand ${esc(folded.hiddenLineCount)} lines</button>
-    </div>`;
+  return `<div class="event-text-block">${esc(text || '')}</div>`;
 }
 
 // Edit/MultiEdit/Write 的 diff 块(spec §14.2 MVP:全删旧 + 全增新,精确
@@ -404,17 +371,8 @@ function _renderTurnEvent(ev, elapsedS, ws) {
 }
 
 function _workspaceOutputHtml(output) {
-  const folded = foldToolResult(output, 5);
-  if (!folded.truncated) {
-    return `<pre class="tool-result">${esc(folded.preview)}</pre>`;
-  }
-  return `
-    <div class="tool-result-wrap">
-      <pre class="tool-result tool-result-preview">${esc(folded.preview)}</pre>
-      <pre class="tool-result tool-result-full" hidden>${esc(output)}</pre>
-      <button class="tool-result-fold" type="button">↓ Expand ${esc(folded.hiddenLineCount)} lines</button>
-    </div>
-  `;
+  // 永远全展开:不折叠,直接输出完整 tool result。
+  return `<pre class="tool-result">${esc(output)}</pre>`;
 }
 
 function _syncWorkspaceNewEventsButton(name) {
@@ -423,55 +381,6 @@ function _syncWorkspaceNewEventsButton(name) {
   const count = workspaceStreamState[name]?.newEvents || 0;
   btn.hidden = count <= 0;
   btn.textContent = `↓ ${count} new`;
-}
-
-// fold 展开态跨重渲保留。detail / pane 的 #view 在数据变化(新 run / 状态变 /
-// running streaming)触发 render 时整段重写 → fold 被重建成折叠态,用户刚展开
-// 的长输出又缩回去。_foldState 记住"哪些 fold 被展开过",_loadTurnEvents 渲完
-// 事件后据此还原。keyed by runId + wrap 在该 turn-events 内的序号(事件顺序
-// 确定 → 序号稳定)。只覆盖 .turn-events 里的 fold(别处如 mobile loop row 不
-// 命中,优雅降级)。注:只保留展开/折叠态,内部滚动位置不保留(重写后回顶)。
-const _foldState = {};
-
-function _foldKeyForWrap(wrap) {
-  const container = wrap.closest('.turn-events');
-  if (!container) return null;
-  const runId = container.dataset.runId || '';
-  const idx = Array.prototype.indexOf.call(
-    container.querySelectorAll('.tool-result-wrap'), wrap);
-  return idx < 0 ? null : runId + ':' + idx;
-}
-
-// 设 fold 展开/折叠 DOM 态(toggle handler + 重渲还原共用)。保留按钮(不 hidden),
-// 文字在「↓ Expand N lines」⇄「↑ Collapse」间切换 —— 首次展开把原始 Expand 文案
-// 存进 dataset.expandLabel,折叠时还原(N lines 不丢)。
-function _setFoldExpanded(wrap, expanded) {
-  const preview = wrap.querySelector('.tool-result-preview');
-  const full = wrap.querySelector('.tool-result-full');
-  const btn = wrap.querySelector('.tool-result-fold');
-  if (!preview || !full || !btn) return;
-  if (expanded) {
-    if (!btn.dataset.expandLabel) btn.dataset.expandLabel = btn.textContent;
-    preview.hidden = true;
-    full.hidden = false;
-    btn.textContent = '↑ Collapse';
-  } else {
-    preview.hidden = false;
-    full.hidden = true;
-    btn.textContent = btn.dataset.expandLabel || '↓ Expand';
-  }
-}
-
-// fold 按钮 toggle(展开 ⇄ 收起)。修「有 expand 却没有收起」(旧版点 Expand
-// 后把按钮自己 hidden,展开了收不回)。顺带把展开态写进 _foldState 跨重渲保留。
-function _onToolResultFoldToggle(e) {
-  const wrap = e.currentTarget.closest('.tool-result-wrap');
-  const full = wrap?.querySelector('.tool-result-full');
-  if (!wrap || !full) return;
-  const expanding = full.hidden;            // 当前折叠 → 这次点是展开
-  _setFoldExpanded(wrap, expanding);
-  const key = _foldKeyForWrap(wrap);
-  if (key) { if (expanding) _foldState[key] = true; else delete _foldState[key]; }
 }
 
 export { _bindTurnInteractions, _loadTurnEvents, _renderTurnEvent, _stopAllTurnEventsPolls, _syncWorkspaceNewEventsButton, _workspaceTurnHtml };

@@ -5,7 +5,6 @@ import {
   STATUS_ACCENTS,
   ROUNDTABLE_PERSONAS,
   formatToolUse,
-  foldToolResult,
   nextRunLabel,
   parseStreamLinesToEvents,
   roundtablePersonaAvatarsHtml,
@@ -193,14 +192,6 @@ test('detailVisibleTurns: 空 / 非数组安全', () => {
 test('detailVisibleTurns: shownCount=0 不踩 slice(-0) 全量陷阱', () => {
   const turns = [{ id: 'a' }, { id: 'b' }];
   assert.deepEqual(detailVisibleTurns(turns, 0), { visible: [], hidden: 2 });
-});
-
-test('foldToolResult keeps the first five lines and reports hidden lines', () => {
-  const folded = foldToolResult(['one', 'two', 'three', 'four', 'five', 'six', 'seven'].join('\n'));
-
-  assert.equal(folded.truncated, true);
-  assert.equal(folded.preview, ['one', 'two', 'three', 'four', 'five'].join('\n'));
-  assert.equal(folded.hiddenLineCount, 2);
 });
 
 // formatToolUse(name, input) → {verb, target, glyph}(纯函数,coding 报文流 §14.2)。

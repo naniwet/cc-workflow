@@ -230,8 +230,8 @@ function renderTasksView() {
     b.addEventListener('click', onLoopAction);
   }
   // loopHistoryHtml 每条历史 run 渲染成一个 turn,需要 wire
-  // tool-result-fold + 停 poll + bootstrap 已展开 turn 的 event load
-  // (turn 永远展开,无 turn-toggle)。bindWorkspaceColHandlers 已封装好,复用。
+  // 停 poll + bootstrap 已展开 turn 的 event load(turn 永远全展开,
+  // 无折叠 / turn-toggle)。bindWorkspaceColHandlers 已封装好,复用。
   bindWorkspaceColHandlers($('view'));
   // mobile `+New` 钮走全局 dialog(ensure + 重建按当前 ws + showModal),同 rt。
   $('task-new-btn')?.addEventListener('click', _openTaskNewDialog);

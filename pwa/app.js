@@ -17,7 +17,6 @@
 
 import {
   STATUS_ACCENTS,
-  foldToolResult,
   formatToolUse,
   nextRunLabel,
   parseStreamLinesToEvents,

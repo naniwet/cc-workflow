@@ -198,18 +198,6 @@ export function formatToolUse(name, input) {
   }
 }
 
-export function foldToolResult(text, maxLines = 5) {
-  const lines = String(text == null ? '' : text).split(/\r?\n/);
-  if (lines.length <= maxLines) {
-    return { preview: lines.join('\n'), hiddenLineCount: 0, truncated: false };
-  }
-  return {
-    preview: lines.slice(0, maxLines).join('\n'),
-    hiddenLineCount: lines.length - maxLines,
-    truncated: true,
-  };
-}
-
 export function workspaceAutoScrollState(previous = {}, next = {}) {
   const eventCount = Number(next.eventCount || 0);
   const previousCount = Number(previous.eventCount || 0);

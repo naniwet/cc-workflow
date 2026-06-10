@@ -2642,31 +2642,10 @@ pre {
   line-height: var(--lh-tight);
   white-space: pre-wrap;
   word-break: break-word;
-}
-/* 超长输出封顶:展开后的 full 视图(.tool-result-full,tool_result + thinking
-   通用)和默认全展开的错误块封顶 360px + 内部滚动,避免几百行输出把对话顶
-   老远。折叠态 5 行预览本来就短,不受影响;展开/收起 toggle 也不受影响
-   (那只切 preview/full 的 hidden,这里只管 full 展开后的高度上限)。 */
-.tool-result-full,
-.event-tool-result-error .tool-result {
+  /* 永远全展开(2026-06-10):无折叠 / 无 Expand 按钮,内容全在。超长输出
+     封 360px + 内部滚动,避免几百行霸屏 —— 滚动框 ≠ 收起按钮(不藏内容)。 */
   max-height: 360px;
   overflow-y: auto;
-}
-/* fold 按钮:不再全宽 34px 大横条 —— 收成左对齐小号 toggle(轻、不抢视觉)。
-   min-height 28px 仍可点(移动端够用)。 */
-.tool-result-fold {
-  margin-top: var(--space-1);
-  min-height: 28px;
-  width: auto;
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-micro);
-  background: transparent;
-  color: var(--accent-blue);
-  border-color: var(--border-subtle);
-}
-.tool-result-fold:hover {
-  background: var(--accent-blue-faint);
-  border-color: rgba(47, 126, 255, 0.45);
 }
 
 @media (max-width: 768px) {

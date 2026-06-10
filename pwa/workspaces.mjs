@@ -9,7 +9,7 @@ import { ICONS } from './icons.mjs';
 import { _renderFormPicker, _onFormPickerClick, _navStatusDot, _addTapFallback, _fileDownloadHref } from './components.mjs';
 import { _gitSectionHtml, _bindGitSectionHandlers } from './git_view.mjs';
 import { _bindTurnInteractions, _loadTurnEvents, _renderTurnEvent, _stopAllTurnEventsPolls, _syncWorkspaceNewEventsButton, _workspaceTurnHtml } from './turn_stream.mjs';
-import { DONE_STALE_SEC, STATUS_ACCENTS, _prunePanes, buildSidebarTree, detailVisibleTurns, filterTurnsBySession, foldToolResult, formatToolUse, gitBadgeText, hunksToHtml, isDoneStale, isUserSession, loadShellState, navModelFromTree, nextSessionKey, paneStateReducer, parseSessionTileId, parseStreamLinesToEvents, resolveRunSessionKey, sessionChipLabel, sessionTileId, tileKeyFor, workspaceAutoScrollState, workspaceTurnExpansion } from './ui_contract.mjs';
+import { DONE_STALE_SEC, STATUS_ACCENTS, _prunePanes, buildSidebarTree, detailVisibleTurns, filterTurnsBySession, formatToolUse, gitBadgeText, hunksToHtml, isDoneStale, isUserSession, loadShellState, navModelFromTree, nextSessionKey, paneStateReducer, parseSessionTileId, parseStreamLinesToEvents, resolveRunSessionKey, sessionChipLabel, sessionTileId, tileKeyFor, workspaceAutoScrollState, workspaceTurnExpansion } from './ui_contract.mjs';
 import { _runPreviewLine, parseRoute, renderMarkdown, statusTag, timeAgo } from './app.js';
 
 const runDetailCache = {};                          // id → row (status=done/failed only)
@@ -3208,7 +3208,7 @@ async function _onDownloadFileClick(e) {
 
 
 // Mobile-only 加成绑定:scroll 监听 + workspace-new-events fab。
-// tool-result-fold / _loadTurnEvents bootstrap / 停 poll 这一套
+// _loadTurnEvents bootstrap / 停 poll 这一套
 // bindWorkspaceColHandlers 已经做了(renderMobileWorkspaceDetail 调它在前),
 // 这里再绑一次会让 _loadTurnEvents 同一 runId 并发 2 次 fetch /tail,两个
 // async 都跑到渲染,大量 event duplicate(用户反馈"event 经常重复")。
@@ -3345,8 +3345,8 @@ function paintRunDetail(id, row) {
       </div>
     </div>
   `;
-  // 复用 workspace detail 的同一套 handler:绑 tool-result-fold +
-  // bootstrap _loadTurnEvents(turn 永远展开,无 turn-toggle)。
+  // 复用 workspace detail 的同一套 handler:bootstrap _loadTurnEvents
+  //(turn 永远全展开,无折叠 / turn-toggle)。
   bindWorkspaceColHandlers(view);
 }
 
