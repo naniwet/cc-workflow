@@ -164,6 +164,14 @@ export function detailVisibleTurns(turns, shownCount) {
   return { visible, hidden: safe.length - visible.length };
 }
 
+// composer 发送/停止按钮模式。有输入文字 → 'send'(运行中也能发 = 排队下一条);
+// 仅当「运行中 且 输入为空」→ 'stop'(此时按钮的语义是停掉在跑的 run)。
+// 其余(空闲、或有输入)→ 'send'。默认参数缺省时取安全的 'send'(不会误把
+// 一个空 composer 渲成 stop)。
+export function composerButtonMode({ hasInput, hasActiveRun } = {}) {
+  return (hasActiveRun && !hasInput) ? 'stop' : 'send';
+}
+
 // 工具调用 → 紧凑报文三元组(coding 报文流 §14.2)。纯函数:0 IO,
 // 给定 (name, input) 返回 {verb, target, glyph}。
 //   - verb 是显示动词(Edit/MultiEdit 都归 'Edit',Grep/Glob 都归 'Search'),

@@ -11,6 +11,7 @@ import {
   workspaceAutoScrollState,
   workspaceTurnExpansion,
   detailVisibleTurns,
+  composerButtonMode,
   resolveRunSessionKey,
   filterTurnsBySession,
   isUserSession,
@@ -192,6 +193,20 @@ test('detailVisibleTurns: 空 / 非数组安全', () => {
 test('detailVisibleTurns: shownCount=0 不踩 slice(-0) 全量陷阱', () => {
   const turns = [{ id: 'a' }, { id: 'b' }];
   assert.deepEqual(detailVisibleTurns(turns, 0), { visible: [], hidden: 2 });
+});
+
+test('composerButtonMode: 有输入永远是 send(运行中也能发=排队)', () => {
+  assert.equal(composerButtonMode({ hasInput: true, hasActiveRun: true }), 'send');
+  assert.equal(composerButtonMode({ hasInput: true, hasActiveRun: false }), 'send');
+});
+
+test('composerButtonMode: 仅"运行中 + 输入为空"才 stop', () => {
+  assert.equal(composerButtonMode({ hasInput: false, hasActiveRun: true }), 'stop');
+});
+
+test('composerButtonMode: 空闲 + 输入为空 = send', () => {
+  assert.equal(composerButtonMode({ hasInput: false, hasActiveRun: false }), 'send');
+  assert.equal(composerButtonMode({}), 'send');   // 默认安全:send
 });
 
 // formatToolUse(name, input) → {verb, target, glyph}(纯函数,coding 报文流 §14.2)。

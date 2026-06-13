@@ -9,7 +9,7 @@ import { ICONS } from './icons.mjs';
 import { _renderFormPicker, _onFormPickerClick, _navStatusDot, _addTapFallback, _fileDownloadHref } from './components.mjs';
 import { _gitSectionHtml, _bindGitSectionHandlers } from './git_view.mjs';
 import { _bindTurnInteractions, _loadTurnEvents, _renderTurnEvent, _stopAllTurnEventsPolls, _syncWorkspaceNewEventsButton, _workspaceTurnHtml } from './turn_stream.mjs';
-import { DONE_STALE_SEC, STATUS_ACCENTS, _prunePanes, buildSidebarTree, detailVisibleTurns, filterTurnsBySession, formatToolUse, gitBadgeText, hunksToHtml, isDoneStale, isUserSession, loadShellState, navModelFromTree, nextSessionKey, paneStateReducer, parseSessionTileId, parseStreamLinesToEvents, resolveRunSessionKey, sessionChipLabel, sessionTileId, tileKeyFor, workspaceAutoScrollState, workspaceTurnExpansion } from './ui_contract.mjs';
+import { DONE_STALE_SEC, STATUS_ACCENTS, _prunePanes, buildSidebarTree, composerButtonMode, detailVisibleTurns, filterTurnsBySession, formatToolUse, gitBadgeText, hunksToHtml, isDoneStale, isUserSession, loadShellState, navModelFromTree, nextSessionKey, paneStateReducer, parseSessionTileId, parseStreamLinesToEvents, resolveRunSessionKey, sessionChipLabel, sessionTileId, tileKeyFor, workspaceAutoScrollState, workspaceTurnExpansion } from './ui_contract.mjs';
 import { _runPreviewLine, parseRoute, renderMarkdown, statusTag, timeAgo } from './app.js';
 
 const runDetailCache = {};                          // id → row (status=done/failed only)
@@ -1276,9 +1276,26 @@ function _autosizeComposer(ta) {
   ta.style.height = `${Math.min(ta.scrollHeight, max)}px`;
 }
 
+// 输入时实时切发送 / 停止:有文字 → Run(运行中也能发 = 排队);无文字 + 该 tile
+// 有 active run → Stop。按钮走委托(submit / .run-cancel-btn 的 document.click),
+// swap outerHTML 不丢 handler。
+function _syncComposerButton(ta) {
+  const form = ta.closest('.trigger-form');
+  if (!form) return;
+  const mode = composerButtonMode({
+    hasInput: ta.value.trim() !== '',
+    hasActiveRun: !!form.dataset.activeRunId,
+  });
+  const cur = form.querySelector('.composer-send, .composer-stop');
+  if (!cur) return;
+  const curMode = cur.classList.contains('composer-stop') ? 'stop' : 'send';
+  if (curMode !== mode) cur.outerHTML = _composerButtonHtml(mode, form.dataset.activeRunId || '');
+}
+
 function _onPromptInput(e) {
   const ta = e.currentTarget;
   _autosizeComposer(ta);
+  _syncComposerButton(ta);
   // Slash autocomplete works on mobile too (was gated off here for fear of
   // keyboard overlap, but in practice the popup positions above the textarea
   // and stays above the soft keyboard fine).
@@ -2692,22 +2709,35 @@ function workspaceColHtml(name, data, opts = {}) {
 //   - opts.showSendHint:PC 显 "↵ 发送 · ⇧↵ 换行" 提示(PC 实际行为:
 //     Enter 发送 / Shift+Enter 换行,Cmd/Ctrl+Enter 也发送);mobile 不显
 //     (传 false;mobile Enter=换行,靠 Run 按钮发)。
+// 发送 / 停止按钮 html。render + _onPromptInput 实时切换共用,保证两路一致。
+function _composerButtonHtml(mode, activeRunId) {
+  return mode === 'stop'
+    ? `<button class="run-cancel-btn composer-stop" type="button" data-run-id="${esc(activeRunId)}">⏹ Stop</button>`
+    : `<button class="composer-send" type="submit">Run</button>`;
+}
+
 function _composerHtml(name, colKey, skAttr, opts = {}) {
   const activeRun = opts.activeRun || null;
+  const activeRunId = activeRun ? String(activeRun.id) : '';
   const showSendHint = !!opts.showSendHint;
   const model = lastData.wsSettings[name]?.provider || lastData.globalProvider || 'default';
   const wsProvider = lastData.wsSettings[name]?.provider || '';
   const trustOn = effectiveTrust(name);
-  const runOrStop = activeRun
-    ? `<button class="run-cancel-btn composer-stop" type="button" data-run-id="${esc(activeRun.id)}">⏹ Stop</button>`
-    : `<button class="composer-send" type="submit">Run</button>`;
+  // 发送 / 停止:有输入(草稿非空)→ Run(运行中也能发 = 排队下一条);仅
+  // 「运行中 且 输入为空」→ Stop。打字 / 清空时 _onPromptInput → _syncComposerButton
+  // 实时切。data-active-run-id 挂在 form 上供输入时取 run id 切回 Stop。
+  const hasInput = !!(drafts[`ws-${colKey}`]?.prompt || '').trim();
+  const runOrStop = _composerButtonHtml(
+    composerButtonMode({ hasInput, hasActiveRun: !!activeRun }),
+    activeRunId,
+  );
   // 高频两个控件下沉到 composer(用户要求 2026-06-04):
   //   · 模型 chip:可点 → 向上弹 provider 单选(复用 ws-actions-menu 的关闭逻辑
   //     + _providerRadioListHtml + .ws-menu-radio→_onProviderRadioClick handler)。
   //   · Trust chip("模式"):点切自动批准(复用 .ws-trust-toggle→onTrustToggleClick)。
   // 都复用既有 handler,bindWorkspaceColHandlers 已按 class 委托绑定,无需新绑。
   return `
-    <form class="trigger-form composer" data-workspace="${esc(name)}"${skAttr} data-form-id="ws-${esc(colKey)}">
+    <form class="trigger-form composer" data-workspace="${esc(name)}"${skAttr} data-form-id="ws-${esc(colKey)}" data-active-run-id="${esc(activeRunId)}">
       <div class="attach-chips" data-ws="${esc(name)}"></div>
       <input type="file" class="attach-input" data-ws="${esc(name)}" multiple hidden>
       <textarea name="prompt" class="composer-input" rows="1" placeholder="Message…"></textarea>
