@@ -143,7 +143,12 @@ async function _loadTurnEvents(runId) {
   // 全被 parse 过滤,html 为空但 loading 已经 remove,容器变 0 高度,
   // 下次真 event 来又长回去 — 用户看到高度跳)。
   const _setLoadingText = (text) => {
-    if (container.querySelector('.event')) return;  // 已经有 event,不动
+    // 容器里已渲染过任何 event 就不动。**不能只查 .event** —— 那只命中 thinking
+    // 的 `.event event-thinking`;助手文本(.event-asst-md)/ 工具(.event-tool*)
+    // / tool-result(.event-tool-result)都没有 .event 基类。漏判会让一次"新行
+    // 全被过滤"的 poll 把累积事件 innerHTML 覆盖成 "Running…"(用户报"覆盖")。
+    // 改成"有任何非 loading 占位的子元素"= 已有内容,别动。
+    if ([...container.children].some((c) => !c.classList.contains('turn-events-loading'))) return;
     let el = container.querySelector('.turn-events-loading');
     if (!el) {
       // 之前用 innerHTML 写错误/空消息可能把 placeholder 替掉了,
