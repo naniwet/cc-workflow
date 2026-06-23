@@ -91,6 +91,19 @@
  * ============================================================================ */
 * { box-sizing: border-box; }
 
+/* 全局滚动条:全站统一成一套细、暗、融入背景的样式。webkit(Chrome / Safari /
+   Edge / Android WebView)+ firefox 双写。所有内滚区——工具事件里的 pre / 代码块 /
+   diff、时间线、模态——共用这一条,不再各处冒出浏览器默认的粗亮滚动条。
+   想整体调:粗细改 width/height(纵横同值),可见度改 thumb 颜色。 */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-full);
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -582,9 +595,6 @@ main {
   overflow-y: auto;
   padding-right: var(--space-1);
 }
-.ws-timeline::-webkit-scrollbar { width: 5px; }
-.ws-timeline::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-full); }
-.ws-timeline::-webkit-scrollbar-track { background: transparent; }
 
 /* "加载更早" —— detail timeline 顶部揭开更老 turn 的按钮(detail 默认只渲染
    最近 10 条,点一次 +10)。全宽、低调虚线框,不抢眼。flex-shrink:0 防止它在
