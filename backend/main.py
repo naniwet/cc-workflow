@@ -322,7 +322,7 @@ def post_run(req: RunRequest) -> dict:
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._一-鿿-]")
 # workspace 名校验:跟 RunRequest.workspace 同款约束(避免 ../ 之类直接走进 ws 目录)
 _WS_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-_UPLOAD_MAX_BYTES = 10 * 1024 * 1024   # 10 MB 单请求合计上限,跟 nginx location 对齐
+_UPLOAD_MAX_BYTES = 30 * 1024 * 1024   # 30 MB 单请求合计上限,跟 nginx location 对齐
 _ROUNDTABLE_ATTACHMENT_MAX_BYTES = 100 * 1024   # 100 KB,spec §2.3
 
 
@@ -404,7 +404,7 @@ async def post_uploads(workspace: str, files: list[UploadFile] = File(...)) -> d
     返回 {"turn_id": <12-hex>, "paths": [<abs path>, ...]}。前端把这些 path
     塞进 /run 的 attachments 字段,后端会 append 到 prompt 末尾。
 
-    单请求合计 10 MB 上限(同 nginx /uploads location 的 client_max_body_size)。
+    单请求合计 30 MB 上限(同 nginx /uploads location 的 client_max_body_size)。
     超限或写盘失败会清掉这次的半成品目录,抛 413 / 500,前端用 toast 提示。
     """
     if not _WS_NAME_RE.match(workspace):
@@ -438,7 +438,7 @@ async def post_uploads(workspace: str, files: list[UploadFile] = File(...)) -> d
             target = dest_dir / safe
 
             # 流式读 + 累加大小 + 超限即停。FastAPI UploadFile 默认 SpooledTemporaryFile,
-            # 大文件不会一次性塞内存,但我们还要做 hard cap 避免单个 file 撑爆 10 MB。
+            # 大文件不会一次性塞内存,但我们还要做 hard cap 避免单个 file 撑爆 30 MB。
             with open(target, "wb") as fh:
                 while chunk := await upload.read(64 * 1024):
                     total += len(chunk)
@@ -477,7 +477,7 @@ async def post_roundtable_uploads(files: list[UploadFile] = File(...)) -> dict:
     跟 POST /uploads/{workspace} 完全独立路径,避免在 workspace 名 =
     "roundtable" 时 FastAPI 路由 shadow 掉它的真实路径(spec §2.3)。
 
-    单请求合计 10 MB 上限。比 100KB enriched-prompt 上限大,因为 multipart
+    单请求合计 30 MB 上限。比 100KB enriched-prompt 上限大,因为 multipart
     上传不限内容是否能塞进 prompt — 那是 create_roundtable 阶段才 enforce
     (spec §2.4)。
     """

@@ -134,7 +134,7 @@ let _promptQueueSeq = 0;
 // in-memory,刷新 PWA 丢失(跟 _promptQueue 一致 — 队列本来就不持久化)。
 const _pendingUploads = {};   // { [ws]: [{ tempId, name, size, file: File }] }
 let _pendingUploadSeq = 0;
-const _UPLOAD_MAX_BYTES = 10 * 1024 * 1024;   // 跟 nginx /uploads location 对齐
+const _UPLOAD_MAX_BYTES = 30 * 1024 * 1024;   // 跟 nginx /uploads location 对齐
 const _UPLOAD_MAX_FILES = 10;                 // 跟 RunRequest.attachments max_length 对齐
 
 function _addPendingFile(ws, file) {
