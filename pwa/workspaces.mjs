@@ -2976,13 +2976,23 @@ function renderWorkspaceDetailView(startName, opts = {}) {
   // (列表变化只在新建 / 关闭 session 时,那两处会主动 refresh)。
   _ensureWorkspaceSessions(startName);
   const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  // 切入一个 workspace(hash 变 = isFreshNav)时,清掉它上次的滚动位置记录 —— 让
+  // restoreDrafts 走 `!saved → 滚到底` 分支,每次切进来都停在最新一条,不再恢复
+  // 上次往上翻的旧位置。同 workspace 内的流式重渲 hash 不变(isFreshNav=false),
+  // 走不到这里,读历史时不会被拽到底。
+  if (opts.isFreshNav) {
+    delete workspaceSessionScroll[startName];   // mobile .workspace-session-stream
+  }
   if (isMobile) {
     renderMobileWorkspaceDetail(startName, opts);
   } else {
     // PC 深链 #workspaces/<name>(飞书 / cron 通知点进来):把该 repo 的默认
     // session 聚焦到单 pane,展开它在侧边栏的塌缩态,再走统一的侧边栏布局。
     // (spec §3.6:不强制保留旧 pane;name 不存在 → 回落无 name 行为)。
-    _focusWorkspaceDeepLink(startName);
+    const focusedTileId = _focusWorkspaceDeepLink(startName);
+    if (opts.isFreshNav && focusedTileId) {
+      delete timelineScroll[focusedTileId];     // desktop .ws-timeline pane
+    }
     renderDesktopSidebarLayout();
   }
 }
@@ -3003,6 +3013,7 @@ function _focusWorkspaceDeepLink(name) {
     expandedRepos: [...new Set([...(paneState.expandedRepos || []), name])],
   };
   savePcLayout();
+  return node.tileId;                               // 供 isFreshNav 清该 pane 的滚动记录
 }
 
 // 拉 session 列表 → 缓存 → 重画 chip 条。force=true 时强拉(新建 / 关闭后)。
