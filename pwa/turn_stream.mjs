@@ -16,8 +16,10 @@ import { _scrollToBottom, cssQuoteEsc, eventFilterShowAll, timelineScroll, works
 // 抽出来是因为 cron 的 patch path(只换一个 loop-row,不整页重画)也要
 // rewire 新 row 里的 turn 元素,但不能跟着调 _stopAllTurnEventsPolls
 // —— 那会把别的 loop-row 还活着的 poll 一起干掉。
-// 永远全展开(2026-06-10):turn + tool 输出都不折叠,没有任何收起按钮可绑;
-// 只剩 `.turn.turn-expanded` 的 _loadTurnEvents bootstrap。
+// turn 本身不折叠,只剩 `.turn.turn-expanded` 的 _loadTurnEvents bootstrap。
+// tool_result 的展开按钮(见 _foldedToolResultHtml)不在这里绑 —— events 是
+// 增量 insertAdjacentHTML 进来的,没法在一个固定时间点把所有按钮绑一遍;改用
+// 本文件底部的 document 级委托点击(跟 workspaces.mjs 里其他委托同一套写法)。
 function _bindTurnInteractions(root) {
   for (const turn of root.querySelectorAll('.turn.turn-expanded')) {
     const runId = turn.dataset.runId;
@@ -341,7 +343,7 @@ function _renderTurnEvent(ev, elapsedS, ws) {
   }
   if (ev.kind === 'tool_result') {
     // 缩进 output(左 hairline rail,跟在 tool_use call 行下方读成"这个工具
-    // 的返回")。正常情况 _workspaceOutputHtml 折叠超 5 行;isError 红 + 不
+    // 的返回")。正常情况 _foldedToolResultHtml 折叠超 5 行;isError 红 + 不
     // 折叠(默认全展开 —— 错误不能被静默吞掉,debug 要全文)。
     if (ev.isError) {
       return `
@@ -351,7 +353,7 @@ function _renderTurnEvent(ev, elapsedS, ws) {
     }
     return `
       <div class="event-tool-result">
-        ${_workspaceOutputHtml(ev.text || '')}
+        ${_foldedToolResultHtml(ev.text || '')}
       </div>`;
   }
   if (ev.kind === 'result') {
@@ -379,10 +381,40 @@ function _renderTurnEvent(ev, elapsedS, ws) {
   return '';
 }
 
-function _workspaceOutputHtml(output) {
-  // 永远全展开:不折叠,直接输出完整 tool result。
-  return `<pre class="tool-result">${esc(output)}</pre>`;
+// 折叠阈值:超过这么多行才收起 + 加展开按钮,短输出跟以前一样直接全展开。
+const FOLD_TOOL_RESULT_LINES = 5;
+
+// 2026-08-03:推翻 2026-06-10 "永远全展开" 的决定 —— 用户反馈长 tool_result
+// (典型是 Read 整份文件)逐条摊开刷屏,翻起来很磨人。改回默认收起 + 点击展开:
+// 折叠态用 CSS max-height 卡大约 5 行高,点「展开全部」去掉 cap 露出全文
+// (展开后不再有 360px 二次滚动 cap —— 折叠已经解决"霸屏"问题,展开就是要看全文)。
+// isError 分支不走这里,继续全展开(debug 时错误不能被折叠藏起来)。
+function _foldedToolResultHtml(output) {
+  const text = String(output || '');
+  const lineCount = text.split(/\r?\n/).length;
+  if (lineCount <= FOLD_TOOL_RESULT_LINES) {
+    return `<pre class="tool-result">${esc(text)}</pre>`;
+  }
+  return `
+    <div class="tool-result-fold">
+      <pre class="tool-result">${esc(text)}</pre>
+      <button type="button" class="tool-result-expand-btn">展开全部(${lineCount} 行)</button>
+    </div>`;
 }
+
+// tool_result 展开按钮的点击委托(见上面 _foldedToolResultHtml)。events 是
+// 增量插入的,没有统一的"绑定时机",所以用 document 级委托 —— 跟 workspaces.mjs
+// 里其他 document.addEventListener('click', ...) 是同一套写法。只 toggle
+// class,不重渲染,不丢已经 append 进 DOM 的内容。
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.tool-result-expand-btn');
+  if (!btn) return;
+  const wrap = btn.closest('.tool-result-fold');
+  if (!wrap) return;
+  const expanded = wrap.classList.toggle('is-expanded');
+  const lineCount = wrap.querySelector('.tool-result')?.textContent.split(/\r?\n/).length || 0;
+  btn.textContent = expanded ? '收起' : `展开全部(${lineCount} 行)`;
+});
 
 function _syncWorkspaceNewEventsButton(name) {
   const btn = $('view').querySelector('.workspace-new-events[data-ws]');

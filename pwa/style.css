@@ -2687,10 +2687,31 @@ pre {
   line-height: var(--lh-tight);
   white-space: pre-wrap;
   word-break: break-word;
-  /* 永远全展开(2026-06-10):无折叠 / 无 Expand 按钮,内容全在。超长输出
-     封 360px + 内部滚动,避免几百行霸屏 —— 滚动框 ≠ 收起按钮(不藏内容)。 */
-  max-height: 360px;
-  overflow-y: auto;
+}
+
+/* tool_result 折叠(2026-08-03,推翻 2026-06-10 "永远全展开"):超过
+   FOLD_TOOL_RESULT_LINES 行的输出默认收起到约 5 行高,点「展开全部」去掉
+   cap 看全文。isError 分支不套这层 wrap,永远全展开(见 _renderTurnEvent)。 */
+.tool-result-fold .tool-result {
+  max-height: 100px;
+  overflow: hidden;
+}
+.tool-result-fold.is-expanded .tool-result {
+  max-height: none;
+  overflow: visible;
+}
+.tool-result-expand-btn {
+  margin-top: var(--space-1);
+  padding: 2px var(--space-2);
+  background: transparent;
+  color: var(--accent-blue);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-micro);
+  cursor: pointer;
+}
+.tool-result-expand-btn:hover {
+  border-color: var(--accent-blue);
 }
 
 @media (max-width: 768px) {
