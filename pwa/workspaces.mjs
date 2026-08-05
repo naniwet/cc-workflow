@@ -19,7 +19,14 @@ const runDetailCache = {};                          // id → row (status=done/f
 // before render() and restore them after.
 const drafts = {};                                  // key: form-id, val: name → value
 const detailsOpen = {};                             // key: details-id, val: bool
-const timelineScroll = {};                          // key: ws name → {scrollTop, atBottom}
+const timelineScroll = {};                          // key: colKey → {scrollTop}(atBottom 见下)
+// key: colKey(desktop pane tileId)→ {atBottom}。由 .ws-timeline 的实时 scroll
+// 监听维护(bindWorkspaceColHandlers),snapshotDrafts **不**碰它 —— 跟 mobile
+// 版本(workspaceStreamState)同一套解法。2026-08-05 治"发消息后没贴底、跳回
+// 滚动中间":旧代码里 atBottom 混在 timelineScroll 里,snapshotDrafts 每次
+// render 开头都用当时(还没挪动)的真实 scrollTop 重算它,把 onTriggerSubmit
+// 刚设的"下一帧强制贴底"意图当场覆盖掉。拆成独立状态后就不会被冲掉了。
+const timelineFollowState = {};
 const _detailShownCount = {};                       // colKey → detail timeline 已露出的 turn 数(默认 10,"加载更早" +10)
 const DETAIL_DEFAULT_ROWS = 10;                      // detail 默认显示 + 每次"加载更早"的步长
 // 跨 render 保住流式 events 的 DOM 内容(key: run-id → {html, renderedLines})。
@@ -289,6 +296,9 @@ async function _dispatchAllQueues() {
         atBottom: true,
         newEvents: 0,
       };
+      // Desktop .ws-timeline 版本,同 onTriggerSubmit(见 timelineFollowState
+      // 声明处注释)。
+      timelineFollowState[sessionTileId(ws, next.sessionKey || activeSessionKey(ws))] = { atBottom: true };
       refreshAll();
     } catch (err) {
       // 后端拒绝(409 / 网络) → 塞回队头让用户看到 + toast
@@ -414,9 +424,11 @@ function snapshotDrafts() {
     detailsOpen[d.dataset.detailsId] = d.open;
   }
   for (const t of document.querySelectorAll('.ws-timeline[data-ws]')) {
+    // 只存 scrollTop 供"用户曾往上翻"时 restoreDrafts 还原位置。**不在这里算
+    // atBottom** —— 见 timelineFollowState 声明处注释,原因跟旁边 mobile 那段
+    // 一模一样:这里是按帧快照,会读到 submit 那一刻还没挪动的旧位置。
     timelineScroll[t.dataset.ws] = {
       scrollTop: t.scrollTop,
-      atBottom: Math.abs(t.scrollHeight - t.clientHeight - t.scrollTop) < 40,
     };
   }
   for (const s of document.querySelectorAll('.workspace-session-stream[data-ws]')) {
@@ -465,7 +477,8 @@ function restoreDrafts() {
   // visible. If user had scrolled up to read history, preserve position.
   for (const t of document.querySelectorAll('.ws-timeline[data-ws]')) {
     const saved = timelineScroll[t.dataset.ws];
-    if (!saved || saved.atBottom) {
+    const follow = timelineFollowState[t.dataset.ws];
+    if (!saved || follow?.atBottom !== false) {
       _scrollToBottom(t);
     } else {
       t.scrollTop = saved.scrollTop;
@@ -1499,6 +1512,15 @@ function _onPromptKeydown(e) {
 }
 
 function bindWorkspaceColHandlers(root) {
+  // 实时贴底追踪(desktop 版,镜像 mobile 的 .workspace-session-stream 监听 ——
+  // 见 timelineFollowState 声明处注释)。只在真实用户滚动时更新,不受
+  // snapshotDrafts 按帧快照影响,onTriggerSubmit 强制置底的意图才不会被冲掉。
+  for (const t of root.querySelectorAll('.ws-timeline[data-ws]')) {
+    t.addEventListener('scroll', () => {
+      const atBottom = Math.abs(t.scrollHeight - t.clientHeight - t.scrollTop) < 40;
+      timelineFollowState[t.dataset.ws] = { atBottom };
+    }, { passive: true });
+  }
   for (const f of root.querySelectorAll('.trigger-form')) {
     f.addEventListener('submit', onTriggerSubmit);
     const ta = f.querySelector('textarea[name="prompt"]');
@@ -2921,6 +2943,9 @@ async function onTriggerSubmit(e) {
       atBottom: true,
       newEvents: 0,
     };
+    // Desktop .ws-timeline 版本的同一强制贴底(见 timelineFollowState 声明处
+    // 注释)。colKey 跟 _composerHtml 渲染这个 tile 时用的是同一个算法。
+    timelineFollowState[sessionTileId(ws, sessionKey)] = { atBottom: true };
     refreshAll();
     // Mobile 软键盘收起动画期间 scrollHeight 不稳定 — render 立刻发生
     // 时还在动画中,scroll 到那时的 "bottom",等动画结束 layout settle
@@ -2991,7 +3016,8 @@ function renderWorkspaceDetailView(startName, opts = {}) {
     // (spec §3.6:不强制保留旧 pane;name 不存在 → 回落无 name 行为)。
     const focusedTileId = _focusWorkspaceDeepLink(startName);
     if (opts.isFreshNav && focusedTileId) {
-      delete timelineScroll[focusedTileId];     // desktop .ws-timeline pane
+      delete timelineScroll[focusedTileId];       // desktop .ws-timeline pane
+      delete timelineFollowState[focusedTileId];  // 同上,见声明处注释
     }
     renderDesktopSidebarLayout();
   }
@@ -3422,4 +3448,4 @@ function paintRunDetail(id, row) {
   bindWorkspaceColHandlers(view);
 }
 
-export { drafts, workspaceActiveSession, _bindSidebarNavHandlers, _bindTurnInteractions, _closeStrayDialogs, _dispatchAllQueues, _isMobileViewport, _lastPaintedStatus, _mobileCardCache, _navStatusDot, _onFormPickerClick, _renderFormPicker, _workspaceTurnHtml, bindSidebarCollapse, bindWorkspaceColHandlers, clearDetails, clearDraft, renderRunDetailView, renderWorkspaceDetailView, renderWorkspacesView, restoreDrafts, snapshotDrafts, _scrollToBottom, cssQuoteEsc, eventFilterShowAll, timelineScroll, workspaceStreamState };
+export { drafts, workspaceActiveSession, _bindSidebarNavHandlers, _bindTurnInteractions, _closeStrayDialogs, _dispatchAllQueues, _isMobileViewport, _lastPaintedStatus, _mobileCardCache, _navStatusDot, _onFormPickerClick, _renderFormPicker, _workspaceTurnHtml, bindSidebarCollapse, bindWorkspaceColHandlers, clearDetails, clearDraft, renderRunDetailView, renderWorkspaceDetailView, renderWorkspacesView, restoreDrafts, snapshotDrafts, _scrollToBottom, cssQuoteEsc, eventFilterShowAll, timelineScroll, timelineFollowState, workspaceStreamState };

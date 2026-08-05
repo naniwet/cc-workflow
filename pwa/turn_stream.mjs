@@ -3,14 +3,14 @@
 // 自带状态(_turnEventsTimers)。被 workspace / task / roundtable 三处
 // detail 复用 —— 抽出后它们直接 import 这里,不再借 workspaces 内部件。
 // 依赖:core + ICONS + ui_contract + components + workspaces 的少量共享件
-// (_scrollToBottom/cssQuoteEsc/eventFilterShowAll + const 对象 timelineScroll/
+// (_scrollToBottom/cssQuoteEsc/eventFilterShowAll + const 对象 timelineFollowState/
 // workspaceStreamState,只读/属性改,ESM 共享引用安全)。
 import { $, esc, api, showToast, showError, lastData, requestRender as render, requestRefresh as refreshAll } from './core.mjs';
 import { ICONS } from './icons.mjs';
 import { formatToolUse, parseSessionTileId, parseStreamLinesToEvents } from './ui_contract.mjs';
 import { _fileDownloadHref } from './components.mjs';
 import { renderMarkdown, timeAgo } from './app.js';
-import { _scrollToBottom, cssQuoteEsc, eventFilterShowAll, timelineScroll, workspaceStreamState } from './workspaces.mjs';
+import { _scrollToBottom, cssQuoteEsc, eventFilterShowAll, timelineFollowState, workspaceStreamState } from './workspaces.mjs';
 
 // Turn 交互的子绑定(已展开 turn 的 _loadTurnEvents bootstrap)。
 // 抽出来是因为 cron 的 patch path(只换一个 loop-row,不整页重画)也要
@@ -202,7 +202,7 @@ async function _loadTurnEvents(runId) {
     // 每次 event 加载都贴底,直到用户主动往上滚(scroll handler 置 atBottom=false)。
     const _ws = stream?.dataset.ws;
     const persistedAtBottom = stream?.classList.contains('ws-timeline')
-      ? (timelineScroll[_ws]?.atBottom !== false)
+      ? (timelineFollowState[_ws]?.atBottom !== false)
       : (workspaceStreamState[_ws]?.atBottom !== false);
     const wasAtBottom = stream
       ? ((stream.scrollHeight - stream.clientHeight - stream.scrollTop) < 80 || persistedAtBottom)
